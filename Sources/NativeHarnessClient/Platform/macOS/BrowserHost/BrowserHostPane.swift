@@ -327,7 +327,7 @@ final class BrowserHostPaneController {
         tab.onHandoffChange = nil
         tab.onVaultSetupAskChange = nil
         tab.onHoldChange = nil
-        isAgentHolding = false
+        showHold(false)
         emulation = nil
         handoff = nil
         releaseVault(tab)
@@ -394,9 +394,10 @@ final class BrowserHostPaneController {
         showHandoff(of: tab)
         tab.onHoldChange = { [weak self, weak tab] in
             guard let self, let tab, self.tab === tab else { return }
-            self.isAgentHolding = tab.isAgentHolding
+            self.showHold(tab.isAgentHolding)
         }
-        isAgentHolding = tab.isAgentHolding
+        view.onHeldKey = { [weak self] in self?.heldPresses &+= 1 }
+        showHold(tab.isAgentHolding)
         adoptVault(tab, in: view)
         tab.onVaultSetupAskChange = { [weak self, weak tab] in
             guard let self, let tab, self.tab === tab else { return }
@@ -478,12 +479,18 @@ final class BrowserHostPaneController {
         }
     }
 
+    /// A press the hold kept from the page; a key press arrives through the view's `onHeldKey`, so a modifier held
+    /// for a shortcut is none.
     private func heldInput(_ command: BrowserHostCommand) {
-        switch command {
-        case .mouse(_, let input) where input.kind == .down: heldPresses &+= 1
-        case .key(_, let input) where input.kind == .rawDown: heldPresses &+= 1
-        default: break
-        }
+        if case .mouse(_, let input) = command, input.kind == .down { heldPresses &+= 1 }
+    }
+
+    /// The hold starts or ends on the shown tab; presses counted while it lasted go with it, so the pill does not
+    /// answer them when it shows again.
+    private func showHold(_ held: Bool) {
+        if isAgentHolding != held { isAgentHolding = held }
+        view?.isInputHeld = held
+        if !held, heldPresses != 0 { heldPresses = 0 }
     }
 
     /// The pill's Take control: the page takes the person's input again, with the keyboard in it, and the agent's tools

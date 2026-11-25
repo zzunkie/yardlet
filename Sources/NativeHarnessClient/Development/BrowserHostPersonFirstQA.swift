@@ -247,8 +247,6 @@ final class BrowserHostPersonFirstQA {
               "panel on \(controller.tab?.id ?? -1); " + selected.text)
         await exerciseTheAgentsHold(controller, view)
         broker.taskTurnEnded(session)
-        let released = await waitUntil(.seconds(5)) { !controller.isAgentHolding }
-        check("agent's hold: the hold ends with the agent's turn", released, "holding \(controller.isAgentHolding)")
     }
 
     // MARK: The tab the agent holds
@@ -296,6 +294,12 @@ final class BrowserHostPersonFirstQA {
         _ = await call(AgentToolCatalog.snapshot, ["tabId": .string(String(tab.id))])
         let heldAgain = await waitUntil(.seconds(5)) { controller.isAgentHolding }
         check("agent's hold: the agent's next call holds the tab again", heldAgain, "holding \(controller.isAgentHolding)")
+        broker.taskTurnEnded(session)
+        let released = await waitUntil(.seconds(5)) { !controller.isAgentHolding }
+        check("agent's hold: the tab it held is let go with the agent's turn", heldAgain && released,
+              "holding \(controller.isAgentHolding)")
+        _ = await call(AgentToolCatalog.snapshot, ["tabId": .string(String(tab.id))])
+        _ = await waitUntil(.seconds(5)) { controller.isAgentHolding }
 
         controller.takeControl()
         let taken = !controller.isAgentHolding && client.personUse(of: tab) != nil

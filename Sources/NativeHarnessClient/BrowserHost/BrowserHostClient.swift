@@ -312,12 +312,16 @@ final class BrowserHostClient {
     }
 
     /// The agent holds `tab` (docs/BROWSER_HOST.md, "The tab the agent holds"): it used the tab in its turn that is
-    /// still going, after the person's last input there, the person has not used the page within `personUseWindow`,
-    /// and the tab waits on nothing from the person (`personWait`). Its panel keeps the person's input from the page
-    /// until they take control (`BrowserTab.takeControl`).
+    /// still going, after the person's last input there, the person has not used the page within `personUseWindow`
+    /// and the tab waits on nothing from the person (`personWait`). A person who took control, or gave the page input
+    /// since the agent last held it, keeps it while its page has their keyboard in a panel on screen, however long they
+    /// read; a person who only watched, its page focused or not, does not. Its panel keeps the person's input from the
+    /// page until they take control (`BrowserTab.takeControl`).
     func isHeldByAgent(_ tab: BrowserTab, now: ContinuousClock.Instant = .now) -> Bool {
         guard tabs[tab.id] === tab, tab.isInAgentTurn, tab.isDrivenByAgent else { return false }
         if let used = tab.lastPersonUse, now - used < personUseWindow { return false }
+        if !tab.isAgentHolding, tab.visiblePanelCount > 0, tab.hasPanelKeyboard, let input = tab.lastPersonInput,
+           tab.heldSince.map({ input > $0 }) ?? true { return false }
         return personWait(of: tab) == nil
     }
 
@@ -326,6 +330,7 @@ final class BrowserHostClient {
         let held = isHeldByAgent(tab)
         guard held != tab.isAgentHolding else { return }
         tab.isAgentHolding = held
+        if held { tab.heldSince = .now }
         tab.onHoldChange?()
     }
 
@@ -341,7 +346,9 @@ final class BrowserHostClient {
     }
 
     /// The session's agent turn ended: its own tab and the mark on the tab it used go.
+    /// The agent holds none of its tabs from here, before what it set on them goes (`BrowserTab.endAgentEmulation`).
     func endAgentTurn(forSession session: UUID) {
+        for tab in tabs(forSession: session) where tab.isInAgentTurn { tab.leaveAgentTurn() }
         guard agentFronts[session] != nil || agentUsedTabs[session] != nil else { return }
         agentFronts[session] = nil
         agentUsedTabs[session] = nil
@@ -1148,8 +1155,9 @@ final class BrowserHostClient {
             }
             onChromiumWindowsChange?()
             if before != chromiumWindows {
-                let sessions = Set((before + chromiumWindows).compactMap { $0.tab.flatMap { tabs[$0]?.session } })
-                sessions.forEach(notifySession)
+                let changed = Set((before + chromiumWindows).compactMap(\.tab)).compactMap { tabs[$0] }
+                changed.forEach(holdChanged)
+                Set(changed.compactMap(\.session)).forEach(notifySession)
                 onPersonWaitsChange?()
             }
         case .cookiesImported(let request, let count):
@@ -1573,6 +1581,8 @@ final class BrowserTab {
     }
     /// The agent holds the tab, as last told its panel (`BrowserHostClient.isHeldByAgent`).
     fileprivate(set) var isAgentHolding = false
+    /// When the agent last began to hold the tab.
+    fileprivate var heldSince: ContinuousClock.Instant?
     /// Called when `isAgentHolding` changes, for the panel that shows the tab.
     var onHoldChange: (() -> Void)?
     /// When the last agent turn that used the tab ended, on the clock `hiddenSince` uses.
@@ -1919,6 +1929,12 @@ final class BrowserTab {
         return openedByAgent && lastPersonInput == nil
     }
 
+    /// The agent's turn that used the tab ended.
+    fileprivate func leaveAgentTurn() {
+        if isInAgentTurn { agentTurnEndedAt = .now }
+        isInAgentTurn = false
+    }
+
     /// The person takes the tab from the agent with its panel's Take control: their input reaches the page again, and
     /// the agent's tools say the person is using it until they leave it alone for `personUseWindow` and the agent acts
     /// on it again.
@@ -2153,9 +2169,10 @@ final class BrowserTab {
 
     /// The agent's wait read the answer: the tab is the agent's again.
     func endHandoff() {
-        guard handoff != nil else { return }
+        guard let ended = handoff else { return }
         handoff = nil
         onHandoffChange?()
+        if ended.answer == nil { client?.personWaitChanged(self) }
     }
 
     // MARK: The agent's two-factor setup
@@ -2190,8 +2207,7 @@ final class BrowserTab {
 
     /// The agent's turn ended: the size and color scheme it set go, as the Claude app clears them; the person's stay.
     func endAgentEmulation() async {
-        if isInAgentTurn { agentTurnEndedAt = .now }
-        isInAgentTurn = false
+        leaveAgentTurn()
         // A waiting call reads that the turn ended; an answer no call read belongs to the turn that ended.
         if handoff?.answer == nil { answerHandoff(.turnEnded) } else { endHandoff() }
         if vaultSetupAsk?.answer == nil { answerSetupAsk(.turnEnded) } else { endSetupAsk() }
