@@ -2195,13 +2195,6 @@
 "Read other projects' tasks" = "读取其他项目的任务";
 "List every project's tasks" = "列出所有项目的任务";
 "Create a task in another project" = "在其他项目中创建任务";
-"Schedule messages to a task that runs without asking" = "定时向无需询问即可运行的任务发送消息";
-"Schedule messages to another project's task" = "定时向其他项目的任务发送消息";
-"Schedule a task in another project" = "在其他项目中定时安排任务";
-"Run a scheduled task with more permissions than this task" = "以高于当前任务的权限运行定时任务";
-"Delete a scheduled task with more permissions than this task" = "删除权限高于当前任务的定时任务";
-"Resume a scheduled task with more permissions than this task" = "恢复权限高于当前任务的定时任务";
-"Reschedule a scheduled task with more permissions than this task" = "以高于当前任务的权限重新安排定时任务";
 "Run a subagent outside this task's folders" = "在此任务文件夹之外运行子代理";
 "Open a file outside this task's folders?" = "打开此任务文件夹之外的文件？";
 "Archive %lld tasks" = "归档 %lld 个任务";

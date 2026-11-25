@@ -124,8 +124,7 @@ enum AgentToolCallOrigin: Equatable, Sendable {
 /// (docs/AGENT_BROWSER_TOOLS.md, "Scheduled-task tools"): an agent creates, lists, changes, deletes and runs the person's schedules.
 @MainActor
 protocol ScheduleToolHandling: AnyObject {
-    func callScheduleTool(named name: String, arguments: ToolJSON, callerID: UUID,
-                          origin: AgentToolCallOrigin) async -> AgentToolResult
+    func callScheduleTool(named name: String, arguments: ToolJSON, callerID: UUID) async -> AgentToolResult
 }
 
 /// The app side of the Yardlet MCP server. It issues each task a random token when the task's
@@ -426,8 +425,7 @@ final class AgentToolBroker: AgentToolLaunchProviding {
                                                                     callerID: sessionID))
         }
         if ScheduleToolCatalog.definition(named: call.tool) != nil, let schedules {
-            return await schedules.callScheduleTool(named: call.tool, arguments: call.arguments, callerID: sessionID,
-                                                    origin: origin)
+            return await schedules.callScheduleTool(named: call.tool, arguments: call.arguments, callerID: sessionID)
         }
         if SimulatorToolCatalog.definition(named: call.tool) != nil, let simulators {
             guard simulatorToolsByTask[sessionID] == true else {
@@ -631,7 +629,10 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         }
     }
 
-    private static let ownDefinitionsByName: [String: AgentToolDefinition] = {
+    /// Every one of Yardlet's own tools, by name.
+    nonisolated static var ownToolNames: Dictionary<String, AgentToolDefinition>.Keys { ownDefinitionsByName.keys }
+
+    nonisolated private static let ownDefinitionsByName: [String: AgentToolDefinition] = {
         var map: [String: AgentToolDefinition] = [:]
         let catalogs: [[AgentToolDefinition]] = [
             AgentToolCatalog.browserTools,
@@ -655,7 +656,7 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         return map
     }()
 
-    static func ownDefinition(named name: String) -> AgentToolDefinition? {
+    nonisolated static func ownDefinition(named name: String) -> AgentToolDefinition? {
         ownDefinitionsByName[name]
     }
 

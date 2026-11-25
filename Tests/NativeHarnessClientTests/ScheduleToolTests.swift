@@ -96,11 +96,14 @@ final class ScheduleToolTests: XCTestCase {
             XCTAssertTrue(allowed.contains("mcp__yardlet__\(name)"), "\(name) still runs without the CLI's card")
         }
 
-        // Codex: asking follows the task's own approval setting (2026-10-22), so Yardlet sets no
-        // per-tool `approval_mode`.
+        // Codex: Yardlet asks about every change on its own card (`AgentToolBroker+Approvals`), so Codex is told to
+        // ask about none of them and each call has one card.
         let launch = AgentToolServerLaunch(command: "/Applications/Yardlet.app/Contents/Helpers/yardlet-mcp",
                                            environment: ["YARDLET_TOOLS_TOKEN": "t"])
-        XCTAssertNil(launch.codexConfig["mcp_servers"]?["yardlet"]?["tools"])
+        XCTAssertEqual(launch.codexConfig["mcp_servers"]?["yardlet"]?["default_tools_approval_mode"], .string("approve"))
+        for name in ScheduleToolCatalog.changingTools {
+            XCTAssertNil(launch.codexConfig["mcp_servers"]?["yardlet"]?["tools"]?[name], name)
+        }
         XCTAssertEqual(launch.codexConfig["mcp_servers"]?["yardlet"]?["tool_timeout_sec"], .integer(1_800))
 
         // Claude Code's card for a change: the action, name, schedule, where runs go and the prompt, and
@@ -193,7 +196,8 @@ final class ScheduleToolTests: XCTestCase {
                                                    arguments: .object([:]), method: AgentToolCall.listMethod))
         XCTAssertEqual(list?.tools.compactMap { $0["name"]?.stringValue }, ScheduleToolCatalog.tools.map(\.name))
 
-        // Create: what arrives was allowed by the harness, so it is made at once; Yardlet asks nothing more.
+        // Create: in a task that asks, the call was asked about on its one card before it came here (Yardlet's own,
+        // `AgentToolBroker+Approvals`, which this broker has no app to show), so it is made at once.
         let created = try await call("create_scheduled_task", [
             "name": "Nightly digest", "prompt": "Summarize today's merged pull requests.", "cronExpression": "30 21 * * 1-5"
         ])
@@ -554,15 +558,12 @@ final class ScheduleToolTests: XCTestCase {
 
         // Into a project and under this task again, then back to a chat, then to this task's folder.
         let id = schedule.id.uuidString
-        // Another project asks first, as `create_task` would, since the caller's harness did not.
-        let moving = Task { await self.call(model, "update_scheduled_task", ["scheduleId": id, "project": "site",
-                                                                              "useWorktree": true, "topLevel": false],
-                                            from: fixture.caller) }
-        let card = try await waitForApproval(in: fixture.caller.id, model: model)
-        XCTAssertEqual(card.request.title, L10n.string("Schedule a task in another project"))
-        XCTAssertTrue(model.sessionTools.answer(card.id, allow: true))
-        let moved = await moving.value
+        // Another project was asked about on the call's one card, which names it, before the call came here.
+        let moved = await call(model, "update_scheduled_task", ["scheduleId": id, "project": "site",
+                                                                "useWorktree": true, "topLevel": false],
+                               from: fixture.caller)
         XCTAssertTrue(moved.text.contains("updated: where each run goes"), moved.text)
+        XCTAssertTrue(model.approvalsAreEmpty(in: fixture.caller.id), "No second card")
         var destination = try XCTUnwrap(model.scheduledTasks.schedule(id: schedule.id)?.destination)
         XCTAssertEqual(destination.projectID, fixture.site.id)
         XCTAssertEqual(destination.parentTaskID, fixture.caller.id)
@@ -599,18 +600,12 @@ final class ScheduleToolTests: XCTestCase {
         ], from: fixture.claude)
         XCTAssertFalse(raised.isError, "A caller that runs without asking may choose it: \(raised.text)")
 
-        // A task that asks may not schedule messages into one that does not, unless the person agrees on its card.
-        let count = model.scheduledTasks.schedules.count
-        let into = Task { await self.call(model, "create_scheduled_task", [
+        // Messages into a task that does not ask were asked about on the call's one card, which names that task.
+        let into = await call(model, "create_scheduled_task", [
             "prompt": "Deploy now.", "fireAt": "2026-10-18T09:00:00+09:00", "continueTaskId": fixture.claude.id.uuidString
-        ], from: fixture.caller) }
-        let card = try await waitForApproval(in: fixture.caller.id, model: model)
-        XCTAssertEqual(card.request.title, L10n.string("Schedule messages to a task that runs without asking"))
-        XCTAssertTrue(card.request.detail?.contains("Deploy watch → Release prep") == true, card.request.detail ?? "")
-        XCTAssertTrue(model.sessionTools.answer(card.id, allow: false))
-        let refusedInto = await into.value
-        XCTAssertTrue(refusedInto.isError && refusedInto.text.contains("did not approve"), refusedInto.text)
-        XCTAssertEqual(model.scheduledTasks.schedules.count, count)
+        ], from: fixture.caller)
+        XCTAssertFalse(into.isError, into.text)
+        XCTAssertTrue(model.approvalsAreEmpty(in: fixture.caller.id), "No second card")
 
         // The person's own Bypass schedule: an agent that asks may not put its words into it, and a change of name
         // alone leaves the person's prompt theirs.
@@ -628,37 +623,17 @@ final class ScheduleToolTests: XCTestCase {
         XCTAssertFalse(renamed.isError, renamed.text)
         XCTAssertNil(model.scheduledTasks.schedule(id: mine.id)?.agentTaskID)
         // When its runs come, and whether they come, is the person's to say as well: running it now, moving its
-        // time, resuming it and deleting it ask first. Pausing it asks nothing.
-        let paused = await call(model, "update_scheduled_task", ["scheduleId": mine.id.uuidString, "enabled": false],
-                                from: fixture.caller)
-        XCTAssertFalse(paused.isError, paused.text)
-        XCTAssertTrue(model.approvalsAreEmpty(in: fixture.caller.id))
-        let held = try XCTUnwrap(model.scheduledTasks.schedule(id: mine.id))
-        let asked: [(tool: String, arguments: [String: Any], title: String)] = [
-            ("run_scheduled_task", [:], "Run a scheduled task with more permissions than this task"),
-            ("update_scheduled_task", ["cronExpression": "0 5 * * *"],
-             "Reschedule a scheduled task with more permissions than this task"),
-            ("update_scheduled_task", ["enabled": true], "Resume a scheduled task with more permissions than this task"),
-            ("delete_scheduled_task", [:], "Delete a scheduled task with more permissions than this task")
-        ]
-        for change in asked {
-            let arguments = change.arguments.merging(["scheduleId": mine.id.uuidString]) { first, _ in first }
-            let pending = Task { await self.call(model, change.tool, arguments, from: fixture.caller) }
-            let card = try await waitForApproval(in: fixture.caller.id, model: model)
-            XCTAssertEqual(card.request.title, L10n.string(change.title))
-            XCTAssertTrue(card.request.detail?.contains(
-                L10n.format("Its runs will use %@ mode.", L10n.string("Bypass permissions"))) == true, card.request.detail ?? "")
-            XCTAssertTrue(model.sessionTools.answer(card.id, allow: false))
-            let refused = await pending.value
-            XCTAssertTrue(refused.isError && refused.text.contains("did not approve"), refused.text)
-            XCTAssertEqual(model.scheduledTasks.schedule(id: mine.id), held, change.title)
+        // time, resuming it and deleting it went on the call's one card, which says the mode its runs use.
+        for tool in ["run_scheduled_task", "update_scheduled_task", "delete_scheduled_task"] {
+            let card = try XCTUnwrap(ScheduleToolApproval.request(
+                toolName: "mcp__yardlet__\(tool)", input: .object(["scheduleId": .string(mine.id.uuidString)]),
+                asking: .task))
+            XCTAssertTrue(card.detail.contains(L10n.format("Its runs will use %@ mode.", L10n.string("Bypass permissions"))),
+                          card.detail)
         }
-        let deleting = Task { await self.call(model, "delete_scheduled_task", ["scheduleId": mine.id.uuidString],
-                                              from: fixture.caller) }
-        let deleteCard = try await waitForApproval(in: fixture.caller.id, model: model)
-        XCTAssertTrue(model.sessionTools.answer(deleteCard.id, allow: true))
-        let deleted = await deleting.value
+        let deleted = await call(model, "delete_scheduled_task", ["scheduleId": mine.id.uuidString], from: fixture.caller)
         XCTAssertFalse(deleted.isError, deleted.text)
+        XCTAssertTrue(model.approvalsAreEmpty(in: fixture.caller.id), "No second card")
         XCTAssertNil(model.scheduledTasks.schedule(id: mine.id))
         await model.shutdown()
 

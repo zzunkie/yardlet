@@ -21,11 +21,13 @@ enum ScheduleToolApproval {
 
     static func request(toolName: String?, input: JSONValue, asking asker: Asker = .claude,
                         calendar: Calendar = .autoupdatingCurrent, now: Date = Date(),
-                        name lookup: (UUID) -> String? = { ScheduleNameDirectory.shared.name(of: $0) })
+                        name lookup: (UUID) -> String? = { ScheduleNameDirectory.shared.name(of: $0) },
+                        mode modeLookup: (UUID) -> String? = { ScheduleNameDirectory.shared.mode(of: $0) })
         -> (title: String, detail: String)? {
         typealias Key = ScheduleToolCatalog.Key
         guard let tool = tool(named: toolName) else { return nil }
-        let existing = input[Key.scheduleID]?.stringValue.flatMap(UUID.init(uuidString:)).flatMap(lookup)
+        let id = input[Key.scheduleID]?.stringValue.flatMap(UUID.init(uuidString:))
+        let existing = id.flatMap(lookup)
         let given = input[Key.name]?.stringValue.map(ScheduleToolCatalog.oneLine)?
             .trimmingCharacters(in: .whitespaces)
         let prompt = input[Key.prompt]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -76,6 +78,9 @@ enum ScheduleToolApproval {
             let name = NewTaskModelChoice.permission(fromTool: mode, harness: harness)
                 .map { $0.permissionName(for: harness) ?? L10n.string("Default") }
             lines.append(L10n.format("Its runs will use %@ mode.", name ?? mode))
+        } else if let mode = id.flatMap(modeLookup) {
+            // A schedule that stands: the mode its runs keep, which may do more without asking than the caller may.
+            lines.append(L10n.format("Its runs will use %@ mode.", mode))
         }
         var detail = lines.joined(separator: "\n")
         if let prompt, !prompt.isEmpty {
@@ -113,20 +118,38 @@ enum ScheduleToolApproval {
     }
 }
 
-/// The schedules' names, which an adapter's request card reads off the main actor. The scheduler
-/// writes it whenever its schedules change.
+/// The schedules' names, and the mode a new task's runs start in, which an adapter's request card reads off the main
+/// actor. The scheduler writes it whenever its schedules change.
 final class ScheduleNameDirectory: @unchecked Sendable {
     static let shared = ScheduleNameDirectory()
 
     private let lock = NSLock()
     private var names: [UUID: String] = [:]
+    private var modes: [UUID: String] = [:]
 
     func update(_ schedules: [ScheduledTask]) {
         let next = Dictionary(schedules.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
-        lock.withLock { names = next }
+        let nextModes = Dictionary(schedules.compactMap { schedule in
+            schedule.destination.mode == .newTask ? (schedule.id, Self.runModeName(of: schedule.destination)) : nil
+        }, uniquingKeysWith: { first, _ in first })
+        lock.withLock {
+            names = next
+            modes = nextModes
+        }
     }
 
     func name(of id: UUID) -> String? {
         lock.withLock { names[id] }
+    }
+
+    /// The mode a new task's runs start in, in its harness's words; nil for a schedule whose runs continue a task.
+    func mode(of id: UUID) -> String? {
+        lock.withLock { modes[id] }
+    }
+
+    /// The permission a new task's runs start with, in its harness's words.
+    static func runModeName(of destination: ScheduleDestination) -> String {
+        (destination.modelChoice ?? NewTaskModelChoice(model: nil)).permissionName(for: destination.harness)
+            ?? (destination.harness == .claudeCode ? L10n.string("Manual") : L10n.string("Default"))
     }
 }

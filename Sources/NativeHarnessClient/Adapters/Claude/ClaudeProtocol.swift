@@ -218,6 +218,22 @@ enum ClaudePermissionSuggestions {
     /// (`suppress_always_allow_rule`), when a safety check requires manual approval
     /// (`classifier_approvable: false`, where the native dialog narrows the list itself), or when
     /// an update is one whose effect a single scope label would misstate.
+    /// The offer with each rule a settings file would keep kept for the session instead, so it reads "Allow for
+    /// session": for a tool that may be allowed for a while, never for good
+    /// (`AgentToolHarnessApproval.allowsOnlyForSession`).
+    static func sessionOffer(from request: JSONValue) -> ClaudePermissionSuggestionOffer? {
+        guard case var .object(fields) = request, let updates = request["permission_suggestions"]?.arrayValue else {
+            return offer(from: request)
+        }
+        fields["permission_suggestions"] = .array(updates.map { update in
+            guard case var .object(rule) = update, let destination = rule["destination"]?.stringValue,
+                  settingsDestinations.contains(destination) else { return update }
+            rule["destination"] = .string("session")
+            return .object(rule)
+        })
+        return offer(from: .object(fields))
+    }
+
     static func offer(from request: JSONValue) -> ClaudePermissionSuggestionOffer? {
         guard request["suppress_always_allow_rule"]?.boolValue != true,
               request["classifier_approvable"]?.boolValue != false,

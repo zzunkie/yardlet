@@ -46,7 +46,14 @@ final class AgentToolInjectionTests: XCTestCase {
         XCTAssertEqual(codex?["required"], .bool(true),
                        "Marks yardlet-mcp required so Codex's lazy stdio startup does not skip live tool updates or drop readOnlyHint")
         XCTAssertEqual(codex?["tool_timeout_sec"], .integer(1_800))
-        XCTAssertNil(codex?["tools"], "Whether Codex asks follows the task's approval setting, not a per-tool mode of Yardlet's")
+        // Codex asks about none of the calls Yardlet weighs itself, a connector's included; the tools that act in a
+        // page or on a device keep Codex's own rule.
+        XCTAssertEqual(codex?["default_tools_approval_mode"], .string("approve"))
+        XCTAssertEqual(codex?["tools"]?[AgentToolCatalog.evaluate]?["approval_mode"], .string("auto"))
+        XCTAssertEqual(codex?["tools"]?[SimulatorToolCatalog.tap]?["approval_mode"], .string("auto"))
+        XCTAssertNil(codex?["tools"]?[ScheduleToolCatalog.create])
+        XCTAssertNil(codex?["tools"]?[VaultToolCatalog.fillCredential])
+        XCTAssertNil(codex?["tools"]?[SessionToolCatalog.archiveTask])
         XCTAssertEqual(codex?["env"]?[AgentToolEnvironment.session], .string(server.environment[AgentToolEnvironment.session]!))
         XCTAssertEqual(server.codexConfig.objectValue?.keys.sorted(), ["mcp_servers"],
                        "The override adds one entry and touches no other setting")
@@ -718,8 +725,7 @@ final class AgentToolInjectionTests: XCTestCase {
 
     @MainActor
     private final class StubScheduleHandler: ScheduleToolHandling {
-        func callScheduleTool(named name: String, arguments: ToolJSON, callerID: UUID,
-                              origin: AgentToolCallOrigin) async -> AgentToolResult { .text("ok") }
+        func callScheduleTool(named name: String, arguments: ToolJSON, callerID: UUID) async -> AgentToolResult { .text("ok") }
     }
 
     @MainActor

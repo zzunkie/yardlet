@@ -642,7 +642,7 @@ final class GmailConnectorTests: XCTestCase {
         let allowed = Set(AgentToolServerLaunch.claudeAllowedTools)
         XCTAssertFalse(allowed.contains { $0.contains("gmail") })
 
-        // Codex: asking follows the task's approval setting and the tools' annotations (2026-10-22).
+        // Codex: Yardlet's card asks before each send or label change, so Codex asks about none of them.
         let broker = AgentToolBroker(
             environment: AgentToolBroker.Environment(executableURL: try makeExecutable(), endpoint: "/tmp/unused.sock",
                                                      privateDirectory: FileManager.default.temporaryDirectory,
@@ -651,7 +651,9 @@ final class GmailConnectorTests: XCTestCase {
         broker.connectors = center
         let launch = try XCTUnwrap(broker.agentToolServer(for: UUID(), workspaceRoots: [],
                                                           connectorScope: ConnectorTaskScope(harness: .codex)))
-        XCTAssertNil(launch.codexConfig["mcp_servers"]?["yardlet"]?["tools"])
+        let codex = launch.codexConfig["mcp_servers"]?["yardlet"]
+        XCTAssertEqual(codex?["default_tools_approval_mode"], .string("approve"))
+        XCTAssertFalse(codex?["tools"]?.objectValue?.keys.contains { $0.contains("gmail") } ?? true)
 
         // Claude Code's card names the account, the recipients and subject over the body, and has no
         // "always allow" even when the CLI offers one.

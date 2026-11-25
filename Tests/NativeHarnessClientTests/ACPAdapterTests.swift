@@ -972,6 +972,34 @@ final class ACPAdapterTests: XCTestCase {
         XCTAssertEqual(payloads.filter { if case .permissionRequested = $0 { return true }; return false }.count, 1)
         let askAnswer = await answer("ask-1", on: restarted)
         XCTAssertNil(askAnswer)
+        // A call Yardlet weighs itself is answered at once, so the call has one card, Yardlet's; one it does not weigh
+        // shows Antigravity's card, with no allow for good for a browser tool that acts in a page.
+        func askTool(_ rpcID: String, _ title: String, _ input: JSONValue) async {
+            await restarted.emit(.object([
+                "jsonrpc": .string("2.0"), "id": .string(rpcID), "method": .string("session/request_permission"),
+                "params": .object([
+                    "sessionId": .string(handle.providerSessionID),
+                    "toolCall": .object(["toolCallId": .string(rpcID), "title": .string(title), "kind": .string("other"),
+                                         "rawInput": input]),
+                    "options": .array([
+                        .object(["optionId": .string("allow-once"), "name": .string("Allow"), "kind": .string("allow_once")]),
+                        .object(["optionId": .string("allow-always"), "name": .string("Always"), "kind": .string("allow_always")]),
+                        .object(["optionId": .string("reject-once"), "name": .string("Reject"), "kind": .string("reject_once")])
+                    ])
+                ])
+            ]))
+        }
+        await askTool("archive-1", "Run mcp_yardlet_f31bd028_archive_task", .object(["task_ids": .array([.string("x")])]))
+        try await waitUntil { await answer("archive-1", on: restarted) != nil }
+        let archiveAnswer = await answer("archive-1", on: restarted)
+        XCTAssertEqual(archiveAnswer, "allow-once")
+        await askTool("evaluate-1", "Run mcp_yardlet_f31bd028_browser_evaluate", .object(["function": .string("() => 1")]))
+        func cards() async -> [PermissionRequest] {
+            await recorder.payloads.compactMap { if case let .permissionRequested(request) = $0 { request } else { nil } }
+        }
+        try await waitUntil { await cards().count == 2 }
+        let evaluateCard = await cards().last
+        XCTAssertEqual(evaluateCard?.actions.map(\.kind), ["allow_once", "reject_once"])
         // Auto is set in the session on the same process; what the CLI still asks is shown as before.
         let auto = try await adapter.setProviderOption(id: AntigravityPermissionMode.optionID,
                                                        value: AntigravityPermissionMode.auto, in: handle)

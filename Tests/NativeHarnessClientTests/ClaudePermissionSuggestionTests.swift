@@ -79,6 +79,13 @@ final class ClaudePermissionSuggestionTests: XCTestCase {
         )
         XCTAssertEqual(local.updates, [bashPrefixRule, outsideDirectoryForSession])
 
+        // A tool allowed only for a while (a browser tool that acts in a page) keeps the same rules for the session.
+        let forSession = try XCTUnwrap(ClaudePermissionSuggestions.sessionOffer(from: request(
+            suggestions: [bashPrefixRule, outsideDirectoryForSession]
+        )))
+        XCTAssertEqual(forSession.action.id, "allow_session")
+        XCTAssertEqual(forSession.updates.compactMap { $0["destination"]?.stringValue }, ["session", "session"])
+
         let everywhere = try XCTUnwrap(ClaudePermissionSuggestions.offer(from: request(
             suggestions: [rule(destination: "localSettings"), rule(destination: "userSettings")]
         )))

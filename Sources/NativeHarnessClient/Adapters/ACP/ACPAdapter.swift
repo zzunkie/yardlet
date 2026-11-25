@@ -1011,12 +1011,20 @@ actor ACPAdapter:
             return
         }
         let options = value["params"]?["options"]?.arrayValue ?? []
-        let actions = permissionActions(from: options)
+        let toolCall = value["params"]?["toolCall"] ?? .object([:])
+        let yardletTool = kind == .antigravityCLI ? AgentToolHarnessApproval.yardletTool(
+            antigravityTitle: toolCall["title"]?.stringValue, kind: toolCall["kind"]?.stringValue,
+            input: toolCall["rawInput"]) : nil
+        var actions = permissionActions(from: options)
+        // A Yardlet tool's card offers no allow for good where Yardlet asks each time or allows only for a while.
+        if let yardletTool, AgentToolHarnessApproval.asksEachTime(tool: yardletTool)
+            || AgentToolHarnessApproval.allowsOnlyForSession(tool: yardletTool) {
+            actions.removeAll { $0.kind == "allow_always" }
+        }
         // A plain allow or deny takes the narrowest option the provider offered, never the
         // one that happens to come first in its list.
         let allow = PermissionActionPreference.preferred(from: actions, decision: .allow)?.id
         let deny = PermissionActionPreference.preferred(from: actions, decision: .deny)?.id
-        let toolCall = value["params"]?["toolCall"] ?? .object([:])
         // An Antigravity task in Plan has Yardlet answer no for it. One in Bypass permissions runs on
         // a process that approves for itself; anything it still asks while a prompt runs is answered yes.
         if kind == .antigravityCLI {
@@ -1030,6 +1038,12 @@ actor ACPAdapter:
             default:
                 break
             }
+        }
+        // Yardlet weighs this call where it runs, on its own card where it needs one, so Antigravity's card is
+        // answered at once and the call has one card (`AgentToolHarnessApproval.weighedByYardlet`).
+        if let yardletTool, AgentToolHarnessApproval.weighedByYardlet.contains(yardletTool), let allow {
+            try? await transport.send(ACPProtocol.permissionResponse(id: rpcID, optionID: allow))
+            return
         }
         let requestID = "acp-permission-\(rpcID.stringValue ?? String(rpcID.integerValue ?? 0))"
         permissions[requestID] = PermissionContext(
