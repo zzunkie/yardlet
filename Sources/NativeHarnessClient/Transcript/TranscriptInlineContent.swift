@@ -15,14 +15,13 @@ struct TranscriptInlineContent: Equatable, Sendable, ExpressibleByStringLiteral 
     }
 
     init(markup: any Markup) {
-        attributed = TranscriptAutolink.apply(to: Self.render(markup))
+        attributed = TranscriptAutolink.apply(to: Self.render([markup]))
     }
 
     /// Some of a paragraph's inline children, as `init(markup:)` reads the whole paragraph; white space and
     /// line breaks at either end, where a picture stood, are left out.
     init(inlines: [any Markup]) {
-        var rendered = AttributedString()
-        for inline in inlines { rendered += Self.render(inline) }
+        var rendered = Self.render(inlines)
         while let first = rendered.characters.first, first.isWhitespace {
             rendered.removeSubrange(rendered.startIndex..<rendered.characters.index(after: rendered.startIndex))
         }
@@ -63,47 +62,98 @@ struct TranscriptInlineContent: Equatable, Sendable, ExpressibleByStringLiteral 
         return result
     }
 
-    private static func render(_ markup: any Markup, depth: Int = 0) -> AttributedString {
-        guard depth < 64 else {
-            return AttributedString((markup as? any InlineMarkup)?.plainText ?? "")
+    /// The words of `markups` with their styles and links. They are gathered as one string and the
+    /// stretches each style or link covers, and the attributed string is made once from them: making
+    /// one for every piece of text and joining them, level by level, took several times as long, and a
+    /// long answer has thousands of pieces.
+    private static func render(_ markups: [any Markup]) -> AttributedString {
+        var builder = InlineBuilder()
+        for markup in markups { builder.add(markup, style: InlineBuilder.Style(), depth: 0) }
+        return builder.attributedString()
+    }
+
+    private struct InlineBuilder {
+        struct Style: Equatable {
+            var intent: InlinePresentationIntent = []
+            /// Set inside a link: its address, or nil when it is none.
+            var link: URL?? = nil
         }
-        switch markup {
-        case let text as Markdown.Text: return AttributedString(text.string)
-        case let code as InlineCode:
-            var result = AttributedString(code.code)
-            result.inlinePresentationIntent = .code
-            return result
-        case is SoftBreak, is LineBreak: return AttributedString("\n")
-        case let html as InlineHTML: return AttributedString(html.rawHTML)
-        default: break
+
+        private var text = ""
+        /// The stretches of `text` one after another, in Unicode scalars, each with its style.
+        private var stretches: [(length: Int, style: Style)] = []
+
+        mutating func add(_ markup: any Markup, style: Style, depth: Int) {
+            guard depth < 64 else {
+                append((markup as? any InlineMarkup)?.plainText ?? "", style)
+                return
+            }
+            switch markup {
+            case let text as Markdown.Text: return append(text.string, style)
+            case let code as InlineCode:
+                var codeStyle = style
+                codeStyle.intent.formUnion(.code)
+                return append(code.code, codeStyle)
+            case is SoftBreak, is LineBreak: return append("\n", style)
+            case let html as InlineHTML: return append(html.rawHTML, style)
+            default: break
+            }
+            var inner = style
+            switch markup {
+            case is Emphasis: inner.intent.formUnion(.emphasized)
+            case is Strong: inner.intent.formUnion(.stronglyEmphasized)
+            case let strikethrough as Strikethrough:
+                // GFM strikes between one tilde as between two, but one more often writes a range
+                // ("240~400ms") or "about" ("~5"). Only two strike, as cmark-gfm reads Markdown with
+                // `CMARK_OPT_STRIKETHROUGH_DOUBLE_TILDE` and remark-gfm with `singleTilde: false`.
+                guard strikethrough.openingTildes != 1 else {
+                    append("~", style)
+                    for child in markup.children { add(child, style: style, depth: depth + 1) }
+                    append("~", style)
+                    return
+                }
+                inner.intent.formUnion(.strikethrough)
+            default: break
+            }
+            // A link covers all of its words; the outermost one wins, as it was set last.
+            if style.link == nil, let link = markup as? Link, let destination = link.destination {
+                inner.link = .some(Self.url(destination))
+            }
+            for child in markup.children { add(child, style: inner, depth: depth + 1) }
         }
-        var result = AttributedString()
-        for child in markup.children { result += render(child, depth: depth + 1) }
-        let intent: InlinePresentationIntent
-        switch markup {
-        case is Emphasis: intent = .emphasized
-        case is Strong: intent = .stronglyEmphasized
-        case let strikethrough as Strikethrough:
-            // GFM strikes between one tilde as between two, but one more often writes a range
-            // ("240~400ms") or "about" ("~5"). Only two strike, as cmark-gfm reads Markdown with
-            // `CMARK_OPT_STRIKETHROUGH_DOUBLE_TILDE` and remark-gfm with `singleTilde: false`.
-            guard strikethrough.openingTildes != 1 else { return AttributedString("~") + result + AttributedString("~") }
-            intent = .strikethrough
-        default: intent = []
-        }
-        if !intent.isEmpty {
-            for run in result.runs {
-                result[run.range].inlinePresentationIntent = (run.inlinePresentationIntent ?? []).union(intent)
+
+        private mutating func append(_ piece: String, _ style: Style) {
+            let length = piece.unicodeScalars.count
+            guard length > 0 else { return }
+            text += piece
+            if let last = stretches.last, last.style == style {
+                stretches[stretches.count - 1].length += length
+            } else {
+                stretches.append((length, style))
             }
         }
-        if let link = markup as? Link, let destination = link.destination {
+
+        func attributedString() -> AttributedString {
+            var result = AttributedString(text)
+            var start = result.startIndex
+            for stretch in stretches {
+                let end = result.unicodeScalars.index(start, offsetBy: stretch.length)
+                if !stretch.style.intent.isEmpty { result[start..<end].inlinePresentationIntent = stretch.style.intent }
+                if case let .some(link) = stretch.style.link { result[start..<end].link = link }
+                start = end
+            }
+            return result
+        }
+
+        private static func url(_ destination: String) -> URL? {
             // Foundation can escape an existing %20 again when the same URL also
             // contains unescaped Unicode. Encode only the missing escapes first.
             let escaped = destination.replacingOccurrences(of: "%(?![0-9A-Fa-f]{2})", with: "%25", options: .regularExpression)
-            let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~:/?#[]@!$&'()*+,;=%")
-            result.link = escaped.addingPercentEncoding(withAllowedCharacters: allowed).flatMap { URL(string: $0) }
+            return escaped.addingPercentEncoding(withAllowedCharacters: linkCharacters).flatMap { URL(string: $0) }
         }
-        return result
+
+        private static let linkCharacters = CharacterSet(
+            charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~:/?#[]@!$&'()*+,;=%")
     }
 }
 

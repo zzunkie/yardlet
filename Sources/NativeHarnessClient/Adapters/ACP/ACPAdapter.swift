@@ -38,6 +38,10 @@ actor ACPAdapter:
     /// stopped starts a new one for its next session.
     private var processes: [ACPProcessLane: ACPAgentProcess] = [:]
     private var laneByLocalSessionID: [UUID: ACPProcessLane] = [:]
+    /// The sessions being opened (`session/new` or `session/load`) and the lane each is opened on. Until
+    /// the agent answers they hold no place in `laneByLocalSessionID`, yet they use their lane's process:
+    /// another session closing there must not end it under them.
+    private var openingLaneByLocalSessionID: [UUID: ACPProcessLane] = [:]
     /// A session's move to another lane in progress (`moveToItsLane`), which its next prompt and
     /// option wait for.
     private var laneMoves: [UUID: Task<Void, Error>] = [:]
@@ -221,6 +225,8 @@ actor ACPAdapter:
     func createSession(_ request: CreateHarnessSessionRequest) async throws
         -> HarnessSessionHandle {
         let lane = lane(for: request.localSessionID)
+        openingLaneByLocalSessionID[request.localSessionID] = lane
+        defer { openingLaneByLocalSessionID.removeValue(forKey: request.localSessionID) }
         let transport = try await ensureInitialized(
             lane,
             workspaceURL: request.workspaceURL,
@@ -255,6 +261,7 @@ actor ACPAdapter:
             }
             return handle
         } catch {
+            openingLaneByLocalSessionID.removeValue(forKey: request.localSessionID)
             await stopProcessIfUnused(lane, used: transport)
             throw error
         }
@@ -272,8 +279,11 @@ actor ACPAdapter:
                 localSessionID: localSessionID, workspaceURL: workspaceURL, initialPrompt: nil))
         }
         let lane = lane(for: localSessionID)
+        openingLaneByLocalSessionID[localSessionID] = lane
+        defer { openingLaneByLocalSessionID.removeValue(forKey: localSessionID) }
         let transport = try await ensureInitialized(lane, workspaceURL: workspaceURL, localSessionID: localSessionID)
         guard canLoadSession else {
+            openingLaneByLocalSessionID.removeValue(forKey: localSessionID)
             await stopProcessIfUnused(lane, used: transport)
             if answersWithoutSignIn { throw HarnessSignInRequired() }
             throw HarnessAdapterError.capabilityUnavailable(
@@ -307,6 +317,7 @@ actor ACPAdapter:
             return handle
         } catch {
             replayingProviderSessionIDs.remove(providerSessionID)
+            openingLaneByLocalSessionID.removeValue(forKey: localSessionID)
             await stopProcessIfUnused(lane, used: transport)
             throw error
         }
@@ -621,7 +632,7 @@ actor ACPAdapter:
     /// a slow or failed one holds up neither the close nor the next session.
     private func release(_ providerSessionID: String, on lane: ACPProcessLane, from transport: any ACPTransport) async {
         guard let process = processes[lane], process.transport === transport else { return }
-        guard laneByLocalSessionID.values.contains(lane) else {
+        guard uses(lane) else {
             await stopProcess(lane)
             return
         }
@@ -782,6 +793,8 @@ actor ACPAdapter:
         let id = session.localSessionID
         let lane = lane(for: id)
         guard handles[id] == session, let current = laneByLocalSessionID[id], current != lane else { return }
+        openingLaneByLocalSessionID[id] = lane
+        defer { openingLaneByLocalSessionID.removeValue(forKey: id) }
         let target = try await ensureInitialized(lane, workspaceURL: session.workspaceURL, localSessionID: id)
         let previous = capabilityStateByLocalSessionID[id]
         let wasReplaying = replayingProviderSessionIDs.contains(session.providerSessionID)
@@ -801,9 +814,11 @@ actor ACPAdapter:
             )
         } catch {
             if !wasReplaying { replayingProviderSessionIDs.remove(session.providerSessionID) }
+            openingLaneByLocalSessionID.removeValue(forKey: id)
             await stopProcessIfUnused(lane, used: target)
             throw error
         }
+        openingLaneByLocalSessionID.removeValue(forKey: id)
         // Closed, or ended with its process, while the conversation loaded.
         guard handles[id] == session, laneByLocalSessionID[id] == current else {
             await release(session.providerSessionID, on: lane, from: target)
@@ -1310,9 +1325,14 @@ actor ACPAdapter:
     /// request went to: one stopped and replaced while the request waited leaves the new process
     /// to the sessions after it.
     private func stopProcessIfUnused(_ lane: ACPProcessLane, used: (any ACPTransport)? = nil) async {
-        guard let process = processes[lane], !laneByLocalSessionID.values.contains(lane) else { return }
+        guard let process = processes[lane], !uses(lane) else { return }
         if let used, used !== process.transport { return }
         await stopProcess(lane)
+    }
+
+    /// Whether a session is open on `lane`'s process or being opened there.
+    private func uses(_ lane: ACPProcessLane) -> Bool {
+        laneByLocalSessionID.values.contains(lane) || openingLaneByLocalSessionID.values.contains(lane)
     }
 
     /// Ends `lane`'s process, so its next session starts one of its own. Antigravity's schema copies

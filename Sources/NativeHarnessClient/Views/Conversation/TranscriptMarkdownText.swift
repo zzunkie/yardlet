@@ -70,15 +70,28 @@ private struct TranscriptMarkdownDocumentView: View {
     let source: String
     let fullSource: String
     let dialect: TranscriptMarkdownDialect
-    /// The blocks the message was last read into, which a streaming message's next words keep
-    /// (`TranscriptMarkdownReadings`). Nothing observes it.
-    @State private var readings = TranscriptMarkdownReadings()
+    /// The source last read and its blocks: the view is drawn again for more than new words (find, the
+    /// theme, the width), and the same words need not be parsed again. Nothing observes it.
+    @State private var last = LastReading()
 
     var body: some View {
-        TranscriptMarkdownBlocksView(
-            blocks: TranscriptMarkdownDocument(source, dialect: dialect, readings: readings).blocks,
-            fullSource: fullSource, dialect: dialect, path: []
-        )
+        TranscriptMarkdownBlocksView(blocks: last.blocks(source, dialect: dialect), fullSource: fullSource,
+                                     dialect: dialect, path: [])
+    }
+
+    private final class LastReading {
+        private var source: String?
+        private var dialect = TranscriptMarkdownDialect.standard
+        private var blocks: [TranscriptMarkdownBlock] = []
+
+        func blocks(_ source: String, dialect: TranscriptMarkdownDialect) -> [TranscriptMarkdownBlock] {
+            if source == self.source, dialect == self.dialect { return blocks }
+            // The blocks read before, which a streaming message's next words and a row back in view keep.
+            blocks = TranscriptMarkdownDocument(source, dialect: dialect, readings: .shared).blocks
+            self.source = source
+            self.dialect = dialect
+            return blocks
+        }
     }
 }
 

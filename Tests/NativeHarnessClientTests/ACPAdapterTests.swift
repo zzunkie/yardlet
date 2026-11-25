@@ -240,6 +240,35 @@ final class ACPAdapterTests: XCTestCase {
         }
     }
 
+    /// A task being opened on a process uses it before the agent has answered: when another task on
+    /// that process closes meanwhile, as a scheduled run's new task can meet a finished one being
+    /// archived, the process goes on and the new task opens on it. A process whose only task was
+    /// still opening was ended under it, and the run failed with the transport stopped.
+    func testClosingTheLastOpenTaskLeavesAProcessATaskIsStillOpeningOn() async throws {
+        let transport = FakeACPTransport()
+        let adapter = ACPAdapter(kind: .openCode, executableURL: URL(filePath: "/tmp/fake-opencode"),
+                                 transportFactory: transportSequence(transport))
+        let workspace = URL(filePath: "/tmp/acp-workspace")
+        let finished = try await adapter.createSession(
+            CreateHarnessSessionRequest(localSessionID: UUID(), workspaceURL: workspace, initialPrompt: nil))
+        await transport.setHoldsSessionOpens(true)
+        let opening = Task {
+            try await adapter.createSession(
+                CreateHarnessSessionRequest(localSessionID: UUID(), workspaceURL: workspace, initialPrompt: nil))
+        }
+        try await waitUntil { await transport.pendingSessionOpenCount == 1 }
+
+        await adapter.close(finished)
+        let stopsWhileOpening = await transport.stopCount
+        XCTAssertEqual(stopsWhileOpening, 0)
+        await transport.answerSessionOpens()
+        let opened = try await opening.value
+
+        await adapter.close(opened)
+        let stops = await transport.stopCount
+        XCTAssertEqual(stops, 1)
+    }
+
     /// Signed out, `kiro-cli acp` answers `initialize` with no session loading and refuses the rest, so
     /// a resume asks for the sign-in. Nothing of that process is kept: the next resume starts a new one.
     func testAKiroProcessStartedSignedOutAsksToSignInAndTheNextOneLoads() async throws {
@@ -1813,6 +1842,9 @@ actor FakeACPTransport: ACPTransport {
     private let stream: AsyncStream<ACPRawFrame>
     private let continuation: AsyncStream<ACPRawFrame>.Continuation
     private var promptContinuations: [CheckedContinuation<JSONValue, Error>] = []
+    /// `session/new` and `session/load` wait for `answerSessionOpens()` while this is set.
+    var holdsSessionOpens = false
+    private var openContinuations: [(CheckedContinuation<JSONValue, Error>, JSONValue)] = []
     private let protocolVersion: Int64
     private let exposesConfig: Bool
     private let exposesGrokModels: Bool
@@ -1889,6 +1921,10 @@ actor FakeACPTransport: ACPTransport {
                 "protocolVersion": .integer(protocolVersion),
                 "agentCapabilities": .object(capabilities)
             ])
+        case "session/new" where holdsSessionOpens, "session/load" where holdsSessionOpens:
+            return try await withCheckedThrowingContinuation { continuation in
+                openContinuations.append((continuation, value))
+            }
         case "session/new":
             var result: [String: JSONValue] = ["sessionId": .string("acp-session-1")]
             if exposesConfig { result["configOptions"] = configOptions(current: "ask") }
@@ -2005,7 +2041,28 @@ actor FakeACPTransport: ACPTransport {
     func stop() async {
         stopCount += 1
         onStop?()
+        // As `ACPProcessTransport` does, the requests still waiting fail.
+        let opens = openContinuations
+        openContinuations.removeAll()
+        for (open, _) in opens {
+            open.resume(throwing: HarnessAdapterError.processExited(code: SIGKILL, message: "ACP transport stopped"))
+        }
         continuation.finish()
+    }
+
+    func setHoldsSessionOpens(_ holds: Bool) { holdsSessionOpens = holds }
+
+    var pendingSessionOpenCount: Int { openContinuations.count }
+
+    /// Answers the held `session/new` and `session/load` requests.
+    func answerSessionOpens() {
+        holdsSessionOpens = false
+        let opens = openContinuations
+        openContinuations.removeAll()
+        for (open, value) in opens {
+            open.resume(returning: value["method"]?.stringValue == "session/new"
+                ? .object(["sessionId": .string("acp-session-2")]) : .object([:]))
+        }
     }
 
     /// Ends as `ACPProcessTransport` does when its process is killed: the requests waiting on it

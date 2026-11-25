@@ -67,59 +67,69 @@ struct TranscriptMarkdownPicture: Equatable, Sendable {
     }
 }
 
-/// The blocks a message's Markdown was last read into, by the source each was read from: its top-level
-/// blocks and the items of its top-level lists. Reading the message again, as it streams, keeps those
-/// whose source is unchanged as the very same values instead of building them anew. Besides the
+/// The blocks messages' Markdown was read into, by the source each was read from: their top-level
+/// blocks and the items of their top-level lists. Reading a message again, as it streams or as its row
+/// comes back into view, keeps those whose source is unchanged as the very same values instead of
+/// building them anew, so a reading costs what changed rather than the whole message. Besides the
 /// building, that spares every comparison after it: SwiftUI and the text view compare a message's
 /// blocks with the ones they drew, and two equal `AttributedString`s compare in an instant when they
 /// share storage, but character by character, at about 140 ns a character, when they do not.
 ///
+/// One store serves every message (`shared`): the conversation's list puts a row's view away when it
+/// leaves the screen, and a store of the view's own would go with it. It holds a bounded amount of
+/// source and lets go of the rest, and of everything when memory runs low; `NSCache` is safe to use
+/// from any thread.
+///
 /// A block's reading depends on its own source alone, except where a link reference definition
 /// elsewhere in the message resolves a link; a message that may hold one is read whole.
-final class TranscriptMarkdownReadings {
-    fileprivate var blocks: [Substring: TranscriptMarkdownBlock] = [:]
-    fileprivate var items: [Substring: TranscriptMarkdownListItem] = [:]
+final class TranscriptMarkdownReadings: @unchecked Sendable {
+    static let shared = TranscriptMarkdownReadings()
 
-    init() {}
+    private final class Kept<Value> {
+        let value: Value
+        init(_ value: Value) { self.value = value }
+    }
+
+    private let blocks = NSCache<NSString, Kept<TranscriptMarkdownBlock>>()
+    private let items = NSCache<NSString, Kept<TranscriptMarkdownListItem>>()
+
+    /// - Parameter sourceLimit: how much source, in UTF-16 units, each kind of reading keeps.
+    init(sourceLimit: Int = 2_000_000) {
+        blocks.totalCostLimit = sourceLimit
+        items.totalCostLimit = sourceLimit
+    }
+
+    fileprivate func block(_ source: Substring, read: () -> TranscriptMarkdownBlock) -> TranscriptMarkdownBlock {
+        Self.kept(source, in: blocks, read: read)
+    }
+
+    fileprivate func item(_ source: Substring, read: () -> TranscriptMarkdownListItem) -> TranscriptMarkdownListItem {
+        Self.kept(source, in: items, read: read)
+    }
+
+    private static func kept<Value>(_ source: Substring, in cache: NSCache<NSString, Kept<Value>>,
+                                     read: () -> Value) -> Value {
+        let key = String(source) as NSString
+        if let kept = cache.object(forKey: key) { return kept.value }
+        let value = read()
+        cache.setObject(Kept(value), forKey: key, cost: key.length)
+        return value
+    }
 }
 
 struct TranscriptMarkdownDocument: Equatable, Sendable {
     let blocks: [TranscriptMarkdownBlock]
 
-    /// - Parameter readings: what an earlier reading of the same message kept, which this reading
-    ///   reuses and then replaces.
+    /// - Parameter readings: the blocks earlier readings kept, which this reading reuses and adds to.
     init(_ source: String, dialect: TranscriptMarkdownDialect = .standard, readings: TranscriptMarkdownReadings? = nil) {
-        let reading = readings.flatMap { source.contains("]:") ? nil : Reading(earlier: $0) }
+        let reading = source.contains("]:") ? nil : readings
         switch dialect {
         case .standard: blocks = Self.blocks(source, reading: reading)
         case .codex: blocks = Self.codexBlocks(source, depth: 0, reading: reading)
         }
-        if let readings {
-            readings.blocks = reading?.blocks ?? [:]
-            readings.items = reading?.items ?? [:]
-        }
     }
 
-    /// One reading's blocks by their source, and the earlier reading's it takes from.
-    private final class Reading {
-        let earlier: TranscriptMarkdownReadings
-        var blocks: [Substring: TranscriptMarkdownBlock] = [:]
-        var items: [Substring: TranscriptMarkdownListItem] = [:]
-
-        init(earlier: TranscriptMarkdownReadings) { self.earlier = earlier }
-
-        func block(_ source: Substring, read: () -> TranscriptMarkdownBlock) -> TranscriptMarkdownBlock {
-            let block = blocks[source] ?? earlier.blocks[source] ?? read()
-            blocks[source] = block
-            return block
-        }
-
-        func item(_ source: Substring, read: () -> TranscriptMarkdownListItem) -> TranscriptMarkdownListItem {
-            let item = items[source] ?? earlier.items[source] ?? read()
-            items[source] = item
-            return item
-        }
-    }
+    private typealias Reading = TranscriptMarkdownReadings
 
     private static func blocks(_ source: String, reading: Reading?) -> [TranscriptMarkdownBlock] {
         let document = Document(parsing: source, options: [.disableSmartOpts])
