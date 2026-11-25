@@ -308,8 +308,8 @@ extension AppModel: ScheduleToolHandling {
             if asks, scheduleIsPastProject(schedule, caller: caller) {
                 let destination = schedule.destination
                 let place = scheduleProject(schedule)?.name ?? destination.workspacePath
-                    ?? destination.targetTaskID.flatMap { id in store.sessions.first { $0.id == id }?.title }
-                let detail = "“\(ScheduleToolCatalog.oneLine(schedule.name))”" + (place.map { " · \($0)" } ?? "")
+                    ?? destination.targetTaskID.flatMap { scheduleTarget($0)?.title } ?? L10n.string("Chats")
+                let detail = "“\(ScheduleToolCatalog.oneLine(schedule.name))” · \(place)"
                 guard await askPerson(title: L10n.string("Read another project's scheduled task"), detail: detail,
                                       caller: caller), !Task.isCancelled else {
                     return .failure("The person did not approve reading another project's scheduled task, so it was "
@@ -357,22 +357,36 @@ extension AppModel: ScheduleToolHandling {
             return projects.project(id: destination.projectID)
                 ?? destination.workspaceURL.flatMap { projects.project(containingRoot: $0) }
         case .continueTask:
-            return destination.targetTaskID.flatMap { id in store.sessions.first { $0.id == id } }
-                .flatMap { project(for: $0) }
+            return destination.targetTaskID.flatMap(scheduleTarget).flatMap { project(for: $0) }
         }
     }
 
-    /// Whether a schedule's runs go past the caller's own project: new tasks in another project's folder, or
-    /// messages into another project's task. A schedule of chats, or of a task no longer there, is no project's.
+    /// The task a schedule's runs continue, archived or not.
+    private func scheduleTarget(_ id: UUID) -> SessionRecord? {
+        store.sessions.first { $0.id == id } ?? store.archivedSessions?.first { $0.id == id }?.session
+    }
+
+    /// Whether a schedule's runs go past the caller's own project: new tasks in another project or a folder outside
+    /// the caller's, or messages into another project's task, archived or not. What it cannot place counts as past:
+    /// a schedule of chats, or one continuing a task no longer there, unless the caller made it or its runs nest
+    /// under or continue the caller.
     func scheduleIsPastProject(_ schedule: ScheduledTask, caller: SessionToolCaller) -> Bool {
         let destination = schedule.destination
+        let host = caller.hostTaskID
         switch destination.mode {
         case .newTask:
-            guard let folder = destination.workspaceURL else { return false }
-            return sessionToolPlaceReachesPast(folder: folder, project: scheduleProject(schedule), caller: caller)
+            if schedule.agentTaskID == host || destination.parentTaskID == host { return false }
+            if let folder = destination.workspaceURL {
+                return sessionToolPlaceReachesPast(folder: folder, project: scheduleProject(schedule), caller: caller)
+            }
+            if let project = scheduleProject(schedule) {
+                return caller.projectID == nil || project.id != caller.projectID
+            }
+            return true
         case .continueTask:
-            guard let id = destination.targetTaskID, let target = store.sessions.first(where: { $0.id == id }) else {
-                return false
+            if destination.targetTaskID == host { return false }
+            guard let target = destination.targetTaskID.flatMap(scheduleTarget) else {
+                return schedule.agentTaskID != host
             }
             return sessionToolReadsPastProject(target, caller: caller)
         }

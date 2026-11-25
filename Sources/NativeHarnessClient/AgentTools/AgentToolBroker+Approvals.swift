@@ -156,7 +156,10 @@ extension AgentToolBroker {
         }
         // Only the question this call waited on is cleared: a later one may stand in its place already.
         if pendingReadApprovals[key] === question { pendingReadApprovals[key] = nil }
-        if allowed { approvedReadServices[host, default: []].insert(scope) }
+        // A task released meanwhile (archived, deleted) keeps no allow: its question was withdrawn.
+        if allowed, !question.answer.isCancelled, tokens[host] != nil {
+            approvedReadServices[host, default: []].insert(scope)
+        }
         return allowed && !Task.isCancelled ? nil : Self.declined(tool)
     }
 

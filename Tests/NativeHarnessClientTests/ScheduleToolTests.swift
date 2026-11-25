@@ -379,6 +379,58 @@ final class ScheduleToolTests: XCTestCase {
         await model.shutdown()
     }
 
+    /// What a listing cannot place stays closed: another task's schedule of chats, and one continuing another project's
+    /// task that was archived or deleted; the caller's own chats schedule and a read-only caller are weighed the same way.
+    func testSchedulesThatCannotBePlacedListNoPromptUnlessTheCallerMadeThem() async throws {
+        func schedule(_ name: String, _ destination: ScheduleDestination, by agent: UUID? = nil) -> ScheduledTask {
+            ScheduledTask(name: name, prompt: "\(name) prompt.", trigger: .daily(ScheduleTime(hour: 9, minute: 0)),
+                          destination: destination, createdAt: date(17, 20), agentTaskID: agent)
+        }
+        let fixture = try Fixture(root: root, calendar: seoul, now: date(17, 20), claudeMode: "plan")
+        let model = fixture.model
+        try await model.store.loadArchivedSessions()
+        _ = try await model.store.moveSession(id: fixture.claude.id, toProject: fixture.site.id, additionalRoots: [])
+        try await model.store.archiveSession(id: fixture.claude.id)
+        let chats = schedule("Chats digest", ScheduleDestination(harness: .openCode))
+        let mine = schedule("My chats digest", ScheduleDestination(harness: .openCode), by: fixture.caller.id)
+        let archived = schedule("Archived follow-up", ScheduleDestination(mode: .continueTask, harness: .claudeCode,
+                                                                          targetTaskID: fixture.claude.id))
+        let gone = schedule("Gone follow-up", ScheduleDestination(mode: .continueTask, harness: .claudeCode,
+                                                                  targetTaskID: UUID()))
+        for item in [chats, mine, archived, gone] { model.scheduledTasks.create(item) }
+
+        let listed = try JSONDecoder().decode(Listing.self, from: Data(
+            await call(model, "list_scheduled_tasks", [:], from: fixture.caller).text.utf8))
+        let prompts = Dictionary(uniqueKeysWithValues: listed.scheduledTasks.map { ($0.name, $0.prompt) })
+        XCTAssertEqual(prompts["My chats digest"], "My chats digest prompt.")
+        for name in ["Chats digest", "Archived follow-up", "Gone follow-up"] {
+            XCTAssertEqual(prompts[name], .some(nil), name)
+        }
+
+        let reading = Task { await self.call(model, "list_scheduled_tasks", ["scheduleId": chats.id.uuidString],
+                                             from: fixture.caller) }
+        let card = try await waitForApproval(in: fixture.caller.id, model: model)
+        XCTAssertEqual(card.request.detail, "“Chats digest” · " + L10n.string("Chats"))
+        XCTAssertTrue(model.sessionTools.answer(card.id, allow: false))
+        _ = await reading.value
+        await model.shutdown()
+    }
+
+    /// A read-only caller asks as any other that asks.
+    func testAReadOnlyCallerListsAnotherProjectsScheduleWithoutItsPrompt() async throws {
+        let site = ScheduledTask(name: "Site deploy", prompt: "Deploy the site.", trigger: .daily(ScheduleTime(hour: 9, minute: 0)),
+                                 destination: ScheduleDestination(harness: .openCode,
+                                                                  workspacePath: root.appending(path: "site").path),
+                                 createdAt: date(17, 20))
+        let fixture = try Fixture(root: root, calendar: seoul, now: date(17, 20), claudeMode: "plan",
+                                  repository: InMemoryScheduledTaskRepository(snapshot: ScheduleSnapshot(schedules: [site])))
+        let model = fixture.model
+        let listed = try JSONDecoder().decode(Listing.self, from: Data(
+            await call(model, "list_scheduled_tasks", [:], from: fixture.claude).text.utf8))
+        XCTAssertNil(listed.scheduledTasks.first?.prompt)
+        await model.shutdown()
+    }
+
     // MARK: - Defaults from the caller
 
     func testANewScheduleTakesTheCallersHarnessFolderProjectAndAccount() async throws {

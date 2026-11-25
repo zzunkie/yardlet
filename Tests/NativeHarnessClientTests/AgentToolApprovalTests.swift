@@ -284,6 +284,23 @@ final class AgentToolApprovalTests: XCTestCase {
         XCTAssertEqual(declined.structuredContent?["error"]?["kind"]?.stringValue, AgentToolFailure.Kind.refused.rawValue)
     }
 
+    /// A task released while its first read's card waits takes the card away and keeps no allow, whatever comes after.
+    func testReleasingATaskWithdrawsItsFirstReadQuestion() async throws {
+        let (broker, session, token, connectors, approvals) = try makeBroker(policy: policy())
+        let center = SessionToolCenter(defaults: try XCTUnwrap(UserDefaults(suiteName: "approvals-\(UUID().uuidString)")))
+        approvals.center = center
+        let host = approvals.hostTaskID
+        let read = Task { await self.direct("gmail_search", broker, session, token) }
+        try await waitUntil { !center.approvals(for: host).isEmpty }
+        broker.releaseAgentTools(for: session)
+        try await waitUntil { center.approvals(for: host).isEmpty }
+        let result = await read.value
+        XCTAssertTrue(result.isError)
+        XCTAssertTrue(broker.pendingReadApprovals.isEmpty)
+        XCTAssertNil(broker.approvedReadServices[session])
+        XCTAssertEqual(connectors.calls, [])
+    }
+
     func testAWriteCardNamesItsAccount() async throws {
         let (broker, session, token, _, approvals) = try makeBroker(policy: policy())
         _ = await direct("gmail_send", broker, session, token)
