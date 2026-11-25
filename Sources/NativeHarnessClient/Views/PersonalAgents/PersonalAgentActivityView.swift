@@ -39,30 +39,26 @@ struct PersonalAgentActivityView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 9) {
-            Button(action: close) { Image(systemName: "chevron.left").frame(width: 26, height: 26) }
-                .buttonStyle(.borderless).parityPointer()
-                .help(L10n.format("Back to %@", agent.name))
+        HStack(spacing: 8) {
+            ParityHeaderButton(systemName: "chevron.left", help: L10n.format("Back to %@", agent.name), action: close)
                 .accessibilityLabel(L10n.format("Back to %@", agent.name))
             Image(systemName: PersonalAgentDetailsPanel.symbol(reading.activity))
                 .foregroundStyle(.secondary).accessibilityHidden(true)
-            Text(reading.activity.title).font(.system(size: 14 * scale, weight: .semibold))
+            Text(reading.activity.title).font(.parity(.control, weight: .semibold, scale: scale))
                 .lineLimit(1).truncationMode(.tail)
             let status = PersonalAgentDetailsPanel.statusText(reading.activity)
             if !status.isEmpty { Text(status).font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary).lineLimit(1) }
             Spacer(minLength: 8)
-            Button(action: reload) { Image(systemName: "arrow.clockwise").frame(width: 26, height: 26) }
-                .buttonStyle(.borderless).parityPointer().disabled(history.phase == .loading)
-                .help(L10n.string("Refresh")).accessibilityLabel(L10n.string("Refresh task"))
-            Button(action: toggleDetails) {
-                Image(systemName: "sidebar.right").frame(width: 26, height: 26)
-                    .foregroundStyle(showsDetails ? Color.primary : Color.secondary)
-            }
-            .buttonStyle(.borderless).parityPointer()
-            .help(L10n.string(showsDetails ? "Hide dot details" : "Show dot details"))
-            .accessibilityLabel(L10n.string(showsDetails ? "Hide dot details" : "Show dot details"))
+            ParityHeaderButton(systemName: "arrow.clockwise", help: L10n.string("Refresh"), action: reload)
+                .disabled(history.phase == .loading)
+                .accessibilityLabel(L10n.string("Refresh task"))
+            ParityHeaderButton(systemName: "sidebar.right",
+                               help: L10n.string(showsDetails ? "Hide dot details" : "Show dot details"),
+                               isOn: showsDetails, action: toggleDetails)
+                .accessibilityLabel(L10n.string(showsDetails ? "Hide dot details" : "Show dot details"))
         }
-        .padding(.horizontal, 20).frame(height: PersonalAgentConversationView.headerHeight)
+        .padding(.leading, 8).padding(.trailing, 8).frame(height: PersonalAgentConversationView.headerHeight)
+        .environment(\.parityHeaderControls, true)
         .accessibilityElement(children: .contain)
     }
 
@@ -81,12 +77,10 @@ struct PersonalAgentActivityView: View {
     }
 
     private func notice(_ text: String, failure: PersonalAgentFailure?, retry: @escaping () -> Void) -> some View {
-        HStack {
-            Text(text).help(failure?.message ?? "")
-            Spacer()
-            Button(L10n.string("Try again"), action: retry).buttonStyle(.borderless).parityPointer()
+        PersonalAgentNotice(text: text) {
+            Button(L10n.string("Try again"), action: retry)
         }
-        .font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary)
+        .help(failure?.message ?? "")
         .conversationColumn().padding(.bottom, 8)
     }
 

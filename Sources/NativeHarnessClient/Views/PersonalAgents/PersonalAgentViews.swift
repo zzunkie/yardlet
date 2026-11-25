@@ -328,20 +328,18 @@ struct PersonalAgentsContent: View {
                         }
                     }
                     if showsDetailsBeside {
-                        Rectangle().fill(ParityTheme.separator).frame(width: 1)
                         details(agent: agent, conversation: conversation)
                     }
                 }
                 .overlay(alignment: .topTrailing) {
-                    // Below the conversation's header, whose button still hides them.
+                    // Below the conversation's header, whose button still hides them, raised as a task's
+                    // rail is in a narrow window: a click outside or Escape puts them away.
                     if showsDetailsRaised {
-                        details(agent: agent, conversation: conversation, close: toggleDetails)
-                            .overlay(alignment: .leading) { Rectangle().fill(ParityTheme.separator).frame(width: 1) }
-                            .overlay(alignment: .top) { Rectangle().fill(ParityTheme.separator).frame(height: 1) }
-                            .shadow(color: .black.opacity(0.12), radius: 12, x: -2)
-                            .padding(.top, PersonalAgentConversationView.headerHeight)
-                            .onMacShortcutExit(perform: toggleDetails)
-                            .transition(.move(edge: .trailing))
+                        SessionRailRaisedLayer(onDismiss: dismissRaisedDetails) {
+                            details(agent: agent, conversation: conversation, close: dismissRaisedDetails)
+                        }
+                        .padding(.top, PersonalAgentConversationView.headerHeight)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
                     }
                 }
             } else {
@@ -408,6 +406,13 @@ struct PersonalAgentsContent: View {
             check: { item in Task { await center.checkInputRequest(item) } },
             choose: { id, index in Task { await center.chooseOption(index, in: id) } },
             retryOption: { Task { await center.retryOptionReply() } })
+    }
+
+    /// Puts the raised details away, once: a click outside or Escape during the closing animation does
+    /// not raise them again.
+    private func dismissRaisedDetails() {
+        guard raisesDetails else { return }
+        withAnimation(.easeInOut(duration: 0.18)) { raisesDetails = false }
     }
 
     private func toggleDetails() {
@@ -568,7 +573,10 @@ struct PersonalAgentConversationView: View {
     @State private var dotsApp: URL?
     @State private var openFailed = false
 
-    static let headerHeight: CGFloat = 46
+    /// The pane header's height, as a task pane's toolbar is (`ParityTheme.paneToolbarHeight`).
+    static let headerHeight: CGFloat = ParityTheme.paneToolbarHeight
+    /// Between two messages of one author's run; a new author or day takes `ConversationLayout.turnSpacing`.
+    static let runSpacing: CGFloat = 4
 
     private var original: PersonalAgentOriginalOpener { opener ?? .live }
 
@@ -577,9 +585,9 @@ struct PersonalAgentConversationView: View {
         let _ = ViewBodyCensus.note(.personalAgentConversation)
 #endif
         VStack(spacing: 0) {
-            HStack(spacing: 9) {
-                PersonalAgentLiveAvatar(live: live, agent: agent, data: avatar, sheet: sheet, plays: playsPet, size: 24)
-                Text(agent.name).font(.system(size: 14 * scale, weight: .semibold)).lineLimit(1)
+            HStack(spacing: 8) {
+                PersonalAgentLiveAvatar(live: live, agent: agent, data: avatar, sheet: sheet, plays: playsPet, size: 22)
+                Text(agent.name).font(.parity(.control, weight: .semibold, scale: scale)).lineLimit(1)
                 PersonalAgentLiveLabel(live: live, agent: agent, reconnecting: reconnecting)
                 Spacer(minLength: 8)
                 originalMenu
@@ -590,14 +598,16 @@ struct PersonalAgentConversationView: View {
                                    help: L10n.string(showsDetails ? "Hide dot details" : "Show dot details"),
                                    isOn: showsDetails, action: toggleDetails)
             }
-            .padding(.horizontal, 20).frame(height: Self.headerHeight)
+            .padding(.leading, 16).padding(.trailing, 8).frame(height: Self.headerHeight)
+            .environment(\.parityHeaderControls, true)
             if let failure = conversation.failure ?? connectionFailure {
-                HStack { Text(failure.message); Spacer(); Button(L10n.string("Try again"), action: refresh) }
-                    .font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary)
-                    .conversationColumn().padding(.bottom, 8)
+                PersonalAgentNotice(text: failure.message) {
+                    Button(L10n.string("Try again"), action: refresh)
+                }
+                .conversationColumn().padding(.bottom, 8)
             }
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: ConversationLayout.turnSpacing) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                     if conversation.before != nil || conversation.olderFailure != nil {
                         olderMessages
                     }
@@ -606,9 +616,17 @@ struct PersonalAgentConversationView: View {
                         ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(.vertical, 30)
                     }
                     let messages = conversation.visibleMessages
+                    let days = PersonalAgentDayDivider.days(in: messages)
                     ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
-                        messageRow(message, startsRun: index == 0 || messages[index - 1].author != message.author)
-                            .id(message.id)
+                        let previous = index == 0 ? nil : messages[index - 1]
+                        let day = days[index]
+                        let startsRun = previous == nil || previous?.author != message.author || day != nil
+                        VStack(alignment: .leading, spacing: ConversationLayout.turnSpacing) {
+                            if let day { PersonalAgentDayDivider(date: day) }
+                            messageRow(message, startsRun: startsRun)
+                        }
+                        .padding(.top, index == 0 ? 0 : startsRun ? ConversationLayout.turnSpacing : Self.runSpacing)
+                        .id(message.id)
                     }
                     if conversation.loaded, messages.isEmpty {
                         Text(L10n.string("No messages yet")).foregroundStyle(.secondary)
@@ -623,13 +641,14 @@ struct PersonalAgentConversationView: View {
             .defaultScrollAnchor(.bottom)
             .scrollPosition(id: $conversation.anchor)
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { historyHeight = $0 }
-            if isLoadingAttachment || attachmentFailure != nil || openFailed {
-                HStack(spacing: 6) {
-                    if isLoadingAttachment { ProgressView().controlSize(.small) }
-                    if let attachmentFailure { Text(attachmentFailure.message) }
-                    else if openFailed { Text(L10n.string("Dots could not be opened.")) }
-                }
-                .font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary).padding(.bottom, 4)
+            if let attachmentFailure {
+                PersonalAgentNotice(text: attachmentFailure.message, isWorking: isLoadingAttachment)
+                    .conversationColumn().padding(.bottom, 4)
+            } else if openFailed {
+                PersonalAgentNotice(text: L10n.string("Dots could not be opened."), isWorking: isLoadingAttachment)
+                    .conversationColumn().padding(.bottom, 4)
+            } else if isLoadingAttachment {
+                ProgressView().controlSize(.small).padding(.bottom, 4)
             }
             if conversation.optionReply.storageFailed || conversation.optionReply.pending != nil && !showsWaitingQuestion {
                 PersonalAgentOptionAnswerStatus(reply: conversation.optionReply, showsQuestion: showsWaitingQuestion,
@@ -679,10 +698,8 @@ struct PersonalAgentConversationView: View {
     private func unsupportedLink(_ message: PersonalAgentMessage) -> some View {
         if !message.isDeleted, message.isUnsupported || message.attachments.contains(where: { !$0.opensHere && $0.url == nil }),
            let page = DotsLinks.web(for: agent) {
-            Button(L10n.string("Open This Dot on the Web")) { openWeb(page) }
-                .parityLinkButton()
-                .font(.system(size: 12 * scale))
-                .parityPointer()
+            PersonalAgentChip(title: L10n.string("Open This Dot on the Web"), systemName: "arrow.up.right.square",
+                              alignsTrailing: message.author == .person) { openWeb(page) }
         }
     }
 
@@ -696,15 +713,16 @@ struct PersonalAgentConversationView: View {
             } else if let failure = conversation.olderFailure {
                 Text(L10n.string("Earlier messages could not be loaded."))
                     .help(failure.message)
-                Button(L10n.string("Try again"), action: readEarlier).buttonStyle(.borderless).parityPointer()
+                PersonalAgentTextButton(title: L10n.string("Try again"), action: readEarlier)
             } else {
-                Button(L10n.string("Load earlier messages"), action: readEarlier).buttonStyle(.borderless).parityPointer()
+                PersonalAgentTextButton(title: L10n.string("Load earlier messages"), action: readEarlier)
             }
         }
-        .font(.system(size: 12 * scale))
+        .font(.yardlet(.caption, scale: scale))
         .foregroundStyle(.secondary)
         .frame(maxWidth: .infinity)
         .frame(height: 28)
+        .padding(.bottom, ConversationLayout.turnSpacing)
         .onAppear { if conversation.olderFailure == nil { readEarlier() } }
     }
 
@@ -750,8 +768,20 @@ struct PersonalAgentConversationView: View {
             if replies { Button(L10n.string("Reply")) { replyActions.open(message.id, nil) } }
         }
         .accessibilityActions {
+            if !message.isDeleted, !message.text.isEmpty {
+                Button(L10n.string("Copy message")) { TranscriptClipboard.copy(message.text) }
+            }
             if replies { Button(L10n.string("Reply")) { replyActions.open(message.id, nil) } }
         }
+    }
+
+    /// Under a message, shown on hover or focus as a task's messages show theirs: its copy, Reply where
+    /// the room takes one, and when it was sent.
+    private func messageActions(_ message: PersonalAgentMessage, inThread: Bool) -> PersonalAgentMessageActions {
+        PersonalAgentMessageActions(
+            copyText: message.isDeleted ? "" : message.text, sentAt: message.createdAt,
+            reply: canReply(to: message, inThread: inThread) ? { replyActions.open(message.id, nil) } : nil,
+            timeFirst: message.author == .person)
     }
 
     @ViewBuilder
@@ -763,8 +793,9 @@ struct PersonalAgentConversationView: View {
                 .padding(.leading, ConversationLayout.sentMessageLeadingSpace)
             // A message of pictures or files alone has no empty bubble.
             if message.isDeleted || !message.text.isEmpty {
-                SentUserMessage(copyText: message.isDeleted ? "" : message.text, images: [],
-                                minimumLeadingSpace: ConversationLayout.sentMessageLeadingSpace) {
+                // The bubble as a task's sent message draws it; its actions are this row's own.
+                HStack(spacing: 0) {
+                    Spacer(minLength: ConversationLayout.sentMessageLeadingSpace)
                     Group {
                         if message.isDeleted {
                             Text(L10n.string("Message deleted")).italic().foregroundStyle(.secondary)
@@ -788,9 +819,10 @@ struct PersonalAgentConversationView: View {
             attachments(of: message)
             unsupportedLink(message)
             replyIndicator(of: message, inThread: inThread)
+            messageActions(message, inThread: inThread)
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
-        .help(message.createdAt.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "")
+        .modifier(RevealsActionsOnHover())
         .accessibilityElement(children: .contain)
         .accessibilityLabel(L10n.string("You"))
     }
@@ -798,17 +830,16 @@ struct PersonalAgentConversationView: View {
     @ViewBuilder
     private func otherRow(_ message: PersonalAgentMessage, startsRun: Bool, inThread: Bool) -> some View {
         VStack(alignment: .leading, spacing: 6) {
+            // The first of an author's run says who wrote it; the ones after read on as its continuation,
+            // their times with their actions.
             if startsRun {
-                HStack(spacing: 7) {
+                HStack(spacing: 8) {
                     PersonalAgentAvatarView(name: author(message.author),
                                             data: message.author == .agent ? avatar : nil,
                                             sheet: message.author == .agent ? sheet : nil, plays: false, size: 20)
-                    Text(author(message.author)).font(.system(size: 12.5 * scale, weight: .semibold))
-                    sentTime(of: message)
+                    Text(author(message.author)).font(.parity(.control, weight: .semibold, scale: scale))
                 }
-            } else {
-                // A message that follows another from the same author keeps its own time, without the name.
-                sentTime(of: message)
+                .padding(.bottom, 2)
             }
             quote(of: message, inThread: inThread)
             if message.isDeleted {
@@ -823,21 +854,11 @@ struct PersonalAgentConversationView: View {
             requests(in: message)
             unsupportedLink(message)
             replyIndicator(of: message, inThread: inThread)
+            messageActions(message, inThread: inThread)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .modifier(RevealsActionsOnHover())
         .accessibilityElement(children: .contain)
-    }
-
-    /// When a message was sent, with its day even today so a new morning cannot read as the prior day.
-    /// Nothing is shown when the provider gave no time.
-    @ViewBuilder
-    private func sentTime(of message: PersonalAgentMessage) -> some View {
-        if let time = message.createdAt {
-            Text(Calendar.current.isDateInToday(time)
-                 ? L10n.format("Today %@", time.formatted(date: .omitted, time: .shortened))
-                 : time.formatted(date: .abbreviated, time: .shortened))
-                .font(.system(size: 11.5 * scale)).foregroundStyle(.secondary)
-        }
     }
 
     /// Whether the question a waiting option answer replies to is drawn, with its own way to stop waiting.
@@ -899,26 +920,26 @@ struct PersonalAgentConversationView: View {
     private func attachments(of message: PersonalAgentMessage) -> some View {
         let files = message.attachments.filter { !$0.isImage }
         if !message.isDeleted, !files.isEmpty {
-            VStack(alignment: message.author == .person ? .trailing : .leading, spacing: 4) {
+            let trailing = message.author == .person
+            VStack(alignment: trailing ? .trailing : .leading, spacing: 4) {
                 ForEach(Array(files.enumerated()), id: \.offset) { _, attachment in
                     if attachment.opensHere {
-                        Button { open(attachment) } label: {
-                            Label(attachment.name, systemImage: "paperclip").lineLimit(1).truncationMode(.middle)
-                        }
-                        .buttonStyle(.borderless).parityPointer().disabled(isLoadingAttachment)
+                        PersonalAgentChip(title: attachment.name, systemName: SessionRailOutputsCard.symbol(
+                            URL(filePath: attachment.name.isEmpty ? "file" : attachment.name)), isFile: true,
+                                          alignsTrailing: trailing) { open(attachment) }
+                            .disabled(isLoadingAttachment)
                     } else if let url = attachment.url {
                         // A link the dot attached opens in the browser, as a link in its words does.
-                        Button { openWeb(url) } label: {
-                            Label(attachment.name, systemImage: "link").lineLimit(1).truncationMode(.middle)
-                        }
-                        .buttonStyle(.borderless).parityPointer().help(url.absoluteString)
+                        PersonalAgentChip(title: attachment.name, systemName: "link", isFile: true,
+                                          alignsTrailing: trailing) { openWeb(url) }
+                            .help(url.absoluteString)
                     } else {
-                        Label(attachment.name, systemImage: "paperclip").foregroundStyle(.secondary)
+                        PersonalAgentChip(title: attachment.name, systemName: "paperclip", isFile: true,
+                                          alignsTrailing: trailing, action: nil)
                             .help(L10n.string("This attachment cannot be opened here yet."))
                     }
                 }
             }
-            .font(.system(size: 12.5 * scale))
         }
     }
 
@@ -966,7 +987,7 @@ struct PersonalAgentDetailsPanel: View {
 
     var body: some View {
         ScrollView(.vertical) {
-            VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: SessionRailPlacement.cardSpacing) {
                 profile
                 section(L10n.string("Activity")) { activity }
                 if let threads = details?.threads {
@@ -983,27 +1004,32 @@ struct PersonalAgentDetailsPanel: View {
                     }
                 }
             }
-            .font(.system(size: 12 * scale))
-            .padding(.horizontal, 16)
-            .padding(.top, 16)
-            .padding(.bottom, 20)
-            .frame(width: Self.width, alignment: .leading)
+            .font(.parity(.caption, scale: scale))
+            // The cards take the column's width, as a task's rail cards do (`SessionRailView`).
+            .frame(width: Self.width - (isRaised ? ParitySpace.s12 : ParitySpace.s4) - ParitySpace.s12, alignment: .leading)
+            .padding(.top, ParitySpace.s12)
+            .padding(.bottom, ParitySpace.s16)
+            .padding(.leading, isRaised ? ParitySpace.s12 : ParitySpace.s4)
+            .padding(.trailing, ParitySpace.s12)
             // Read when the details first show, not with every refresh of a hidden panel.
             .task(id: details?.threads.map(ObjectIdentifier.init)) { startThreads() }
         }
         .scrollIndicators(.automatic)
         .frame(width: Self.width)
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(ParityTheme.canvas)
+        .background(isRaised ? ParityTheme.elevated : ParityTheme.canvas)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(L10n.string("Dot details"))
     }
 
+    /// Raised over a narrow conversation, on the floating card's elevated fill.
+    private var isRaised: Bool { close != nil }
+
     private var profile: some View {
-        HStack(spacing: 12) {
-            PersonalAgentLiveAvatar(live: live, agent: agent, data: avatar, sheet: sheet, size: 48)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(agent.name).font(.system(size: 14 * scale, weight: .semibold)).lineLimit(1)
+        HStack(spacing: ParitySpace.s12) {
+            PersonalAgentLiveAvatar(live: live, agent: agent, data: avatar, sheet: sheet, size: 40)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(agent.name).font(.parity(.control, weight: .semibold, scale: scale)).lineLimit(1)
                 if let accountTitle {
                     Text(accountTitle).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                 }
@@ -1011,22 +1037,37 @@ struct PersonalAgentDetailsPanel: View {
             }
             Spacer(minLength: 0)
             if let close {
-                Button(action: close) { Image(systemName: "xmark").frame(width: 24, height: 24) }
-                    .buttonStyle(.borderless).parityPointer()
-                    .help(L10n.string("Hide dot details"))
+                ParityHeaderButton(systemName: "xmark", help: L10n.string("Hide dot details"), action: close)
                     .accessibilityLabel(L10n.string("Hide dot details"))
                     .frame(maxHeight: .infinity, alignment: .top)
             }
         }
+        .padding(.horizontal, ParitySpace.s12)
+        .padding(.vertical, ParitySpace.s12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(ParityTheme.canvas, in: RoundedRectangle(cornerRadius: ParityRadius.row))
+        .overlay { RoundedRectangle(cornerRadius: ParityRadius.row).stroke(ParityTheme.separator) }
         .fixedSize(horizontal: false, vertical: true)
     }
 
+    /// A card of the details, in the look of a task's rail cards (`SessionRailCard`): its title in the
+    /// header row, its rows under it.
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.system(size: 12 * scale, weight: .semibold))
+        VStack(alignment: .leading, spacing: 0) {
+            Text(title)
+                .font(.parity(.caption, weight: .semibold, scale: scale))
+                .lineLimit(1)
+                .padding(.horizontal, ParitySpace.s12)
+                .frame(height: 34 * scale)
+                .accessibilityAddTraits(.isHeader)
             content()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, ParitySpace.s12)
+                .padding(.bottom, ParitySpace.s12)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(ParityTheme.canvas, in: RoundedRectangle(cornerRadius: ParityRadius.row))
+        .overlay { RoundedRectangle(cornerRadius: ParityRadius.row).stroke(ParityTheme.separator) }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(title)
     }
@@ -1041,7 +1082,7 @@ struct PersonalAgentDetailsPanel: View {
         case let .failed(failure):
             HStack(spacing: 6) {
                 Text(L10n.string("Could not load this.")).foregroundStyle(.secondary).help(failure.message)
-                Button(L10n.string("Try again"), action: retry).buttonStyle(.borderless).parityPointer()
+                PersonalAgentTextButton(title: L10n.string("Try again"), action: retry)
             }
         case let .loaded(value):
             if isEmpty(value) { Text(empty).foregroundStyle(.secondary) } else { rows(value) }
@@ -1059,9 +1100,11 @@ struct PersonalAgentDetailsPanel: View {
                                     .font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.tertiary).lineLimit(1)
                             }
                         }
+                        .padding(.horizontal, 6)
                         .contentShape(Rectangle())
                         .background(item.id == openedActivityID ? ParityTheme.selectedFill : .clear,
-                                    in: RoundedRectangle(cornerRadius: 6))
+                                    in: RoundedRectangle(cornerRadius: ParityRadius.row))
+                        .padding(.horizontal, -6)
                     }
                     .buttonStyle(.plain).parityPointer()
                     .help(item.preview ?? item.title)
@@ -1070,8 +1113,7 @@ struct PersonalAgentDetailsPanel: View {
                     .accessibilityAddTraits(item.id == openedActivityID ? .isSelected : [])
                 }
                 if details?.activityCursor != nil {
-                    Button(L10n.string("Show more"), action: loadMoreActivity)
-                        .buttonStyle(.plain).foregroundStyle(.secondary).font(.yardlet(.caption, scale: interfaceScale)).parityPointer()
+                    PersonalAgentTextButton(title: L10n.string("Show more"), action: loadMoreActivity)
                         .disabled(details?.isLoadingMoreActivity == true)
                         .padding(.top, 2)
                 }
@@ -1118,8 +1160,10 @@ struct PersonalAgentDetailsPanel: View {
                 }
             }
             .frame(minHeight: 28)
+            .padding(.horizontal, 6)
             .contentShape(Rectangle())
-            .background(opened ? ParityTheme.selectedFill : .clear, in: RoundedRectangle(cornerRadius: 6))
+            .background(opened ? ParityTheme.selectedFill : .clear, in: RoundedRectangle(cornerRadius: ParityRadius.row))
+            .padding(.horizontal, -6)
         }
         .buttonStyle(.plain).parityPointer()
         .help(thread.preview ?? thread.displayTitle)
@@ -1229,41 +1273,30 @@ private struct PersonalAgentComposer: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if draft.storageFailed {
-                HStack {
-                    Text(draft.needsRecovery
-                         ? L10n.string("The saved draft could not be read. Keep it as a backup to start a new draft.")
-                         : PersonalAgentFailure.draftStorage.message)
-                    Spacer()
+                PersonalAgentNotice(text: draft.needsRecovery
+                                    ? L10n.string("The saved draft could not be read. Keep it as a backup to start a new draft.")
+                                    : PersonalAgentFailure.draftStorage.message) {
                     if draft.needsRecovery {
                         Button(L10n.string("Start a new draft")) { confirmsRecovery = true }
                     } else {
                         Button(L10n.string("Try again")) { draft.save() }
                     }
                 }
-                .font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary)
             } else if let failure = draft.failure {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(failure.message).fixedSize(horizontal: false, vertical: true)
+                PersonalAgentNotice(text: failure.message) {
                     if draft.pending != nil, !draft.isSending {
-                        HStack {
-                            Button(L10n.string("Retry message"), action: submit)
-                            Button(L10n.string("Edit message")) { confirmsEditing = true }
-                        }
+                        Button(L10n.string("Edit message")) { confirmsEditing = true }
+                        Button(L10n.string("Retry message"), action: submit)
                     } else if failure == .attachmentsIncomplete, draft.hasFailedUploads, allowsFiles {
                         Button(L10n.string("Retry upload"), action: files.retry)
                     }
                 }
-                .font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary)
             } else if draft.waitsForUploads {
-                Text(L10n.string("Sending when the files finish uploading…"))
-                    .font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary)
+                PersonalAgentNotice(text: L10n.string("Sending when the files finish uploading…"), isWorking: true)
             } else if let failure = draft.files.lazy.compactMap(\.failure).first, draft.pending == nil {
-                HStack {
-                    Text(failure.message).fixedSize(horizontal: false, vertical: true)
-                    Spacer()
+                PersonalAgentNotice(text: failure.message) {
                     if allowsFiles { Button(L10n.string("Retry upload"), action: files.retry) }
                 }
-                .font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary)
             }
             ComposerEditor(draft: draft.editor, placeholder: L10n.string("Message your dot…"),
                 accessibilityHint: (sendShortcut.sendKeyName.isEmpty ? nil : L10n.format("Press %@ to send", sendShortcut.sendKeyName)), metrics: .task(),

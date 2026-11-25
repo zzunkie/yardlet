@@ -19,12 +19,15 @@ struct PersonalAgentReplyQuoteView: View {
     let quote: PersonalAgentReplyQuote
     let alignsTrailing: Bool
     let open: () -> Void
+    @State private var isHovering = false
     @Environment(\.yardletInterfaceScale) private var scale
 
     var body: some View {
         Button(action: open) {
-            HStack(spacing: 5) {
+            HStack(spacing: 6) {
+                RoundedRectangle(cornerRadius: 1).fill(ParityTheme.strongSeparator).frame(width: 2)
                 Image(systemName: "arrowshape.turn.up.left").font(.system(size: 10 * scale, weight: .semibold))
+                    .foregroundStyle(.tertiary)
                 Group {
                     switch quote {
                     case let .text(text): Text(text.replacingOccurrences(of: "\n", with: " "))
@@ -35,18 +38,24 @@ struct PersonalAgentReplyQuoteView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
             }
-            .font(.system(size: 12 * scale))
-            .foregroundStyle(.secondary)
-            .padding(.leading, 8)
-            .overlay(alignment: .leading) { Rectangle().fill(ParityTheme.strongSeparator).frame(width: 2) }
-            .frame(maxWidth: ConversationLayout.sentBubbleMaximumWidth, alignment: alignsTrailing ? .trailing : .leading)
+            .font(.yardlet(.caption, scale: scale))
+            .foregroundStyle(isHovering ? .primary : .secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.vertical, 4)
+            .padding(.leading, 6)
+            .padding(.trailing, 8)
+            .background(isHovering ? ParityTheme.hoverFill : .clear,
+                        in: RoundedRectangle(cornerRadius: ParityRadius.control, style: .continuous))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .parityPointer()
+        .pointerHover { isHovering = $0 }
         .help(L10n.string("View replies"))
         .accessibilityLabel(L10n.string("Reply to"))
         .accessibilityValue(accessibilityText)
+        // Only the quote itself takes the pointer; the room beside it does not.
+        .frame(maxWidth: ConversationLayout.sentBubbleMaximumWidth, alignment: alignsTrailing ? .trailing : .leading)
     }
 
     private var accessibilityText: String {
@@ -72,13 +81,27 @@ struct PersonalAgentReplyIndicator: View {
         }
     }
 
+    @State private var isHovering = false
+
     var body: some View {
         Button(action: open) {
-            Label(Self.title(count), systemImage: "bubble.left.and.bubble.right")
-                .font(.system(size: 12 * scale, weight: .medium))
+            HStack(spacing: 5) {
+                Image(systemName: "bubble.left.and.bubble.right")
+                    .font(.system(size: 10.5 * scale, weight: .medium))
+                    .foregroundStyle(ParityTheme.accent)
+                Text(Self.title(count))
+                    .foregroundStyle(isHovering ? .primary : .secondary)
+            }
+            .font(.yardlet(.caption, scale: scale).weight(.medium))
+            .padding(.horizontal, 9)
+            .frame(height: 24 * scale)
+            .background(isHovering ? ParityTheme.hoverFill : ParityTheme.subtleFill, in: Capsule())
+            .overlay { Capsule().strokeBorder(ParityTheme.separator, lineWidth: 1) }
+            .contentShape(Capsule())
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(.plain)
         .parityPointer()
+        .pointerHover { isHovering = $0 }
         .accessibilityLabel(Self.title(count))
     }
 }
@@ -102,6 +125,7 @@ struct PersonalAgentReplyArea<Composer: View>: View {
     @State private var panelHeight: CGFloat = 0
     @State private var keys = PersonalAgentReplyKeys()
     @Environment(\.yardletInterfaceScale) private var scale
+    @Environment(\.colorScheme) private var colorScheme
 
     static var inset: CGFloat { 12 }
 
@@ -112,12 +136,15 @@ struct PersonalAgentReplyArea<Composer: View>: View {
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
             .background(alignment: .bottom) {
                 if thread != nil {
-                    RoundedRectangle(cornerRadius: ParityTheme.panelCornerRadius + 4)
+                    // A floating surface's look (`floatingSurface()`): the elevated fill, a hairline edge and
+                    // a soft two-layer shadow, around the composer it ends on.
+                    let shape = RoundedRectangle(cornerRadius: ParityRadius.composer + Self.inset / 2, style: .continuous)
+                    let dark = colorScheme == .dark
+                    shape
                         .fill(ParityTheme.elevated)
-                        .overlay {
-                            RoundedRectangle(cornerRadius: ParityTheme.panelCornerRadius + 4).stroke(ParityTheme.separator)
-                        }
-                        .shadow(color: .black.opacity(0.16), radius: 18, y: 6)
+                        .overlay { shape.strokeBorder(dark ? ParityTheme.strongSeparator : ParityTheme.separator, lineWidth: 1) }
+                        .shadow(color: .black.opacity(dark ? 0.30 : 0.06), radius: 2, y: 1)
+                        .shadow(color: .black.opacity(dark ? 0.45 : 0.12), radius: 18, y: 8)
                         .background(PersonalAgentReplyPanelMonitor(keys: keys, onOutside: actions.close))
                         .frame(height: panelHeight + composerHeight + Self.inset)
                         .padding(.horizontal, -Self.inset)
@@ -195,31 +222,34 @@ private struct PersonalAgentReplyPanel: View {
     /// read once by itself, and a page that added nothing starts no other.
     @State private var autoRead: (cursor: PersonalAgentReplyThread.Cursor, count: Int)?
     @Environment(\.yardletInterfaceScale) private var scale
+    @Environment(\.colorScheme) private var colorScheme
 
     private var showsEarlier: Bool { thread.cursor != .end || thread.olderFailure != nil }
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text(L10n.string("Replies")).font(.system(size: 12 * scale, weight: .semibold)).foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                Image(systemName: "bubble.left.and.bubble.right")
+                    .font(.system(size: 11 * scale, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                Text(L10n.string("Replies")).font(.parity(.control, weight: .semibold, scale: scale))
                 Spacer()
-                Button(action: close) { Image(systemName: "xmark").frame(width: 24, height: 24) }
-                    .buttonStyle(.borderless).parityPointer()
-                    .help(L10n.string("Close replies"))
+                ParityHeaderButton(systemName: "xmark", help: L10n.string("Close replies"), action: close)
                     .accessibilityLabel(L10n.string("Close replies"))
             }
-            .padding(.horizontal, 14)
-            .frame(height: 34)
+            .padding(.leading, 14)
+            .padding(.trailing, 8)
+            .frame(height: 40)
+            .environment(\.parityHeaderControls, true)
+            .overlay(alignment: .bottom) { Rectangle().fill(ParityTheme.separator).frame(height: 1).padding(.horizontal, 14) }
             if let failure = thread.latestFailure {
-                HStack(spacing: 8) {
-                    Text(L10n.string("Replies could not be refreshed.")).help(failure.message)
-                    Spacer()
-                    Button(L10n.string("Try again"), action: refresh).buttonStyle(.borderless).parityPointer()
+                PersonalAgentNotice(text: L10n.string("Replies could not be refreshed.")) {
+                    Button(L10n.string("Try again"), action: refresh)
                 }
-                .font(.system(size: 12 * scale))
-                .foregroundStyle(.secondary)
+                .help(failure.message)
                 .padding(.horizontal, 14)
-                .padding(.bottom, 4)
+                .padding(.top, 8)
             }
             PersonalAgentReplyTable(
                 messages: thread.messages,
@@ -231,9 +261,23 @@ private struct PersonalAgentReplyPanel: View {
                 .frame(height: min(max(table.contentHeight, 44), maximumHeight))
                 .overlay(alignment: .bottom) {
                     if !table.isFollowing, let last = thread.messages.last?.id, last != table.seenLast, table.seenLast != nil {
-                        Button(L10n.string("New replies")) { table.showEnd() }
-                            .help(L10n.string("Scroll to new replies"))
-                            .padding(.bottom, 6)
+                        Button { table.showEnd() } label: {
+                            Label(L10n.string("New replies"), systemImage: "arrow.down")
+                                .font(.yardlet(.caption, scale: scale).weight(.medium))
+                                .padding(.horizontal, 10)
+                                .frame(height: 26 * scale)
+                                .background(ParityTheme.elevated, in: Capsule())
+                                .overlay {
+                                    Capsule().strokeBorder(colorScheme == .dark ? ParityTheme.strongSeparator : ParityTheme.separator,
+                                                           lineWidth: 1)
+                                }
+                                .shadow(color: .black.opacity(colorScheme == .dark ? 0.40 : 0.12), radius: 8, y: 2)
+                                .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .parityPointer()
+                        .help(L10n.string("Scroll to new replies"))
+                        .padding(.bottom, 6)
                     }
                 }
             Color.clear.frame(height: 8)
@@ -254,12 +298,12 @@ private struct PersonalAgentReplyPanel: View {
                 Text(L10n.string("Loading earlier replies…"))
             } else if thread.olderFailure != nil {
                 Text(L10n.string("Earlier replies could not be loaded.")).help(thread.olderFailure?.message ?? "")
-                Button(L10n.string("Try again"), action: readEarlier).buttonStyle(.borderless).parityPointer()
+                PersonalAgentTextButton(title: L10n.string("Try again"), action: readEarlier)
             } else {
-                Button(L10n.string("Load earlier replies"), action: readEarlier).buttonStyle(.borderless).parityPointer()
+                PersonalAgentTextButton(title: L10n.string("Load earlier replies"), action: readEarlier)
             }
         }
-        .font(.system(size: 12 * scale))
+        .font(.yardlet(.caption, scale: scale))
         .foregroundStyle(.secondary)
         .frame(maxWidth: .infinity)
         .frame(height: 28)
