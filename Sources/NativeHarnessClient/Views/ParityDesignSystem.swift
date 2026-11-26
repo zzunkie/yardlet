@@ -334,6 +334,19 @@ enum ParityTheme {
             ? NSColor.white.withAlphaComponent(0.18)
             : NSColor.black.withAlphaComponent(0.16)
     })
+    /// Status marks (docs/DESIGN_SYSTEM.md, "Semantic colors"): the system green and orange in dark mode; in light mode a deeper
+    /// shade of each, as the system's own increased-contrast green, so a 6 pt dot or a small glyph keeps 3:1 against
+    /// the light sidebar and canvas, where the plain system colors measure about 2:1. The hue keeps its meaning.
+    static let statusSuccess = Color(nsColor: NSColor(name: "YardletStatusSuccess") { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? .systemGreen
+            : NSColor(srgbRed: 0x24 / 255, green: 0x8A / 255, blue: 0x3D / 255, alpha: 1)
+    })
+    static let statusWarning = Color(nsColor: NSColor(name: "YardletStatusWarning") { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? .systemOrange
+            : NSColor(srgbRed: 0xC7 / 255, green: 0x5C / 255, blue: 0x00 / 255, alpha: 1)
+    })
     static let darkTopHighlight = Color.white.opacity(0.10)
     /// The shade over a split pane that does not have the focus, so the focused one reads as the window's
     /// front: a darkening in light appearance and a lightening in dark, under every color preset.

@@ -39,3 +39,11 @@ row, 830 px of the 1024 x 1024 rendition) and scaled to 128 x 128.
 | Asset | Official source |
 |---|---|
 | `kiro-cli.png` | Kiro desktop app 1.5.11, `/Applications/Kiro.app/Contents/Resources/Kiro.icns` |
+
+Codex dark mark added on 2026-11-26 so the light plate does not stand out as a white tile on a dark surface.
+It is the dark appearance of the same app icon, rendered by IconServices at 512 x 512, trimmed to its plate
+the same way (412 px) and scaled to 128 x 128.
+
+| Asset | Official source |
+|---|---|
+| `codex-dark.png` | ChatGPT desktop app 26.1120.50957, `/Applications/ChatGPT.app/Contents/Resources/Assets.car` (`Icon`, `NSAppearanceNameDarkAqua`) |

@@ -283,10 +283,11 @@ enum MenuBarItemMarks {
         return image
     }
 
-    /// The harness's mark as the sidebar draws it (`HarnessLogoCatalog.image`), 14 pt.
+    /// The harness's mark as the sidebar draws it, for the menu's appearance (`HarnessLogoCatalog.adaptiveImage`),
+    /// 14 pt.
     @MainActor
     static func harness(_ harness: HarnessKind) -> NSImage? {
-        guard let image = HarnessLogoCatalog.image(for: harness)?.copy() as? NSImage else { return nil }
+        guard let image = HarnessLogoCatalog.adaptiveImage(for: harness)?.copy() as? NSImage else { return nil }
         image.size = size
         image.accessibilityDescription = harness.displayName
         return image

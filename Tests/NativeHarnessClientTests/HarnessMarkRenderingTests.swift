@@ -31,6 +31,19 @@ final class HarnessMarkRenderingTests: XCTestCase {
         let corner = try XCTUnwrap(bitmap.colorAt(x: 2, y: 2))
         XCTAssertEqual(corner.alphaComponent, 0, accuracy: 0.01, "The icon keeps its own rounded shape")
         XCTAssertEqual(HarnessKind.codex.displayName, "Codex")
+
+        // In dark mode, the same icon's dark appearance: a dark plate holding a light knot, so no white tile
+        // stands on a dark sidebar.
+        let darkArtwork = try XCTUnwrap(HarnessLogoCatalog.image(for: .codex, isDark: true))
+        let dark = try XCTUnwrap(darkArtwork.representations.first as? NSBitmapImageRep)
+        XCTAssertEqual(dark.pixelsWide, 128)
+        XCTAssertEqual(dark.pixelsHigh, 128)
+        let darkPlate = try XCTUnwrap(dark.colorAt(x: 30, y: 30)?.usingColorSpace(.sRGB))
+        XCTAssertLessThan(darkPlate.brightnessComponent, 0.2)
+        XCTAssertEqual(darkPlate.alphaComponent, 1, accuracy: 0.01)
+        let darkKnot = try XCTUnwrap(dark.colorAt(x: 40, y: 64)?.usingColorSpace(.sRGB))
+        XCTAssertGreaterThan(darkKnot.brightnessComponent, 0.7)
+        XCTAssertEqual(try XCTUnwrap(dark.colorAt(x: 2, y: 2)).alphaComponent, 0, accuracy: 0.01)
     }
 
     /// Every mark, at the sidebar's 16 points, differs clearly from the row behind it in both

@@ -284,7 +284,7 @@ struct SidebarHoverCardView: View {
                         .layoutPriority(1)
                     if content.worktree == nil {
                         Text(content.folder)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
@@ -296,7 +296,7 @@ struct SidebarHoverCardView: View {
                         Text(L10n.format("Worktree %@", worktree))
                             .lineLimit(1)
                         Text(content.folder)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
@@ -310,7 +310,7 @@ struct SidebarHoverCardView: View {
                             .truncationMode(.middle)
                         if let reason = content.accountReason {
                             Text(reason)
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     }

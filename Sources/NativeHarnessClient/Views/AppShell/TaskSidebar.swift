@@ -1169,7 +1169,7 @@ private struct SidebarNestedLine<Content: View>: View {
     var body: some View {
         HStack(spacing: 0) {
             content
-                .font(.system(size: 13 * interfaceScale))
+                .font(.parity(.control, scale: interfaceScale))
                 .lineLimit(1)
             Spacer(minLength: 0)
         }
@@ -1178,8 +1178,8 @@ private struct SidebarNestedLine<Content: View>: View {
     }
 }
 
-/// "Show more" under a project that holds more rows than it lists (Codex: tertiary, regular
-/// weight), where the rows' titles start. Each press lists ten more until the project is collapsed.
+/// "Show more" under a project that holds more rows than it lists (Codex draws it in tertiary at regular weight;
+/// Yardlet keeps it secondary so it reads before the pointer reaches it), where the rows' titles start. Each press lists ten more until the project is collapsed.
 private struct SidebarShowMoreButton: View {
     let action: () -> Void
     @State private var isHovering = false
@@ -1189,8 +1189,8 @@ private struct SidebarShowMoreButton: View {
         Button(action: action) {
             HStack(spacing: 0) {
                 Text(L10n.string("Show more"))
-                    .font(.system(size: 13 * interfaceScale))
-                    .foregroundStyle(isHovering ? .secondary : .tertiary)
+                    .font(.parity(.control, scale: interfaceScale))
+                    .foregroundStyle(isHovering ? .primary : .secondary)
                 Spacer(minLength: 0)
             }
             .padding(.leading, SidebarRowLeading<EmptyView>.titleLeading())
@@ -1215,7 +1215,7 @@ struct SidebarCPUIndicatorView: View {
             Image(systemName: "cpu")
                 .font(.system(size: 10 * interfaceScale, weight: .medium))
             Text(verbatim: "\(percent)%")
-                .font(.system(size: 11 * interfaceScale).monospacedDigit())
+                .font(.parity(.caption, scale: interfaceScale).monospacedDigit())
         }
         .foregroundStyle(.secondary)
         .fixedSize()
@@ -1291,14 +1291,14 @@ struct SidebarTaskStatusView: View {
     private var content: some View {
         switch status {
         case .awaitingApproval:
-            SidebarStatusDot(color: .green)
+            SidebarStatusDot(color: ParityTheme.statusSuccess)
         case .needsInput:
-            SidebarStatusDot(color: .orange)
+            SidebarStatusDot(color: ParityTheme.statusWarning)
         case .waitingInBrowser:
             // The browser's globe, in the color of a question waiting for the person.
             Image(systemName: "globe")
                 .font(.system(size: 10 * interfaceScale, weight: .semibold))
-                .foregroundStyle(.orange)
+                .foregroundStyle(ParityTheme.statusWarning)
         case .failed:
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 10 * interfaceScale, weight: .semibold))
@@ -1306,7 +1306,7 @@ struct SidebarTaskStatusView: View {
         case .usageLimit:
             Image(systemName: "gauge.with.dots.needle.100percent")
                 .font(.system(size: 10 * interfaceScale, weight: .medium))
-                .foregroundStyle(.orange)
+                .foregroundStyle(ParityTheme.statusWarning)
         case .running:
             SidebarStatusDot(color: .secondary, blinks: true)
         case .reconnecting:
@@ -1602,7 +1602,7 @@ struct SidebarActionRow<Trailing: View>: View {
                     .foregroundStyle(isSelected ? AnyShapeStyle(ParityTheme.accentText) : AnyShapeStyle(.secondary))
             }
             Text(title)
-                .font(.system(size: 13 * interfaceScale, weight: isSelected ? .semibold : titleWeight))
+                .font(.parity(.control, weight: isSelected ? .semibold : titleWeight, scale: interfaceScale))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
             Spacer(minLength: SidebarMetrics.rowTrailingPadding)
@@ -1753,13 +1753,13 @@ struct SidebarSearchField: View {
             }
             TextField(placeholder, text: $text)
                 .textFieldStyle(.plain)
-                .font(.system(size: 13 * interfaceScale))
+                .font(.parity(.control, scale: interfaceScale))
                 .accessibilityLabel(placeholder)
             if !text.isEmpty {
                 Button { text = "" } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 12 * interfaceScale))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.borderless)
                 .parityPointer()
@@ -1865,7 +1865,7 @@ struct SidebarFamilySummaryLine: View {
                         .frame(width: 14, height: 14)
                 }
             }
-            .font(.system(size: 12 * interfaceScale))
+            .font(.parity(.caption, scale: interfaceScale))
             .foregroundStyle(isHovering ? .primary : .secondary)
             .lineLimit(1)
             // Clear of the guide's end at every interface scale: the words start where a nested
@@ -1956,7 +1956,7 @@ private struct SidebarSplitEntry: View {
                             .foregroundStyle(.secondary)
                     }
                     Text(title)
-                        .font(.system(size: 13 * interfaceScale, weight: hasUnreadUpdate ? .semibold : .regular))
+                        .font(.parity(.control, weight: hasUnreadUpdate ? .semibold : .regular, scale: interfaceScale))
                         .lineLimit(1)
                     Spacer(minLength: 3)
                     if !isHovering {
@@ -2133,12 +2133,12 @@ private struct TaskRow: View {
                     }
                     VStack(alignment: .leading, spacing: 1) {
                         Text(title)
-                            .font(.system(size: 13 * interfaceScale,
-                                          weight: session.hasUnreadUpdate ? .semibold : .regular))
+                            .font(.parity(.control, weight: session.hasUnreadUpdate ? .semibold : .regular,
+                                          scale: interfaceScale))
                             .lineLimit(1)
                         if let subtitle {
                             Text(subtitle)
-                                .font(.system(size: 11 * interfaceScale))
+                                .font(.parity(.caption, scale: interfaceScale))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                         }
@@ -2327,7 +2327,7 @@ private struct TaskRowActionButton: View {
                 .contentShape(Rectangle())
                 .background(
                     isHovering ? ParityTheme.hoverFill : .clear,
-                    in: RoundedRectangle(cornerRadius: 5)
+                    in: RoundedRectangle(cornerRadius: ParityRadius.control)
                 )
         }
         .buttonStyle(.borderless)
