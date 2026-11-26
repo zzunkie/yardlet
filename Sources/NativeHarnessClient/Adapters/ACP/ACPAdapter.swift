@@ -42,6 +42,11 @@ actor ACPAdapter:
     /// the agent answers they hold no place in `laneByLocalSessionID`, yet they use their lane's process:
     /// another session closing there must not end it under them.
     private var openingLaneByLocalSessionID: [UUID: ACPProcessLane] = [:]
+    /// For an agent that gives a session's MCP servers to every session in its folder
+    /// (`ACPProtocol.sharesMCPServersInFolder`), the task that opened a session in each folder on each
+    /// process, by `ACPProtocol.folderKey`. The agent keeps a closed session's servers while its process
+    /// runs, so the folder stays that task's until the process ends.
+    private var folderTasksByLane: [ACPProcessLane: [String: UUID]] = [:]
     /// A session's move to another lane in progress (`moveToItsLane`), which its next prompt and
     /// option wait for.
     private var laneMoves: [UUID: Task<Void, Error>] = [:]
@@ -228,8 +233,7 @@ actor ACPAdapter:
 
     func createSession(_ request: CreateHarnessSessionRequest) async throws
         -> HarnessSessionHandle {
-        let lane = lane(for: request.localSessionID)
-        openingLaneByLocalSessionID[request.localSessionID] = lane
+        let lane = beginOpening(request.localSessionID, in: request.workspaceURL)
         defer { openingLaneByLocalSessionID.removeValue(forKey: request.localSessionID) }
         let transport = try await ensureInitialized(
             lane,
@@ -282,8 +286,7 @@ actor ACPAdapter:
             return try await createSession(CreateHarnessSessionRequest(
                 localSessionID: localSessionID, workspaceURL: workspaceURL, initialPrompt: nil))
         }
-        let lane = lane(for: localSessionID)
-        openingLaneByLocalSessionID[localSessionID] = lane
+        let lane = beginOpening(localSessionID, in: workspaceURL)
         defer { openingLaneByLocalSessionID.removeValue(forKey: localSessionID) }
         let transport = try await ensureInitialized(lane, workspaceURL: workspaceURL, localSessionID: localSessionID)
         guard canLoadSession else {
@@ -684,11 +687,34 @@ actor ACPAdapter:
     }
 
     /// The lane `localSessionID` belongs on: Antigravity's Bypass permissions on the process that
-    /// approves for itself, every other session on the standard one.
-    private func lane(for localSessionID: UUID) -> ACPProcessLane {
-        kind == .antigravityCLI
-            && antigravityPermissionModeByLocalSessionID[localSessionID] == AntigravityPermissionMode.bypass
-            ? .approvesItself : .standard
+    /// approves for itself, every other session on the standard one. An agent that gives a session's
+    /// MCP servers to every session in its folder (`ACPProtocol.sharesMCPServersInFolder`) serves a
+    /// task on the first standard process no other task has opened a session in that folder on, so
+    /// no task reaches another's Yardlet server or token; an open session stays where it is.
+    private func lane(for localSessionID: UUID, in workspaceURL: URL) -> ACPProcessLane {
+        if kind == .antigravityCLI,
+           antigravityPermissionModeByLocalSessionID[localSessionID] == AntigravityPermissionMode.bypass {
+            return .approvesItself
+        }
+        guard ACPProtocol.sharesMCPServersInFolder(kind) else { return .standard }
+        if let open = laneByLocalSessionID[localSessionID] { return open }
+        let folder = ACPProtocol.folderKey(workspaceURL)
+        var lane = ACPProcessLane.standard
+        while let task = folderTasksByLane[lane]?[folder], task != localSessionID {
+            lane = lane.nextStandard
+        }
+        return lane
+    }
+
+    /// Picks the lane `localSessionID` opens on and marks it as opening there. On an agent that shares
+    /// MCP servers in a folder, the task holds its folder on that process from here on.
+    private func beginOpening(_ localSessionID: UUID, in workspaceURL: URL) -> ACPProcessLane {
+        let lane = lane(for: localSessionID, in: workspaceURL)
+        openingLaneByLocalSessionID[localSessionID] = lane
+        if ACPProtocol.sharesMCPServersInFolder(kind) {
+            folderTasksByLane[lane, default: [:]][ACPProtocol.folderKey(workspaceURL)] = localSessionID
+        }
+        return lane
     }
 
     /// The process `lane` uses, a new one when it has none running.
@@ -795,7 +821,7 @@ actor ACPAdapter:
 
     private func performLaneMove(_ session: HarnessSessionHandle) async throws {
         let id = session.localSessionID
-        let lane = lane(for: id)
+        let lane = lane(for: id, in: session.workspaceURL)
         guard handles[id] == session, let current = laneByLocalSessionID[id], current != lane else { return }
         openingLaneByLocalSessionID[id] = lane
         defer { openingLaneByLocalSessionID.removeValue(forKey: id) }
@@ -1360,6 +1386,7 @@ actor ACPAdapter:
     /// the process leaves go once it has exited, in the background; the next process waits for that.
     private func stopProcess(_ lane: ACPProcessLane) async {
         guard let process = processes.removeValue(forKey: lane) else { return }
+        folderTasksByLane.removeValue(forKey: lane)
         process.messageTask?.cancel()
         let stopping = process.transport
         guard let schemaCopies else {
@@ -1434,19 +1461,30 @@ actor ACPAdapter:
 /// `agy acp` sends `session/request_permission` only while a prompt streams, so a step of a turn the
 /// agent starts on its own (a subagent's result) that needs approval would wait for good on the
 /// standard process, whatever Yardlet would have answered.
+/// An agent that gives a session's MCP servers to every session in its folder
+/// (`ACPProtocol.sharesMCPServersInFolder`) runs a further standard process for each task that opens a
+/// session in a folder another task already opened one in on the processes before it.
 enum ACPProcessLane: Hashable, Sendable {
     case standard
     case approvesItself
+    /// The `n`th standard process after the first.
+    case additionalStandard(Int)
 
     var launchArguments: [String] {
         switch self {
-        case .standard: []
+        case .standard, .additionalStandard: []
         case .approvesItself: ["--dangerously-skip-permissions"]
         }
     }
 
     /// Whether a step can wait for an approval no client hears of between prompts.
-    var stepsWaitForApproval: Bool { self == .standard }
+    var stepsWaitForApproval: Bool { self != .approvesItself }
+
+    /// The standard process after this one.
+    var nextStandard: ACPProcessLane {
+        if case let .additionalStandard(number) = self { return .additionalStandard(number + 1) }
+        return .additionalStandard(1)
+    }
 }
 
 /// One process of an ACP adapter: its transport, whether `initialize` has run on it, the task

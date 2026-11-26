@@ -84,10 +84,7 @@ enum ACPProtocol {
     /// started there and as the CLI saves a session started in a terminal (`/private/tmp/…` for
     /// `/tmp/…`, links resolved), since the agent compares the two character for character.
     static func listSessions(id: Int64, workspaceURL: URL, cursor: String? = nil, rules: PathRules = .current) -> JSONValue {
-        let folder = cwd(workspaceURL, rules: rules)
-        // `CanonicalPath` gives a Windows path as a file URL's path writes it (`/C:/…`).
-        let real = CanonicalPath.resolve(folder).map { rules.nativePath($0) } ?? folder
-        var params: [String: JSONValue] = ["cwd": .string(real)]
+        var params: [String: JSONValue] = ["cwd": .string(realCwd(workspaceURL, rules: rules))]
         if let cursor { params["cursor"] = .string(cursor) }
         return request(id: id, method: "session/list", params: .object(params))
     }
@@ -169,6 +166,14 @@ enum ACPProtocol {
         rules.nativePath(of: folder.standardizedFileURL)
     }
 
+    /// `cwd` with the folder's links resolved where it exists, as `getcwd` gives it to a CLI started
+    /// there (`/private/tmp/x` for `/tmp/x`; on a Mac each name in the case the volume keeps).
+    static func realCwd(_ folder: URL, rules: PathRules = .current) -> String {
+        let path = cwd(folder, rules: rules)
+        // `CanonicalPath` gives a Windows path as a file URL's path writes it (`/C:/…`).
+        return CanonicalPath.resolve(path).map { rules.nativePath($0) } ?? path
+    }
+
     private static func sessionParams(workspaceURL: URL, mcpServers: [JSONValue]) -> JSONValue {
         .object([
             "cwd": .string(cwd(workspaceURL)),
@@ -183,6 +188,23 @@ enum ACPProtocol {
         let capabilities = result["agentCapabilities"]?["mcpCapabilities"]
         if capabilities == .bool(false) { return false }
         return capabilities?["stdio"] != .bool(false)
+    }
+
+    /// Whether an agent gives the MCP servers a session brings in `mcpServers` to every session in the
+    /// same folder on its process rather than to that session alone. OpenCode (2.4.1) adds them to the
+    /// folder's MCP service under their names: the next session there with a server of the same name
+    /// replaces the earlier one's, and every session in the folder lists the tools of each, until the
+    /// process ends. `ACPAdapter` therefore never opens two tasks' sessions in one folder on one process.
+    static func sharesMCPServersInFolder(_ harness: HarnessKind) -> Bool {
+        harness == .openCode
+    }
+
+    /// A folder as `ACPAdapter` tells such an agent's folders apart: one key for every spelling of it.
+    /// OpenCode registers a loaded session's servers under the folder it saved the session in, which
+    /// may be another spelling of the `cwd` it accepts for it (`/tmp/x` for `/private/tmp/x`). The key
+    /// is `realCwd`, compared on Windows in the case NTFS compares (`PathRules.key`).
+    static func folderKey(_ folder: URL, rules: PathRules = .current) -> String {
+        rules.key(realCwd(folder, rules: rules))
     }
 
     /// Whether an agent's `initialize` answer is the one it gives while signed out. Kiro CLI starts its

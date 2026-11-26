@@ -1632,7 +1632,15 @@ final class LegacyHarnessProtocolBridgeTests: XCTestCase {
             events.count
         )
 
+        // OpenCode tasks share a process only in different folders (`ACPProtocol.sharesMCPServersInFolder`).
         let resumedID = UUID()
+        let otherFolder = HarnessProtocolSessionConfig(
+            workspacePath: "/tmp/acp-yhp-other-workspace",
+            modelID: nil,
+            modeID: nil,
+            featureValues: [:],
+            extensionValues: [:]
+        )
         _ = try await bridge.handle(
             HarnessProtocolRequest(
                 id: "acp-resume",
@@ -1640,7 +1648,7 @@ final class LegacyHarnessProtocolBridgeTests: XCTestCase {
                 typedParams: HarnessProtocolResumeSessionParams(
                     localSessionID: resumedID,
                     providerSessionID: "existing-acp-session",
-                    config: config
+                    config: otherFolder
                 )
             )
         )

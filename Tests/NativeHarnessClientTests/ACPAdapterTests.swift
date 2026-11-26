@@ -208,18 +208,26 @@ final class ACPAdapterTests: XCTestCase {
     /// process hears that the task's session closed (`session/close`) when it advertised that, before
     /// anything sent after, without anyone waiting for its answer (the fake never gives one); an agent
     /// that did not advertise it hears nothing. The last task to close ends the process instead.
+    /// OpenCode gives a session's MCP servers, the Yardlet server with its task's token among them, to
+    /// every session in the folder for as long as its process runs (`ACPProtocol.sharesMCPServersInFolder`):
+    /// only tasks in other folders share the process, and another task in the closed task's folder opens on a
+    /// process of its own, while the closed task reopens on the one it left.
     func testClosingOneOfAProcesssSessionsClosesItThereWhenTheAgentAdvertisedClose() async throws {
         for advertisesClose in [true, false] {
             let transport = FakeACPTransport(advertisesClose: advertisesClose)
+            let neighbors = FakeACPTransport(advertisesClose: advertisesClose)
             let adapter = ACPAdapter(kind: .openCode, executableURL: URL(filePath: "/tmp/fake-opencode"),
-                                     transportFactory: transportSequence(transport))
+                                     transportFactory: transportSequence(transport, neighbors))
             let workspace = URL(filePath: "/tmp/acp-workspace")
             let closing = try await adapter.createSession(
                 CreateHarnessSessionRequest(localSessionID: UUID(), workspaceURL: workspace, initialPrompt: nil))
             let staying = try await adapter.resumeSession(
-                providerSessionID: "saved-session", localSessionID: UUID(), workspaceURL: workspace)
+                providerSessionID: "saved-session", localSessionID: UUID(),
+                workspaceURL: URL(filePath: "/tmp/acp-other-workspace"))
 
             await adapter.close(closing)
+            let neighbor = try await adapter.resumeSession(
+                providerSessionID: "neighbor-session", localSessionID: UUID(), workspaceURL: workspace)
             let reopened = try await adapter.resumeSession(
                 providerSessionID: closing.providerSessionID, localSessionID: closing.localSessionID, workspaceURL: workspace)
             let written = await transport.writtenMethods
@@ -229,7 +237,12 @@ final class ACPAdapterTests: XCTestCase {
                 + (advertisesClose ? ["session/close"] : []) + ["session/load"])
             XCTAssertEqual(closes.compactMap { $0["params"]?["sessionId"]?.stringValue }, advertisesClose ? [closing.providerSessionID] : [])
             XCTAssertEqual(stopsWhileOthersRun, 0)
+            let neighborsWritten = await neighbors.writtenMethods
+            XCTAssertEqual(neighborsWritten, ["initialize", "session/load"])
 
+            await adapter.close(neighbor)
+            let neighborsStops = await neighbors.stopCount
+            XCTAssertEqual(neighborsStops, 1)
             await adapter.close(staying)
             await adapter.close(reopened)
             let writtenAtEnd = await transport.writtenMethods
@@ -238,6 +251,54 @@ final class ACPAdapterTests: XCTestCase {
                            "Only the first of the two closes is sent; the last one ends the process")
             XCTAssertEqual(stops, 1)
         }
+    }
+
+    /// OpenCode's folder holds the MCP servers its sessions bring (`ACPProtocol.sharesMCPServersInFolder`),
+    /// so another task in the folder opens on a process of its own even while the first task's session
+    /// is still opening, and under any spelling of the folder: a link to it, or another case on a volume
+    /// that ignores case, since OpenCode registers a loaded session's servers under the spelling it saved
+    /// the session with. A task in another folder still shares the first process.
+    func testAnotherOpenCodeTaskInAFolderOpensOnItsOwnProcessWhileOpeningAndUnderAnySpelling() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "acp-folder-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appending(path: "Project")
+        let link = root.appending(path: "link")
+        let otherFolder = root.appending(path: "Other")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: otherFolder, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: folder)
+        let otherCase = root.appending(path: "project")
+        let spellings = FileManager.default.fileExists(atPath: otherCase.path(percentEncoded: false)) ? [link, otherCase] : [link]
+        let first = FakeACPTransport()
+        let second = FakeACPTransport()
+        let byLink = FakeACPTransport()
+        let byCase = FakeACPTransport()
+        let adapter = ACPAdapter(kind: .openCode, executableURL: URL(filePath: "/tmp/fake-opencode"),
+                                 transportFactory: transportSequence(first, second, byLink, byCase))
+
+        await first.setHoldsSessionOpens(true)
+        let opening = Task {
+            try await adapter.createSession(
+                CreateHarnessSessionRequest(localSessionID: UUID(), workspaceURL: folder, initialPrompt: nil))
+        }
+        try await waitUntil { await first.pendingSessionOpenCount == 1 }
+        _ = try await adapter.resumeSession(providerSessionID: "neighbor", localSessionID: UUID(), workspaceURL: folder)
+        await first.answerSessionOpens()
+        _ = try await opening.value
+        for (index, spelling) in spellings.enumerated() {
+            _ = try await adapter.resumeSession(
+                providerSessionID: "spelling-\(index)", localSessionID: UUID(), workspaceURL: spelling)
+        }
+        _ = try await adapter.resumeSession(providerSessionID: "elsewhere", localSessionID: UUID(), workspaceURL: otherFolder)
+
+        let firstWritten = await first.writtenMethods
+        let secondWritten = await second.writtenMethods
+        let byLinkWritten = await byLink.writtenMethods
+        let byCaseWritten = await byCase.writtenMethods
+        XCTAssertEqual(firstWritten, ["initialize", "session/new", "session/load"])
+        XCTAssertEqual(secondWritten, ["initialize", "session/load"])
+        XCTAssertEqual(byLinkWritten, ["initialize", "session/load"])
+        XCTAssertEqual(byCaseWritten, spellings.count > 1 ? ["initialize", "session/load"] : [])
     }
 
     /// A task being opened on a process uses it before the agent has answered: when another task on
@@ -253,8 +314,8 @@ final class ACPAdapterTests: XCTestCase {
             CreateHarnessSessionRequest(localSessionID: UUID(), workspaceURL: workspace, initialPrompt: nil))
         await transport.setHoldsSessionOpens(true)
         let opening = Task {
-            try await adapter.createSession(
-                CreateHarnessSessionRequest(localSessionID: UUID(), workspaceURL: workspace, initialPrompt: nil))
+            try await adapter.createSession(CreateHarnessSessionRequest(
+                localSessionID: UUID(), workspaceURL: URL(filePath: "/tmp/acp-other-workspace"), initialPrompt: nil))
         }
         try await waitUntil { await transport.pendingSessionOpenCount == 1 }
 

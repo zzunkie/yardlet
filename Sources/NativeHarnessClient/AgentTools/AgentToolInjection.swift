@@ -140,7 +140,8 @@ enum AgentToolInjectionRoute: Equatable, Sendable {
     case claudeMCPConfig
     /// Codex `thread/start`, `thread/resume`, and `thread/fork` `config`.
     case codexThreadConfig
-    /// ACP `session/new` and `session/load` `mcpServers`.
+    /// ACP `session/new` and `session/load` `mcpServers`. An agent that gives them to every session in
+    /// the folder (`ACPProtocol.sharesMCPServersInFolder`) runs each task in a folder on its own process.
     case acpSessionMCPServers
 
     static func route(for harness: HarnessKind) -> AgentToolInjectionRoute? {
