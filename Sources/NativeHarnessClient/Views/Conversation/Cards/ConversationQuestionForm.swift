@@ -407,6 +407,9 @@ struct ConversationRequestBandTitle: View {
             .font(.parity(.control, weight: .semibold, scale: interfaceScale))
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
+            // Selectable text reads as a text area whose words are its value, which a combined heading leaves
+            // out: named by its words, the band's heading reads the title.
+            .accessibilityLabel(title)
     }
 }
 

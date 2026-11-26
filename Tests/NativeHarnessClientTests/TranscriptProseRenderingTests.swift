@@ -293,6 +293,9 @@ extension TranscriptProseRenderingTests {
     /// at, as a turn measures its messages before placing them (`ConversationTurnHosting`). Only a
     /// table whose words cannot fit side by side scrolls sideways, and then its scroller shows. Review
     /// images: `.build/conversation-text/table-*.png`.
+    ///
+    /// A scroller with room of its own (a mouse, or CI's runners, which have no pointing device) is left out of a
+    /// message measured before it is in a window; the turn measures it again once placed, which is compared there.
     func testAWideTableWrapsItsCellsToFitTheMessage() throws {
         let functions = """
         | File | Function | What it does |
@@ -324,9 +327,11 @@ extension TranscriptProseRenderingTests {
                     host.settle()
                     try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(
                         path: "\(name)-\(Int(width))-\(appearance.suffix).png"))
-                    let measured = NSHostingController(rootView: message).sizeThatFits(
-                        in: CGSize(width: width, height: .greatestFiniteMagnitude))
-                    XCTAssertEqual(measured.height, placed.height, accuracy: 1, "\(name) at \(width): measured as it is drawn")
+                    let measured = NSScroller.preferredScrollerStyle == .legacy
+                        ? Self.heightPlaced(message, width: width, in: host)
+                        : NSHostingController(rootView: message).sizeThatFits(
+                            in: CGSize(width: width, height: .greatestFiniteMagnitude)).height
+                    XCTAssertEqual(measured, placed.height, accuracy: 1, "\(name) at \(width): measured as it is drawn")
                     let shown = Self.scrollViews(in: host.hosting).filter { !$0.isHiddenOrHasHiddenAncestor && !$0.frame.isEmpty }
                     for scroll in Self.scrollViews(in: host.hosting) {
                         print("[table \(name) \(Int(width))] scroll hidden \(scroll.isHiddenOrHasHiddenAncestor) frame \(NSStringFromRect(scroll.frame)) document \(NSStringFromRect(scroll.documentView?.frame ?? .zero)) style \(scroll.scrollerStyle.rawValue) scroller \(String(describing: scroll.horizontalScroller.map { ($0.isHidden, $0.alphaValue, NSStringFromRect($0.frame)) })) placed \(placed.height)")
@@ -348,6 +353,19 @@ extension TranscriptProseRenderingTests {
 
     private final class PlacedHeight {
         var height: CGFloat = 0
+    }
+
+    /// `message`'s height measured as a turn's hosting measures it once in the window (`ConversationTurnHosting`).
+    private static func heightPlaced(_ message: some View, width: CGFloat, in host: WindowlessRender.Host<some View>) -> CGFloat {
+        let hosting = NSHostingController(rootView: message.fixedSize(horizontal: false, vertical: true))
+        hosting.sizingOptions = []
+        hosting.safeAreaRegions = []
+        let proposal = CGSize(width: width, height: .greatestFiniteMagnitude)
+        hosting.view.frame = NSRect(origin: .zero, size: hosting.sizeThatFits(in: proposal))
+        host.hosting.addSubview(hosting.view)
+        defer { hosting.view.removeFromSuperview() }
+        host.settle()
+        return hosting.sizeThatFits(in: proposal).height
     }
 
     static func scrollViews(in root: NSView) -> [NSScrollView] {

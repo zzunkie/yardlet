@@ -75,7 +75,9 @@ final class ConversationMediaRenderingTests: XCTestCase {
     }
 
     /// A long conversation with a picture in every answer holds bitmaps only for the pictures on screen: each takes
-    /// its place from its size alone, decodes once it comes into view and lets its bitmap go once it leaves.
+    /// its place from its size alone, decodes once it comes into view and lets its bitmap go once it leaves. The row
+    /// list keeps the views of the rows a viewport above and below the one in view (`ConversationRowListController
+    /// .overscan`), so some pictures are in the window without being on screen.
     func testALongConversationHoldsOnlyThePicturesInView() throws {
         for index in 0..<12 {
             try Self.writeChart(to: workspace.appending(path: "shots/\(index).png"), pixels: CGSize(width: 1_600, height: 1_000),
@@ -98,7 +100,7 @@ final class ConversationMediaRenderingTests: XCTestCase {
         let scroll = try XCTUnwrap(Self.scrollView(in: host.hosting))
         let atEnd = Self.bitmaps(in: host.hosting)
         let drawnAtEnd = atEnd.filter(\.isDrawn)
-        XCTAssertGreaterThan(atEnd.count, 4, "the conversation should mount more pictures than fit")
+        XCTAssertGreaterThan(atEnd.count, drawnAtEnd.count, "the conversation should mount more pictures than fit")
         XCTAssertLessThanOrEqual(drawnAtEnd.count, 3, "only the pictures in view hold bitmaps")
 
         // Scroll up through what is mounted: the pictures left behind let go, the ones now in view draw.

@@ -137,12 +137,24 @@ final class CalendarRenderingTests: XCTestCase {
                 await host.settle(until: { host.accessibilityElements().contains { $0.label.hasPrefix(ops) } })
 
                 // Today's line of recurring runs shows the day, its runs listed beside its hours.
-                let todayRuns = runs[days.firstIndex { calendar.isDateInToday($0) } ?? 0]
+                let todayIndex = days.firstIndex { calendar.isDateInToday($0) } ?? 0
+                let todayRuns = runs[todayIndex]
+                // Today's line says what is left of it. With all its runs to come or all gone it reads as a day with as
+                // many runs does, and the days before it come first: on a day whose count an earlier day shares, the
+                // first such line was that day's.
+                let count = todayRuns.recurring.count, toCome = todayRuns.recurring.count { $0.at >= Date() }
+                let isPartly = toCome > 0 && toCome < count
+                let line = isPartly ? L10n.format("%lld recurring runs · %lld left", count, toCome)
+                    : L10n.format("%lld recurring runs", count)
+                let alike = isPartly ? 0 : runs.prefix(todayIndex).count { $0.recurring.count == count }
+                var seen = 0
                 ViewBodyCensus.isEnabled = true
                 ViewBodyCensus.reset()
-                XCTAssertTrue(host.hosting.pressAccessibilityElement {
-                    $0.hasPrefix(L10n.format("%lld recurring runs", todayRuns.recurring.count))
-                })
+                XCTAssertTrue(host.hosting.pressAccessibilityElement { label in
+                    guard label == line else { return false }
+                    seen += 1
+                    return seen > alike
+                }, line)
                 await host.settle(until: { host.accessibilityElements().contains {
                     $0.role == "AXRadioButton" && $0.label == L10n.string("Calendar day") && $0.value == "1"
                 } })
