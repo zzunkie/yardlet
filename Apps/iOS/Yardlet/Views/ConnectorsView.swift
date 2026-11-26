@@ -61,13 +61,7 @@ struct ConnectorsView: View {
                     unsupportedCard
                 } else if accounts == nil {
                     if let failure = session.hostAccountsFailure, !isRefreshing {
-                        ReadFailureCard(message: failure) {
-                            Task {
-                                isRefreshing = true
-                                _ = await session.fetchHostAccounts(watching: true)
-                                isRefreshing = false
-                            }
-                        }
+                        ReadFailureCard(message: failure) { Task { await refresh() } }
                     } else {
                         loadingCard
                     }

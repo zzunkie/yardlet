@@ -81,7 +81,7 @@ struct MarkdownView: View {
                     .padding(.trailing, 8)
             }
         case let .table(table):
-            SidewaysBlock {
+            SidewaysBlock(fitsContent: true) {
                 MarkdownTableView(table: table, opensFiles: opensFiles)
             }
         case .rule:
@@ -541,24 +541,56 @@ struct MarkdownView: View {
         return ListItem(depth: depth, marker: digits + ".", text: String(after.dropFirst(2)))
     }
 
-    /// A GFM table: its first row the header, the delimiter row read for each column's alignment.
-    private static func table(_ rows: [String]) -> Table {
+    /// A GFM table: its first row the header, and the row under it, when every cell is dashes with optional colons,
+    /// the delimiter that sets each column's alignment. Any other row, a body row of dashes included, is a row.
+    static func table(_ rows: [String]) -> Table {
+        var cells = rows.map(tableCells).filter { !$0.isEmpty }
         var alignments: [HorizontalAlignment] = []
-        let cells = rows.compactMap { row -> [String]? in
-            var parts = row.split(separator: "|", omittingEmptySubsequences: false).map {
-                $0.trimmingCharacters(in: .whitespaces)
+        if cells.count > 1, cells[1].allSatisfy(isDelimiterCell) {
+            alignments = cells[1].map { cell in
+                cell.hasPrefix(":") && cell.hasSuffix(":") ? .center : cell.hasSuffix(":") ? .trailing : .leading
             }
-            if parts.first == "" { parts.removeFirst() }
-            if parts.last == "" { parts.removeLast() }
-            if parts.allSatisfy({ !$0.isEmpty && $0.allSatisfy { "-:".contains($0) } }) {
-                alignments = parts.map { part in
-                    part.hasPrefix(":") && part.hasSuffix(":") ? .center : part.hasSuffix(":") ? .trailing : .leading
-                }
-                return nil
-            }
-            return parts
+            cells.remove(at: 1)
         }
         return Table(header: cells.first ?? [], rows: Array(cells.dropFirst()), alignments: alignments)
+    }
+
+    /// "---", ":--", "--:" or ":-:": at least one dash, a colon only at either end.
+    private static func isDelimiterCell(_ cell: String) -> Bool {
+        let core = cell.drop { $0 == ":" }.reversed().drop { $0 == ":" }
+        return !core.isEmpty && core.allSatisfy { $0 == "-" }
+    }
+
+    /// A table row's cells, split at its pipes but not at an escaped one (`\|`, kept as "|") or one inside a code
+    /// span; the row's outer pipes are left out.
+    static func tableCells(_ row: String) -> [String] {
+        var cells: [String] = []
+        var cell = ""
+        var index = row.startIndex
+        while index < row.endIndex {
+            let ch = row[index]
+            if ch == "\\", row.index(after: index) < row.endIndex, row[row.index(after: index)] == "|" {
+                cell.append("|")
+                index = row.index(index, offsetBy: 2)
+            } else if ch == "`" {
+                let runEnd = advanceWhile(row, from: index, matching: "`")
+                let end = findClosingBackticks(row, from: runEnd, count: row.distance(from: index, to: runEnd)) ?? runEnd
+                cell.append(contentsOf: row[index..<end])
+                index = end
+            } else if ch == "|" {
+                cells.append(cell)
+                cell = ""
+                index = row.index(after: index)
+            } else {
+                cell.append(ch)
+                index = row.index(after: index)
+            }
+        }
+        cells.append(cell)
+        var trimmed = cells.map { $0.trimmingCharacters(in: .whitespaces) }
+        if trimmed.first == "" { trimmed.removeFirst() }
+        if trimmed.last == "" { trimmed.removeLast() }
+        return trimmed
     }
 
     static func inline(_ text: String, opensFiles: Bool = false) -> AttributedString {
@@ -585,6 +617,8 @@ struct MarkdownView: View {
 /// A block wider than the screen, in its box: it scrolls sideways, its scroll bar shows (and flashes as it appears),
 /// and while more of it is out of view on the right that edge fades, so a cut-off edge reads as more to see.
 private struct SidewaysBlock<Content: View>: View {
+    /// The box as wide as what it holds when that is narrower than the screen (a table), rather than the screen's width.
+    var fitsContent = false
     @ViewBuilder let content: Content
     @State private var contentWidth: CGFloat = 0
     @State private var boxWidth: CGFloat = 0
@@ -595,7 +629,7 @@ private struct SidewaysBlock<Content: View>: View {
     var body: some View {
         ScrollView(.horizontal) {
             content
-                .padding(.bottom, 4)
+                .padding(.bottom, fitsContent ? 0 : 4)
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { contentWidth = $0 }
                 .background(GeometryReader { proxy in
                     Color.clear.preference(key: SidewaysOffset.self, value: -proxy.frame(in: .named(Self.space)).minX)
@@ -622,6 +656,7 @@ private struct SidewaysBlock<Content: View>: View {
                 .strokeBorder(YardletPalette.outlineVariant, lineWidth: 0.5)
         )
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .frame(maxWidth: fitsContent && contentWidth > 0 ? contentWidth : nil, alignment: .leading)
     }
 
     private static var space: String { "sideways" }
@@ -633,44 +668,92 @@ private struct SidewaysOffset: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
-/// A Markdown table as a table: a bold header row, rules between the rows and columns, and each cell's inline
-/// Markdown (code, emphasis, links) drawn as in a sentence. A long cell wraps at a column's widest.
+/// A Markdown table as a table: a header band, rules between the rows and columns, and each cell's inline Markdown
+/// (code, emphasis, links) drawn as in a sentence. Every cell fills its column's width and its row's height, so the
+/// band and the rules run unbroken from edge to edge; a long cell wraps at a column's widest.
 private struct MarkdownTableView: View {
     let table: MarkdownView.Table
     let opensFiles: Bool
 
-    private var columns: Int { max(table.header.count, table.rows.map(\.count).max() ?? 0) }
+    private var columns: Int { max(table.header.count, table.rows.map(\.count).max() ?? 0, 1) }
 
     var body: some View {
-        Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
-            row(table.header, header: true)
-            ForEach(Array(table.rows.enumerated()), id: \.offset) { _, cells in
-                Divider().overlay(YardletPalette.outlineVariant)
-                row(cells, header: false)
+        let rows = [table.header] + table.rows
+        TableLayout(columns: columns, maxColumnWidth: 264) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { rowIndex, cells in
+                ForEach(0..<columns, id: \.self) { column in
+                    cell(column < cells.count ? cells[column] : "", row: rowIndex, column: column)
+                }
             }
         }
         .textSelection(.enabled)
     }
 
-    private func row(_ cells: [String], header: Bool) -> some View {
-        GridRow {
-            ForEach(0..<columns, id: \.self) { column in
-                let alignment = column < table.alignments.count ? table.alignments[column] : .leading
-                CappedWidth(maxWidth: 240) {
-                    ConversationText(column < cells.count ? cells[column] : "", opensFiles: opensFiles)
-                        .font(header ? .footnote.weight(.semibold) : .footnote)
-                        .foregroundStyle(YardletPalette.onSurface)
-                        .multilineTextAlignment(alignment == .trailing ? .trailing : alignment == .center ? .center : .leading)
-                }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .gridColumnAlignment(alignment)
-                    .overlay(alignment: .leading) {
-                        if column > 0 { Rectangle().fill(YardletPalette.outlineVariant).frame(width: 0.5) }
-                    }
+    private func cell(_ text: String, row: Int, column: Int) -> some View {
+        let alignment = column < table.alignments.count ? table.alignments[column] : .leading
+        return ConversationText(text, opensFiles: opensFiles)
+            .font(row == 0 ? .footnote.weight(.semibold) : .footnote)
+            .foregroundStyle(YardletPalette.onSurface)
+            .multilineTextAlignment(alignment == .trailing ? .trailing : alignment == .center ? .center : .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: Alignment(horizontal: alignment, vertical: .top))
+            .background(row == 0 ? YardletPalette.surfaceContainer : Color.clear)
+            .overlay(alignment: .leading) {
+                if column > 0 { Rectangle().fill(YardletPalette.outlineVariant).frame(width: 0.5) }
             }
+            .overlay(alignment: .top) {
+                if row > 0 { Rectangle().fill(YardletPalette.outlineVariant).frame(height: 0.5) }
+            }
+    }
+}
+
+/// Lays a table's cells, given row by row, in columns as wide as their widest cell (up to `maxColumnWidth`, where a
+/// cell wraps) and rows as tall as their tallest, offering each cell its column's width and its row's height.
+private struct TableLayout: Layout {
+    let columns: Int
+    let maxColumnWidth: CGFloat
+
+    struct Measure {
+        var widths: [CGFloat]
+        var heights: [CGFloat]
+    }
+
+    func makeCache(subviews: Subviews) -> Measure { measure(subviews) }
+
+    func updateCache(_ cache: inout Measure, subviews: Subviews) { cache = measure(subviews) }
+
+    private func measure(_ subviews: Subviews) -> Measure {
+        var widths = [CGFloat](repeating: 0, count: columns)
+        for (index, cell) in subviews.enumerated() {
+            let column = index % columns
+            widths[column] = max(widths[column], min(cell.sizeThatFits(.unspecified).width, maxColumnWidth))
         }
-        .background(header ? YardletPalette.surfaceContainer : Color.clear)
+        var heights = [CGFloat](repeating: 0, count: (subviews.count + columns - 1) / columns)
+        for (index, cell) in subviews.enumerated() {
+            let size = cell.sizeThatFits(ProposedViewSize(width: widths[index % columns], height: nil))
+            heights[index / columns] = max(heights[index / columns], size.height)
+        }
+        return Measure(widths: widths, heights: heights)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Measure) -> CGSize {
+        CGSize(width: cache.widths.reduce(0, +), height: cache.heights.reduce(0, +))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Measure) {
+        var y = bounds.minY
+        for row in cache.heights.indices {
+            var x = bounds.minX
+            for column in 0..<columns {
+                let index = row * columns + column
+                guard index < subviews.count else { break }
+                subviews[index].place(at: CGPoint(x: x, y: y),
+                                      proposal: ProposedViewSize(width: cache.widths[column], height: cache.heights[row]))
+                x += cache.widths[column]
+            }
+            y += cache.heights[row]
+        }
     }
 }
 
@@ -700,21 +783,5 @@ private struct MarkdownListView: View {
                 .padding(.leading, CGFloat(item.depth) * levelIndent)
             }
         }
-    }
-}
-
-/// Its content at the width it wants, up to `maxWidth`, wrapping past it: a table cell inside a sideways scroll, which
-/// offers no width of its own, would otherwise run on in one line.
-private struct CappedWidth: Layout {
-    let maxWidth: CGFloat
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        guard let content = subviews.first else { return .zero }
-        let width = min(content.sizeThatFits(.unspecified).width, maxWidth)
-        return CGSize(width: width, height: content.sizeThatFits(ProposedViewSize(width: width, height: nil)).height)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: nil))
     }
 }

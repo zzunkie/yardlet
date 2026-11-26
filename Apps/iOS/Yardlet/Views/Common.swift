@@ -185,3 +185,42 @@ struct ReadFailureCard: View {
         }
     }
 }
+
+/// Views side by side, starting a new line where the next one would not fit.
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let lines = lines(subviews, width: proposal.width ?? .infinity)
+        let width = lines.map { $0.width }.max() ?? 0
+        let height = lines.reduce(0) { $0 + $1.height } + spacing * CGFloat(max(lines.count - 1, 0))
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for line in lines(subviews, width: bounds.width) {
+            var x = bounds.minX
+            for index in line.indices {
+                let size = subviews[index].sizeThatFits(.unspecified)
+                subviews[index].place(at: CGPoint(x: x, y: y + (line.height - size.height) / 2),
+                                      proposal: ProposedViewSize(width: min(size.width, bounds.width), height: nil))
+                x += size.width + spacing
+            }
+            y += line.height + spacing
+        }
+    }
+
+    private func lines(_ subviews: Subviews, width: CGFloat) -> [(indices: [Int], width: CGFloat, height: CGFloat)] {
+        var lines: [(indices: [Int], width: CGFloat, height: CGFloat)] = []
+        for (index, subview) in subviews.enumerated() {
+            let size = subview.sizeThatFits(.unspecified)
+            if let last = lines.last, last.width + spacing + size.width <= width {
+                lines[lines.count - 1] = (last.indices + [index], last.width + spacing + size.width, max(last.height, size.height))
+            } else {
+                lines.append(([index], size.width, size.height))
+            }
+        }
+        return lines
+    }
+}

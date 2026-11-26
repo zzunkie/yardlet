@@ -3,7 +3,6 @@ import SwiftUI
 import WebKit
 import XCTest
 @testable import NativeHarnessClient
-import YardletRemote
 @testable import YardletAgentTools
 @testable import YardletRemote
 

@@ -534,6 +534,7 @@ final class HostSession: Identifiable {
             return hostSettings
         }
         readingHostSettings = true
+        hostSettingsFailure = nil
         defer { readingHostSettings = false }
         repeat {
             dirtyHostSettings = false
@@ -618,6 +619,7 @@ final class HostSession: Identifiable {
     @discardableResult
     func fetchHostAccounts(watching: Bool = true, refreshHarnesses: [String] = []) async -> RemoteAccountsState? {
         guard isConnected, capabilities.hostAccounts else { return nil }
+        hostAccountsFailure = nil
         let answer = await response(to: .hostAccounts(watching: watching, refreshHarnesses: refreshHarnesses))
         if answer.ok, let state = answer.hostAccountsState {
             if hostAccounts != state { hostAccounts = state }

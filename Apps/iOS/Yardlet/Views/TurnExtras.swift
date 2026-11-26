@@ -219,20 +219,23 @@ struct SuggestionView: View {
                 Text(failure).font(.footnote).foregroundStyle(YardletPalette.error).textSelection(.enabled)
             }
             if !actions.isEmpty {
-                HStack(spacing: 8) {
-                    if actions.contains(RemoteSuggestionAction.start.rawValue) {
-                        Button("Start as New Task") { act(.start) }.prominentButton()
+                HStack(alignment: .top, spacing: 8) {
+                    // The answers wrap to another line where the screen or the text size leaves no room.
+                    FlowLayout(spacing: 8) {
+                        if actions.contains(RemoteSuggestionAction.start.rawValue) {
+                            Button("Start as New Task") { act(.start) }.prominentButton()
+                        }
+                        if actions.contains(RemoteSuggestionAction.here.rawValue) {
+                            Button("Run in This Conversation") { act(.here) }.buttonStyle(.bordered)
+                        }
+                        if offersOptions {
+                            Button("Options") { isShowingOptions = true }
+                                .buttonStyle(.bordered)
+                                .foregroundStyle(YardletPalette.onSurface)
+                                .accessibilityHint(item.title ?? "")
+                        }
                     }
-                    if actions.contains(RemoteSuggestionAction.here.rawValue) {
-                        Button("Run in This Conversation") { act(.here) }.buttonStyle(.bordered)
-                    }
-                    if offersOptions {
-                        Button("Options") { isShowingOptions = true }
-                            .buttonStyle(.bordered)
-                            .foregroundStyle(YardletPalette.onSurface)
-                            .accessibilityHint(item.title ?? "")
-                    }
-                    Spacer()
+                    Spacer(minLength: 0)
                     if actions.contains(RemoteSuggestionAction.dismiss.rawValue) {
                         Button {
                             act(.dismiss)

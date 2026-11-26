@@ -267,7 +267,8 @@ struct TaskView: View {
                         FileProgressBar(reading: reading) { closeFile() }
                     }
                     CommandErrorBanner(session: session)
-                    ConnectionBanner(session: session)
+                    // Before the conversation is read, the placeholder above says what the connection is doing.
+                    if conversation.isLoaded { ConnectionBanner(session: session) }
                     TaskNoticesView(session: session, taskID: taskID)
                     VStack(spacing: 0) {
                         NextStepDock(session: session, taskID: taskID, conversation: conversation)
@@ -397,10 +398,15 @@ private struct OpeningTaskPlaceholder: View {
                     .foregroundStyle(YardletPalette.onSurfaceVariant)
                     .multilineTextAlignment(.center)
             }
-            Button("Back to Tasks", action: back)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(YardletPalette.onSurface)
-                .padding(.top, 6)
+            HStack(spacing: 20) {
+                if case .unreachable = session.connection {
+                    Button("Retry") { session.reconnectNow() }
+                }
+                Button("Back to Tasks", action: back)
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(YardletPalette.onSurface)
+            .padding(.top, 6)
         }
         .padding(.horizontal, 32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
