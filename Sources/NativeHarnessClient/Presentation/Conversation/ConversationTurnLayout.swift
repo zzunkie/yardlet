@@ -310,6 +310,11 @@ struct ConversationWorkStretch: Identifiable {
     /// (`ConversationWorkSummary`), so the line says what happened between the messages around it;
     /// nil when it hides no call, for the fold to read "Work details".
     func foldTitle(harness: HarnessKind) -> String? {
+        Self.foldTitle(hiding: hidden, harness: harness)
+    }
+
+    /// The fold's title for the work it hides (`hidden`), for a view that reads that work for more than its title.
+    static func foldTitle(hiding hidden: [ConversationItem], harness: HarnessKind) -> String? {
         let calls = hidden.filter { ConversationWorkSummary.category(of: $0) != nil }
         return calls.isEmpty ? nil : ConversationWorkSummary.title(for: calls, harness: harness)
     }
