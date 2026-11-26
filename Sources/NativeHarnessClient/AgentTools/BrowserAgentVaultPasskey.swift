@@ -75,8 +75,7 @@ extension BrowserAgentTools {
         guard let vault else { throw BrowserAgentToolError("Yardlet's password manager is not available in this build.") }
         let tree = try await send(page, "Page.getFrameTree")
         let frame = tree["frameTree"]?["frame"]
-        let origin = frame?["securityOrigin"]?.stringValue.flatMap { $0.isEmpty || $0 == "null" ? nil : $0 }
-            ?? frame?["url"]?.stringValue.flatMap(VaultSite.origin(of:)) ?? ""
+        let origin = VaultPageScripts.securityOrigin(of: frame) ?? frame?["url"]?.stringValue.flatMap(VaultSite.origin(of:)) ?? ""
         if !vault.items(for: origin).isEmpty {
             try await takeOwnProfile(sessionID, on: page, how: "password manager passkey", undone: "no passkey was prepared",
                                      again: "call browser_fill_credential again")

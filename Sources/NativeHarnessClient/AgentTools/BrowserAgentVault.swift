@@ -934,9 +934,14 @@ enum VaultPageScripts {
         -> (id: String, loaderID: String, origin: String) {
         let tree = try await cdp.send("Page.getFrameTree", [:], timeout: timeout)
         let frame = tree["frameTree"]?["frame"]
-        let origin = frame?["securityOrigin"]?.stringValue.flatMap { $0.isEmpty || $0 == "null" ? nil : $0 }
-            ?? frame?["url"]?.stringValue.flatMap(VaultSite.origin(of:)) ?? ""
+        let origin = securityOrigin(of: frame) ?? frame?["url"]?.stringValue.flatMap(VaultSite.origin(of:)) ?? ""
         return (frame?["id"]?.stringValue ?? "", frame?["loaderId"]?.stringValue ?? "", origin)
+    }
+
+    /// A frame's origin as the browser reports it, nil for an opaque one: a sandboxed frame or a `data:` document reads
+    /// `null`, `://` or nothing, which is no site's page.
+    static func securityOrigin(of frame: JSONValue?) -> String? {
+        frame?["securityOrigin"]?.stringValue.flatMap { VaultSite.origin(of: $0) == nil ? nil : $0 }
     }
 
     /// The tab's frames as the browser reports them, the main frame first and the rest in the order of its tree: the
@@ -964,9 +969,8 @@ enum VaultPageScripts {
                 // A frame from another site is read on its own session.
                 guard let frame = node["frame"], let id = frame["id"]?.stringValue, isRoot || !remote.contains(id) else { continue }
                 let main = session == nil && isRoot
-                let security = frame["securityOrigin"]?.stringValue.flatMap { $0.isEmpty || $0 == "null" ? nil : $0 }
                 // Only the main frame's origin falls back to its address: a frame's opaque origin stays one.
-                let origin = security ?? (main ? frame["url"]?.stringValue.flatMap(VaultSite.origin(of:)) : nil) ?? ""
+                let origin = securityOrigin(of: frame) ?? (main ? frame["url"]?.stringValue.flatMap(VaultSite.origin(of:)) : nil) ?? ""
                 frames.append(VaultFrame(id: id, parentID: main ? nil : frame["parentId"]?.stringValue,
                                          loaderID: frame["loaderId"]?.stringValue ?? "", origin: origin,
                                          url: (frame["url"]?.stringValue ?? "") + (frame["urlFragment"]?.stringValue ?? ""),
@@ -1137,13 +1141,16 @@ enum VaultPageScripts {
                               username: String?, password: String?, code: String?, fields: [VaultFormField]? = nil,
                               secretFields: [VaultFormField]? = nil, codeOnly: Bool = false,
                               timeout: Duration = .seconds(10)) async -> Bool {
-        // A code from another item of the account goes into a frame only where that item's sites hold it too.
-        guard let frames = try? await fillFrames(cdp, sites: sites, timeout: timeout).filter({ frame in
-                  frame.isMain || code == nil || codeSites.map { VaultSite.matches($0, origins: [frame.frame.origin] + frame.framedBy) } ?? true
-              }),
+        // A code from another item of the account goes into a frame only where that item's sites hold it too; the
+        // sign-in's own values go in where its item's do.
+        func takesCode(_ frame: VaultFillFrame) -> Bool {
+            frame.isMain || codeSites.map { VaultSite.matches($0, origins: [frame.frame.origin] + frame.framedBy) } ?? true
+        }
+        guard let frames = try? await fillFrames(cdp, sites: sites, timeout: timeout).filter({ !codeOnly || takesCode($0) }),
               frames.first?.pageLoaderID == frame.loaderID,
               let field = await personField(cdp, in: frames, target: personTarget(codeOnly: codeOnly), timeout: timeout),
               (try? await mainFrame(cdp, timeout: timeout))?.loaderID == frame.loaderID else { return false }
+        let code = takesCode(field.frame) ? code : nil
         let values: [String?] = codeOnly ? [nil, nil, code] : [username, password, code]
         let secretFields = codeOnly ? nil : secretFields
         let secret = values[1] != nil || values[2] != nil || secretFields != nil
@@ -1790,6 +1797,12 @@ extension BrowserAgentTools {
         let filled = Set(page.vaultFills.fills.compactMap(\.frame))
         if !filled.isEmpty {
             guard let present = try? await VaultPageScripts.frames(page.cdp, timeout: commandTimeout).map(\.place) else { return nil }
+            // A filled frame's session that is still attached but did not describe its frames may still show the values.
+            let attached = Set(page.cdp.frameSessions.map(\.id))
+            let answered = Set(present.compactMap(\.session))
+            guard filled.allSatisfy({ place in place.session.map { !attached.contains($0) || answered.contains($0) } ?? true }) else {
+                return nil
+            }
             places += present.filter { filled.contains($0) && $0.id != frame.id }
         }
         defer {
@@ -1860,8 +1873,7 @@ extension BrowserAgentTools {
         let tree = try await send(page, "Page.getFrameTree")
         let frame = tree["frameTree"]?["frame"]
         guard let id = frame?["id"]?.stringValue else { throw BrowserAgentToolError("The browser did not describe the page.") }
-        let origin = frame?["securityOrigin"]?.stringValue.flatMap { $0.isEmpty || $0 == "null" ? nil : $0 }
-            ?? frame?["url"]?.stringValue.flatMap(VaultSite.origin(of:)) ?? ""
+        let origin = VaultPageScripts.securityOrigin(of: frame) ?? frame?["url"]?.stringValue.flatMap(VaultSite.origin(of:)) ?? ""
         return (id, frame?["loaderId"]?.stringValue ?? "", origin)
     }
 

@@ -133,6 +133,14 @@ final class VaultTests: XCTestCase {
             guard case let .failure(refusal) = refused else { return XCTFail("an agent filled a code with no site") }
             XCTAssertTrue(refusal.message.contains("code bar"), refusal.message)
         }
+        // In a frame, the codes are named only where the pages around it are the frame's site too (design §6.2).
+        for (framedBy, named) in [(["https://www.vercel.com"], true), (["https://www.foreign.test"], false)] {
+            var request = VaultFillRequest(sessionID: task, itemName: nil, kind: .oneTimeCode, origin: "https://vercel.com")
+            request.framedBy = framedBy
+            guard case let .failure(refusal) = await center.authorize(request) else { return XCTFail("a code filled in a frame") }
+            XCTAssertEqual(refusal.message.contains("“Vercel”"), named, refusal.message)
+            XCTAssertEqual(refusal.failure.details["unlinkedCodes"] != nil, named, refusal.message)
+        }
         XCTAssertEqual(notices, [])
 
         center.link(vercel.id, to: "vercel.com")
@@ -154,6 +162,16 @@ final class VaultTests: XCTestCase {
                 XCTAssertEqual(grant.item.id, item.id)
             }
         }
+
+        // In a frame, the other item of the account stands in only where its sites hold the pages around the frame
+        // too: an item saved for both pages that has no code is refused for that, and the person hears nothing.
+        let partner = VaultItem(name: "Partner", sites: ["github.com", "partner.test"], username: "ada")
+        try center.save(partner, secret: VaultSecret(password: "correct horse"))
+        var framed = VaultFillRequest(sessionID: task, itemName: "Partner", kind: .oneTimeCode, origin: "https://github.com")
+        framed.framedBy = ["https://www.partner.test"]
+        guard case let .failure(noCode) = await center.authorize(framed) else { return XCTFail("a code filled from another site's item") }
+        XCTAssertTrue(noCode.message.contains("no one-time code"), noCode.message)
+        XCTAssertEqual(notices, [])
     }
 
     /// A code with no site (design §14.3) takes the site of its account's sign-in, the one item with a password

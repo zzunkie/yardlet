@@ -427,7 +427,7 @@ final class VaultCenter: ObservableObject {
             // The password and the code of one account are often two items, so an item here or with no site that
             // lacks what is asked for gives way to the site's one item of the same username that has it.
             if !named.has(request.kind), named.sites.isEmpty || onSite.contains(where: { $0.id == named.id }),
-               let account = accountItem(of: named, having: request.kind, on: request.origin) {
+               let account = accountItem(of: named, having: request.kind, on: origins) {
                 named = account
             }
             guard onSite.contains(where: { $0.id == named.id }) else {
@@ -680,12 +680,13 @@ final class VaultCenter: ObservableObject {
     }
 
     /// The page's one other item of `item`'s account that has what a fill of `kind` needs: a site's password and its
-    /// two-factor code are often two items of one account (design §14.3). Nil when there is none or more than one,
-    /// or the item has no username to tell its account by.
-    private func accountItem(of item: VaultItem, having kind: VaultFillKind, on origin: String) -> VaultItem? {
+    /// two-factor code are often two items of one account (design §14.3). `origins` are the field's document and, in a
+    /// frame, the pages around it, all of which the item's sites hold (`VaultSite.matches(_:origins:)`). Nil when there
+    /// is none or more than one, or the item has no username to tell its account by.
+    private func accountItem(of item: VaultItem, having kind: VaultFillKind, on origins: [String]) -> VaultItem? {
         let account = items.filter { other in
             other.id != item.id && other.has(kind) && other.isSameAccount(as: item)
-                && other.sites.contains { VaultSite.matches($0, origin: origin) }
+                && VaultSite.matches(other.sites, origins: origins)
         }
         return account.count == 1 ? account[0] : nil
     }
@@ -746,10 +747,14 @@ final class VaultCenter: ObservableObject {
         item.identity.isEmpty ? "“\(item.name)”" : "“\(item.name)” (\(item.identity))"
     }
 
-    /// A refused code, naming the codes with no site the code bar offers on this page, if any.
+    /// A refused code, naming the codes with no site the code bar offers on this page, if any. A field in a frame hears
+    /// of them only when the pages around it are the frame's site too (design §6.2): an agent on another site's page that
+    /// frames a sign-in would otherwise learn which codes the vault holds for that sign-in's site.
     private func refuseCode(_ request: VaultFillRequest, item: VaultItem?, _ message: String)
         -> Result<VaultFillGrant, VaultRefusal> {
-        let codes = request.kind == .oneTimeCode ? unlinkedCodeItems(for: request.origin) : []
+        let onItsSite = request.framedBy.isEmpty || VaultSite.suggestion(for: request.origin, suffixes: suffixes)
+            .map { VaultSite.matches([$0], origins: request.framedBy) } == true
+        let codes = request.kind == .oneTimeCode && onItsSite ? unlinkedCodeItems(for: request.origin) : []
         guard !codes.isEmpty else { return refuse(request, item: item, message) }
         return refuseUnlinked(request, item: item, message + " " + codes.map(Self.label).joined(separator: ", ")
             + " may be its two-factor code, saved with no site.", codes: codes)
@@ -918,7 +923,7 @@ final class VaultCenter: ObservableObject {
         grant.username = item.username.isEmpty ? nil : item.username
         grant.password = codeOnly ? nil : secret.password
         grant.secretFields = codeOnly ? nil : secret.fields
-        let account = secret.oneTimeCode == nil ? accountItem(of: item, having: .oneTimeCode, on: origin) : nil
+        let account = secret.oneTimeCode == nil ? accountItem(of: item, having: .oneTimeCode, on: [origin]) : nil
         let codeSecret = secret.oneTimeCode ?? account.flatMap { try? trustedSecret(of: $0) }?.oneTimeCode
         grant.code = codeSecret.map { code(for: $0) }
         grant.codeSites = account?.sites

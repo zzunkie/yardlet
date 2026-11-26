@@ -1601,9 +1601,11 @@ final class BrowserAgentToolsTests: XCTestCase {
     /// (docs/BROWSER_VAULT_DESIGN.md, "Binding to sites"), whether the frame renders in the page's process or on a
     /// session of its own, for the agent's fill and the person's alike. Anything else is refused as before, and an item
     /// named where the frame or a page around it is another site's tells the person. A filled frame keeps the tab's
-    /// document closed to the agent's scripts, and a snapshot leaves out its filled fields. The person's fill goes into a
-    /// frame of another origin than the page's only once they put the focus in it, and an agent's code fill in a frame
-    /// takes no two-factor setup from the tab's picture, which shows the pages around the frame too.
+    /// document closed to the agent's scripts, and a snapshot leaves out its filled fields, or is refused while a filled
+    /// frame's session does not describe its frames. The person's fill goes into a frame of another origin than the page's
+    /// only once they put the focus in it, without a code from another item of the account whose sites do not hold the
+    /// frame, and an agent's code fill in a frame takes no two-factor setup from the tab's picture, which shows the pages
+    /// around the frame too.
     func testAVaultFillGoesIntoAFrameOnlyWhenItAndThePagesAroundItAreTheItemsSites() async {
         struct Frame { var id: String; var parent: String?; var origin: String; var session: String? = nil }
         func layout(_ main: String, _ frames: Frame...) -> [Frame] { [Frame(id: "main", parent: nil, origin: main)] + frames }
@@ -1666,6 +1668,7 @@ final class BrowserAgentToolsTests: XCTestCase {
                 return .object(["frame": .object(description), "childFrames": .array(children.map(tree))])
             }
             var filledInto: [(object: String, session: String?, origin: JSONValue?)] = []
+            var codesGiven: [JSONValue?] = []
             // Where the page's keyboard focus is: each document's focused element is the iframe of the next frame down.
             var focusChain: Set<String> = []
             func owner(of frame: String) -> Int64 { Int64(500 + frames.firstIndex { $0.id == frame }!) }
@@ -1717,6 +1720,7 @@ final class BrowserAgentToolsTests: XCTestCase {
                 case "Runtime.callFunctionOn":
                     let function = params["functionDeclaration"]?.stringValue ?? ""
                     let object = params["objectId"]?.stringValue ?? ""
+                    if function == VaultPageScripts.personFillFunction { codesGiven.append(params["arguments"]?.arrayValue?[2]["value"]) }
                     if function == BrowserAgentTools.fillFunction || function == VaultPageScripts.personFillFunction {
                         filledInto.append((object, session, params["arguments"]?.arrayValue?[function == BrowserAgentTools.fillFunction ? 4 : 3]["value"]))
                         return ScriptedCDP.value(.object(["kinds": .array([.string("password"), .string("username")])]))
@@ -1763,6 +1767,15 @@ final class BrowserAgentToolsTests: XCTestCase {
                 let hidden = await tools.vaultSecretNodes(on: page)
                 XCTAssertEqual(Set(secretsReadIn), Set(["main", field.id]), "\(test.name): a snapshot reads the filled frame too")
                 XCTAssertTrue(hidden?.contains(.init(node: 900, session: field.session)) == true, test.name)
+                if let session = field.session {
+                    cdp.sessionResponder = { asked, method, params in
+                        guard asked != session || method != "Page.getFrameTree" else { throw BrowserDevToolsError.timedOut(method) }
+                        return try answer(asked, method, params)
+                    }
+                    let unread = await tools.vaultSecretNodes(on: page)
+                    XCTAssertNil(unread, "\(test.name): a filled frame that is not described leaves the snapshot refused")
+                    cdp.sessionResponder = { try answer($0, $1, $2) }
+                }
                 if place != nil {
                     let code = await run(VaultToolCatalog.fillCredential, ["ref": .string("@e5"), "kind": .string("one_time_code")])
                     XCTAssertFalse(code.isError, "\(test.name): \(code.text)")
@@ -1799,6 +1812,22 @@ final class BrowserAgentToolsTests: XCTestCase {
                 XCTAssertEqual(page.vaultFills.fills.last?.frame, place, test.name)
             }
             page.vaultFills.withdraw(page.vaultFills.fills.last ?? BrowserAgentVaultFill(loaderID: "", eventMark: 0))
+            if test.fills {
+                // A code from another item of the account saved for another site stays out of a frame; the sign-in goes in.
+                let recorded = page.vaultFills.fills.count
+                func personFillsCode(only codeOnly: Bool) async -> Bool {
+                    await VaultPageScripts.fillForPerson(
+                        cdp, frame: (id: "main", loaderID: "doc-main", origin: frames[0].origin), sites: item.sites,
+                        codeSites: ["foreign.test"], fills: page.vaultFills, username: "ada", password: "correct-horse-battery",
+                        code: "123456", codeOnly: codeOnly)
+                }
+                let withCode = await personFillsCode(only: false)
+                XCTAssertTrue(withCode, test.name)
+                XCTAssertEqual(codesGiven.last, place == nil ? .string("123456") : .null, test.name)
+                let codeOnly = await personFillsCode(only: true)
+                XCTAssertEqual(codeOnly, place == nil, "\(test.name): the code alone goes into no frame its item does not hold")
+                for fill in page.vaultFills.fills.dropFirst(recorded) { page.vaultFills.withdraw(fill) }
+            }
             cdp.eventLog.append(("Page.frameNavigated", .object(["frame": .object([
                 "id": .string("main"), "loaderId": .string("doc-next"), "url": .string("https://www.example.com/next")])])))
         }
