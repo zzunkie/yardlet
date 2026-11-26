@@ -71,10 +71,10 @@ several agents and accounts every day, and it is shared for anyone who doesn't h
 These options reach past what Yardlet otherwise leaves alone, so each stays off until you turn it on,
 and turning it off undoes it.
 
-- **Steer Antigravity turns** (Settings > General, experimental): a message sent while an Antigravity
-  task works reaches it at its next step. While it is on, Yardlet adds a plugin folder under
+- **Send now in Antigravity tasks (experimental)** (Settings > General): a message sent while an
+  Antigravity task works reaches it at its next step. While it is on, Yardlet adds a plugin folder under
   `~/.gemini/config/plugins/` that `agy` reads in every conversation, also outside Yardlet; turning it
-  off removes the folder.
+  off removes the folder, which removing Yardlet alone does not.
 - **Keep tasks working with the lid closed** (Settings > General): registers a helper that runs as root
   and keeps the Mac awake with its lid closed while tasks work (see [Permissions](#permissions)). Turn
   it off before removing Yardlet, as macOS keeps an app's background item after the app is deleted.
@@ -128,7 +128,9 @@ Quit Yardlet and move it to the Trash, or run `brew uninstall --cask zzunkie/tap
 agents, their sign-ins and their sessions do not change. If **Settings > General > Keep tasks
 working with the lid closed** is on, turn it off first: macOS keeps an app's background item after
 the app is deleted. It has nothing left to run then, and you can also turn Yardlet off in **System
-Settings > General > Login Items & Extensions**. To remove Yardlet's own data as well:
+Settings > General > Login Items & Extensions**. Turn off **Send now in Antigravity tasks
+(experimental)** too if it is on, which removes its plugin folder from `~/.gemini/config/plugins/`. To
+remove Yardlet's own data as well:
 
 - `~/.yardlet` (task list, drafts, reading state) and `~/Library/Application Support/Yardlet`
   (browser profiles, staged updates). `brew uninstall --zap --cask zzunkie/tap/yardlet` removes
