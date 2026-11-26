@@ -1,0 +1,108 @@
+name: Check a release's disk images
+
+# Before a release is published, macOS 15 (the oldest major version Yardlet supports) on Apple silicon
+# and on Intel, and macOS 26 on Intel, open the Developer ID disk images of the draft release and start
+# what they hold. A release's browser host carries a Developer ID provisioning profile and restricted
+# entitlements for Touch ID passkeys (docs/BROWSER_HOST.md §7). If macOS (AMFI) refused them on some
+# version, the host would not start there at all and the browser panel would stay empty for everyone
+# on it, which launch.yml's ad hoc bundles cannot show. Run it by hand on the draft that release.sh's
+# publishing steps make: gh workflow run release-check.yml -f release=v<version>.
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Tag of the draft release whose images to check, such as v0.12.0
+        required: true
+
+# A draft release and its files are visible only with write access to the repository's contents. Only
+# the download step is given the token.
+permissions:
+  contents: write
+
+jobs:
+  check:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS 15, Apple silicon
+            runner: macos-15
+            arch: arm64
+          - name: macOS 15, Intel
+            runner: macos-15-intel
+            arch: x86_64
+          - name: macOS 26, Intel
+            runner: macos-26-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/check-macos-symbols.sh
+          sparse-checkout-cone-mode: false
+      - name: Download the disk image
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE: ${{ inputs.release }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          image="Yardlet-${RELEASE#v}.dmg"
+          if [[ "$ARCH" == x86_64 ]]; then image="Yardlet-${RELEASE#v}-x86_64.dmg"; fi
+          gh release download "$RELEASE" --repo "$GITHUB_REPOSITORY" --pattern "$image" --output Yardlet.dmg
+      # The stapled tickets show notarization whether or not the runner has Gatekeeper on, so spctl's
+      # verdict is only printed.
+      - name: Check the signature and notarization
+        run: |
+          sw_vers
+          uname -m
+          xcrun stapler validate Yardlet.dmg
+          hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/image" Yardlet.dmg
+          mkdir -p "$RUNNER_TEMP/Applications"
+          ditto "$RUNNER_TEMP/image/Yardlet.app" "$RUNNER_TEMP/Applications/Yardlet.app"
+          hdiutil detach "$RUNNER_TEMP/image"
+          app="$RUNNER_TEMP/Applications/Yardlet.app"
+          codesign --verify --deep --strict "$app"
+          xcrun stapler validate "$app"
+          spctl --assess --type execute -vv "$app" || true
+          codesign -d --entitlements - --xml "$app/Contents/Frameworks/Yardlet Browser Host.app" | plutil -p -
+      - name: Launch
+        run: |
+          "$RUNNER_TEMP/Applications/Yardlet.app/Contents/MacOS/Yardlet" > launch.log 2>&1 &
+          pid=$!
+          # A missing symbol ends the process before main; one still running after this has started.
+          sleep 30
+          if ! kill -0 "$pid" 2>/dev/null; then
+            status=0
+            wait "$pid" || status=$?
+            cat launch.log
+            echo "::error::Yardlet exited with status $status within 30 seconds"
+            exit 1
+          fi
+          kill "$pid"
+          echo "Yardlet was still running after 30 seconds"
+      # Started without Yardlet, the host loads CEF and stops at the missing Mach bootstrap name, which
+      # it reports on standard output: macOS let it run. Entitlements macOS refuses end it before main
+      # with SIGKILL (status 137) and no output.
+      - name: Start the browser host
+        if: ${{ !cancelled() }}
+        run: |
+          host="$RUNNER_TEMP/Applications/Yardlet.app/Contents/Frameworks/Yardlet Browser Host.app/Contents/MacOS/Yardlet Browser Host"
+          status=0
+          perl -e 'alarm 60; exec { $ARGV[0] } @ARGV or die "exec: $!\n"' "$host" < /dev/null > host.out 2> host.err || status=$?
+          cat -v host.out
+          cat host.err
+          if ! grep -a -q "Mach bootstrap name" host.out; then
+            echo "::error::the browser host did not start (status $status)"
+            log show --last 3m --style compact \
+              --predicate 'process == "amfid" OR sender == "AppleMobileFileIntegrity"' | grep -v SecTrust | tail -20 || true
+            exit 1
+          fi
+      # Xcode 16.0 carries the macOS 15.0 SDK on both macOS 15 images.
+      - name: Check the imports against the macOS 15.0 SDK
+        if: ${{ !cancelled() && startsWith(matrix.runner, 'macos-15') }}
+        run: |
+          sdk=$(DEVELOPER_DIR=/Applications/Xcode_16.0.app/Contents/Developer xcrun --sdk macosx15.0 --show-sdk-path)
+          ./scripts/check-macos-symbols.sh "$RUNNER_TEMP/Applications/Yardlet.app" "$sdk"

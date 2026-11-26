@@ -402,8 +402,9 @@ YARDLET_SIGNING_IDENTITY="Developer ID Application: <name> (<team>)" ./scripts/b
 - `YARDLET_PROVISIONING_PROFILE=<path>` embeds a Developer ID profile in the browser host
   (`Yardlet Browser Host.app/Contents/embedded.provisionprofile`) with the entitlements it grants. The
   profile must be for the App ID `<team>.com.zzunkie.yardlet.browser-host`; the app itself needs none.
-  Touch ID passkeys stay off with the stock CEF build, whose keychain group has no team ID
-  (`YARDLET_PATCH_CEF_WEBAUTHN_GROUP=1` enables the tested opt-in prototype; see docs/BROWSER_HOST.md §7).
+  Touch ID passkeys stay off with the stock CEF build, whose keychain group has no team ID;
+  `YARDLET_PATCH_CEF_WEBAUTHN_GROUP=1` gives it the signing team's (docs/BROWSER_HOST.md §7). Releases
+  carry both: `release.sh` requires the profile.
 - A Developer ID build keeps the browser's cookie key in the login keychain instead of the mock
   keychain, so sites in the built-in browser need signing in again once after the switch.
 - Once the installed app is Developer ID signed, `stage-update.sh` and Install Update… accept only a
@@ -429,10 +430,13 @@ default `https://yardlet.app/appcast.xml`, and the same address with `-x86_64` b
 and the public key, notarizes the app and its disk image with `notarize.sh` (`Yardlet-<version>.dmg`,
 and `Yardlet-<version>-x86_64.dmg` for Intel), and runs Sparkle's `generate_appcast`, which signs the
 image with the EdDSA key and writes that architecture's appcast with the download under the GitHub
-release `v<version>`. It checks that every executable in each image is of its architecture and that
-the key built into the app accepts the signature, then prints the publishing steps: the GitHub release
-with both images first, then both appcasts on the site, and the Homebrew cask's two hashes. Everything
-lands in `.build/release-<version>/arm64/` and `.build/release-<version>/x86_64/`.
+release `v<version>`. It checks that every executable in each image is of its architecture, that the
+browser host holds the profile and Touch ID's keychain groups, and that the key built into the app
+accepts the signature, then prints the publishing steps: the GitHub release with both images as a
+draft; the "Check a release's disk images" workflow (`.github/workflows/release-check.yml`), in which
+macOS 15 and 26 open the draft's images and start the app and its browser host; publishing the draft
+once that passes; both appcasts on the site; and the Homebrew cask's two hashes. Everything lands in
+`.build/release-<version>/arm64/` and `.build/release-<version>/x86_64/`.
 
 - Raise `CFBundleShortVersionString` and `CFBundleVersion` in `Packaging/Info.plist` and commit
   first: Sparkle orders updates by `CFBundleVersion`.
