@@ -8,8 +8,9 @@
 Lightweight, non-intrusive, yet versatile ADE. Yardlet is a native macOS app that runs the real agent
 CLIs you already use, Codex, Claude Code, OpenCode, Antigravity CLI and others, side by side in one
 window of projects and tasks, each with the agent loop, sign-in and session history it already has.
-It adds no agent layer of its own: no hooks, no wrappers around the agent commands, and nothing
-written into the agents' settings.
+By default it adds no agent layer of its own: no hooks, no wrappers around the agent commands, and
+nothing written into the agents' settings. The few options that go further are off until you turn
+them on (see [Off by default](#off-by-default)).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/main-dark.png">
@@ -32,7 +33,7 @@ several agents and accounts every day, and it is shared for anyone who doesn't h
 - **Sessions stay where the agent keeps them.** Codex runs against your normal `CODEX_HOME` and
   Claude Code against its own store, so a session started in Yardlet resumes in the original app or
   CLI, and the other way round. Yardlet keeps only its own index, drafts and reading state.
-- **Stop whenever you like.** Yardlet writes nothing into the agents' own configuration; it hands
+- **Stop whenever you like.** By default Yardlet writes nothing into the agents' own configuration; it hands
   them its tools when it starts them. Quit it or remove it, and each agent, its sign-in and its
   sessions are as they were, ready in the original app or CLI (see [Uninstall](#uninstall)).
 - **Several accounts.** Register more than one account per provider and start a task on the one
@@ -64,6 +65,19 @@ several agents and accounts every day, and it is shared for anyone who doesn't h
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/review-dark.png">
   <img alt="Reviewing a task's changes: the diff of a file opens in a pane next to the conversation" src="docs/images/review-light.png">
 </picture>
+
+## Off by default
+
+These options reach past what Yardlet otherwise leaves alone, so each stays off until you turn it on,
+and turning it off undoes it.
+
+- **Steer Antigravity turns** (Settings > General, experimental): a message sent while an Antigravity
+  task works reaches it at its next step. While it is on, Yardlet adds a plugin folder under
+  `~/.gemini/config/plugins/` that `agy` reads in every conversation, also outside Yardlet; turning it
+  off removes the folder.
+- **Keep tasks working with the lid closed** (Settings > General): registers a helper that runs as root
+  and keeps the Mac awake with its lid closed while tasks work (see [Permissions](#permissions)). Turn
+  it off before removing Yardlet, as macOS keeps an app's background item after the app is deleted.
 
 ## Requirements
 
