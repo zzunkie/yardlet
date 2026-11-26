@@ -39,6 +39,10 @@ Maintainers keep working notes outside this repository, in the ignored folder `d
 - Fix a cause where it lives, in the shared rule or path, rather than patching the one case that
   showed it. Add a test only when it pins a contract that could otherwise break unnoticed; prefer
   extending an existing test.
+- When a defect comes back after a fix, or the same kind of defect turns up in a second place, the
+  second fix also adds the check that would have caught both: a source rule test (see
+  [the checks that only tighten](docs/ARCHITECTURE.md#checks-that-only-tighten)) or a contract test on
+  the shared path that CI runs. Remove the narrower tests it covers.
 - Main-thread code that runs for every provider event, publication or timer tick does work in
   proportion to what changed, not to the whole history: a conversation can hold thousands of items
   and an agent run thousands of events. When such a path changes, check it with a long history and
