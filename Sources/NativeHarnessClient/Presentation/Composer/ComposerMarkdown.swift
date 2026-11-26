@@ -200,6 +200,7 @@ enum ComposerMarkdown {
         let range = NSRange(location: first, length: NSMaxRange(lines[lines.count - 1]) - first)
         var text = ""
         var start = selection.location, end = NSMaxRange(selection)
+        var changed = false
         for (index, line) in lines.enumerated() {
             if index > 0 { text += string.substring(with: NSRange(location: NSMaxRange(lines[index - 1]),
                                                                   length: line.location - NSMaxRange(lines[index - 1]))) }
@@ -210,9 +211,12 @@ enum ComposerMarkdown {
                 continue
             }
             text += indentUnit + content
+            changed = true
             if line.location <= selection.location { start += unit }
             if line.location <= NSMaxRange(selection) { end += unit }
         }
+        // Only blank lines selected: nothing to move.
+        guard changed else { return nil }
         if selection.length == 0 { end = start }
         return Edit(range: range, replacement: text, selection: NSRange(location: start, length: end - start))
     }
@@ -303,12 +307,23 @@ enum ComposerMarkdown {
             return Edit(range: selection, replacement: inner,
                         selection: NSRange(location: selection.location, length: (inner as NSString).length))
         }
+        // Italic's star is the odd one out of the stars around the selection: one in `*word*`, the third in
+        // `***word***`, none in `**word**`.
+        if mark == .italic {
+            let left = stars(endingAt: selection.location, in: string)
+            let right = stars(startingAt: NSMaxRange(selection), in: string)
+            if left % 2 == 1, right % 2 == 1 {
+                return Edit(range: NSRange(location: selection.location - 1, length: selection.length + 2),
+                            replacement: selected, selection: NSRange(location: selection.location - 1, length: selection.length))
+            }
+            return Edit(range: selection, replacement: marker + selected + marker,
+                        selection: NSRange(location: selection.location + width, length: selection.length))
+        }
         // The marks are just outside it: `word` selected in `**word**`.
         let before = NSRange(location: selection.location - width, length: width)
         let after = NSRange(location: NSMaxRange(selection), length: width)
         if before.location >= 0, NSMaxRange(after) <= string.length,
-           string.substring(with: before) == marker, string.substring(with: after) == marker,
-           !extendsMark(mark, before: before, after: after, in: string) {
+           string.substring(with: before) == marker, string.substring(with: after) == marker {
             return Edit(range: NSRange(location: before.location, length: NSMaxRange(after) - before.location),
                         replacement: selected, selection: NSRange(location: before.location, length: selection.length))
         }
@@ -316,12 +331,16 @@ enum ComposerMarkdown {
                     selection: NSRange(location: selection.location + width, length: selection.length))
     }
 
-    /// A single `*` next to another `*` is part of a bold mark, not an italic one.
-    private static func extendsMark(_ mark: InlineMark, before: NSRange, after: NSRange, in string: NSString) -> Bool {
-        guard mark == .italic else { return false }
-        let left = before.location > 0 && string.character(at: before.location - 1) == 0x2A
-        let right = NSMaxRange(after) < string.length && string.character(at: NSMaxRange(after)) == 0x2A
-        return left || right
+    private static func stars(endingAt location: Int, in string: NSString) -> Int {
+        var count = 0
+        while location - count > 0, string.character(at: location - count - 1) == 0x2A { count += 1 }
+        return count
+    }
+
+    private static func stars(startingAt location: Int, in string: NSString) -> Int {
+        var count = 0
+        while location + count < string.length, string.character(at: location + count) == 0x2A { count += 1 }
+        return count
     }
 
     private static func isExactly(_ mark: InlineMark, inner: String) -> Bool {

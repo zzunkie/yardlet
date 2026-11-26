@@ -65,6 +65,7 @@ struct ComposerTextField: NSViewRepresentable {
         controller.apply(style: style)
         controller.textView.placeholder = placeholder
         controller.replaceText(with: text)
+        controller.setEnabled(context.environment.isEnabled)
         return scroll
     }
 
@@ -87,6 +88,7 @@ struct ComposerTextField: NSViewRepresentable {
         if !textView.hasMarkedText(), !textView.string.utf16.elementsEqual(text.utf16) {
             controller.replaceText(with: text)
         }
+        controller.setEnabled(context.environment.isEnabled)
     }
 
     /// As wide as offered, as a text field is; with no width offered, as wide as its longest line.
@@ -148,7 +150,7 @@ final class ComposerTextController: NSObject, NSTextViewDelegate, @preconcurrenc
     /// The text the last edits touched, restyled once no input method composes.
     private var pendingStyle: NSRange?
     private var isStyling = false
-    /// How many ```` ``` ```` the text holds, so an edit that adds or removes one restyles what follows.
+    /// How many fence lines the text holds, so an edit that makes or unmakes one restyles what follows.
     private var fenceCount = 0
     /// A second layout of the same text at the width SwiftUI proposes, so measuring never moves the
     /// text the person sees.
@@ -195,9 +197,10 @@ final class ComposerTextController: NSObject, NSTextViewDelegate, @preconcurrenc
     func height(forWidth width: CGFloat) -> CGFloat {
         let inset = textView.textContainerInset
         let textWidth = max(1, width - 2 * inset.width)
-        if measuringContainer.size.width != textWidth {
-            measuringContainer.size = NSSize(width: textWidth, height: .greatestFiniteMagnitude)
-        }
+        // Past the most lines the height is the most lines', so the measuring stops there rather than
+        // laying out a long draft whole on every keystroke.
+        let size = NSSize(width: textWidth, height: maxHeight + lineHeight)
+        if measuringContainer.size != size { measuringContainer.size = size }
         measuring.ensureLayout(for: measuringContainer)
         var used = measuring.usedRect(for: measuringContainer).maxY
         used = max(used, measuring.extraLineFragmentRect.maxY)
@@ -205,6 +208,17 @@ final class ComposerTextController: NSObject, NSTextViewDelegate, @preconcurrenc
     }
 
     // MARK: - Text
+
+    /// A disabled composer (`.disabled`, which reaches AppKit views only through the environment) takes no
+    /// typing, and lets go of the keyboard.
+    func setEnabled(_ enabled: Bool) {
+        guard textView.isEditable != enabled else { return }
+        textView.isEditable = enabled
+        textView.isSelectable = enabled
+        // At once, as a disabled text field ends its editing.
+        guard !enabled, let window = textView.window, window.firstResponder === textView else { return }
+        window.makeFirstResponder(nil)
+    }
 
     func apply(style: ComposerTextStyle) {
         guard styler.style != style else { return }
@@ -217,6 +231,7 @@ final class ComposerTextController: NSObject, NSTextViewDelegate, @preconcurrenc
         textView.placeholderFont = styler.baseFont
         textView.markdownEditing = styler.style.showsMarkdown
         textView.typingAttributes = styler.baseAttributes
+        textView.insertionPointColor = styler.textColor
         restyle(NSRange(location: 0, length: textView.textStorage?.length ?? 0))
         scrollView?.invalidateIntrinsicContentSize()
     }
@@ -232,7 +247,7 @@ final class ComposerTextController: NSObject, NSTextViewDelegate, @preconcurrenc
         storage.endEditing()
         isStyling = false
         pendingStyle = nil
-        fenceCount = Self.fenceCount(in: storage.string as NSString)
+        fenceCount = ComposerMarkdownSpans.fenceLineCount(in: storage.string as NSString)
         restyle(NSRange(location: 0, length: storage.length))
         undo.removeAllActions()
         textView.setSelectedRange(NSRange(location: storage.length, length: 0))
@@ -241,7 +256,10 @@ final class ComposerTextController: NSObject, NSTextViewDelegate, @preconcurrenc
     }
 
     /// Puts an edit through the text view, so undo and the delegate see it as typing.
+    /// Each is its own undo step.
     func perform(_ edit: ComposerMarkdown.Edit) {
+        textView.breakUndoCoalescing()
+        defer { textView.breakUndoCoalescing() }
         guard textView.shouldChangeText(in: edit.range, replacementString: edit.replacement),
               let storage = textView.textStorage else { return }
         storage.replaceCharacters(in: edit.range, with: NSAttributedString(string: edit.replacement,
@@ -251,10 +269,18 @@ final class ComposerTextController: NSObject, NSTextViewDelegate, @preconcurrenc
         textView.scrollRangeToVisible(edit.selection)
     }
 
-    /// Restyles what changed once no input method composes.
+    /// Once no input method composes: restyles what changed and gives the draft the committed text. A
+    /// composition committed by a click elsewhere or a send (`unmarkText`) changes the text without
+    /// `textDidChange`.
     func compositionEnded() {
         guard !textView.hasMarkedText() else { return }
         restylePending()
+        syncDraft()
+    }
+
+    private func syncDraft() {
+        let string = textView.string
+        if let text, !text.wrappedValue.utf16.elementsEqual(string.utf16) { text.wrappedValue = string }
     }
 
     private func restylePending() {
@@ -280,7 +306,7 @@ final class ComposerTextController: NSObject, NSTextViewDelegate, @preconcurrenc
         var range = editedRange
         // A fence opened or closed changes every line after it.
         let string = textStorage.string as NSString
-        let fences = Self.fenceCount(in: string)
+        let fences = ComposerMarkdownSpans.fenceLineCount(in: string)
         if fences != fenceCount {
             fenceCount = fences
             let paragraph = string.paragraphRange(for: range)
@@ -294,26 +320,13 @@ final class ComposerTextController: NSObject, NSTextViewDelegate, @preconcurrenc
         pendingStyle = range
     }
 
-    private static func fenceCount(in string: NSString) -> Int {
-        var count = 0
-        var location = 0
-        while location < string.length {
-            let found = string.range(of: "```", options: [], range: NSRange(location: location, length: string.length - location))
-            guard found.location != NSNotFound else { break }
-            count += 1
-            location = NSMaxRange(found)
-        }
-        return count
-    }
-
     // MARK: - NSTextViewDelegate
 
     func textDidChange(_ notification: Notification) {
         scrollView?.invalidateIntrinsicContentSize()
         guard !textView.hasMarkedText() else { return }
         restylePending()
-        let string = textView.string
-        if let text, !text.wrappedValue.utf16.elementsEqual(string.utf16) { text.wrappedValue = string }
+        syncDraft()
     }
 
     func textViewDidChangeSelection(_ notification: Notification) {
@@ -321,8 +334,8 @@ final class ComposerTextController: NSObject, NSTextViewDelegate, @preconcurrenc
         let selection = textView.selectedRange()
         textView.typingAttributes = styler.typingAttributes(in: storage, at: selection.location)
         // The caret moved by the composer (a restored selection, a chosen file) comes into view, as one
-        // moved by a key does.
-        textView.scrollRangeToVisible(NSRange(location: NSMaxRange(selection), length: 0))
+        // moved by a key does. A selection being extended scrolls as AppKit scrolls it.
+        if selection.length == 0 { textView.scrollRangeToVisible(selection) }
     }
 
     func undoManager(for view: NSTextView) -> UndoManager? { undo }
@@ -424,9 +437,7 @@ final class ComposerMarkdownTextView: NSTextView {
     }
 
     func toggle(_ mark: ComposerMarkdown.InlineMark) {
-        breakUndoCoalescing()
         controller?.perform(ComposerMarkdown.toggle(mark, in: string, selection: selectedRange()))
-        breakUndoCoalescing()
     }
 
     /// Tab or Shift-Tab on a list line or over several lines. False where Tab keeps its other uses.
@@ -436,7 +447,6 @@ final class ComposerMarkdownTextView: NSTextView {
               let edit = ComposerMarkdown.indent(in: string, selection: selectedRange(), outdent: outdent) else {
             return false
         }
-        breakUndoCoalescing()
         controller?.perform(edit)
         return true
     }
@@ -458,7 +468,6 @@ final class ComposerMarkdownTextView: NSTextView {
         guard !hasMarkedText() else { return super.insertNewlineIgnoringFieldEditor(nil) }
         if controller?.actions.newline() == true { return }
         if markdownEditing, let edit = ComposerMarkdown.newline(in: string, selection: selectedRange()) {
-            breakUndoCoalescing()
             controller?.perform(edit)
             return
         }
@@ -468,7 +477,6 @@ final class ComposerMarkdownTextView: NSTextView {
     override func deleteBackward(_ sender: Any?) {
         if markdownEditing, !hasMarkedText(),
            let edit = ComposerMarkdown.deleteBackward(in: string, selection: selectedRange()) {
-            breakUndoCoalescing()
             controller?.perform(edit)
             return
         }
@@ -563,7 +571,7 @@ struct ComposerMarkdownStyler {
     private let strongFont: NSFont
     private let emphasisFont: NSFont
     private let codeFont: NSFont
-    private let textColor: NSColor
+    let textColor: NSColor
     private let secondaryColor: NSColor
     private let syntaxColor: NSColor
     private let codeBackground = NSColor(name: nil) { appearance in
@@ -653,7 +661,13 @@ struct ComposerMarkdownStyler {
     func typingAttributes(in storage: NSTextStorage, at location: Int) -> [NSAttributedString.Key: Any] {
         var attributes = baseAttributes
         guard storage.length > 0 else { return attributes }
-        let index = min(max(0, location - 1), storage.length - 1)
+        let string = storage.string as NSString
+        var index = min(max(0, location - 1), storage.length - 1)
+        // At a line's start the line's own paragraph counts, not the one before its line break.
+        if location > 0, [0x0A, 0x0D].contains(string.character(at: index)) {
+            guard location < storage.length, ![0x0A, 0x0D].contains(string.character(at: location)) else { return attributes }
+            index = location
+        }
         if let paragraph = storage.attribute(.paragraphStyle, at: index, effectiveRange: nil) {
             attributes[.paragraphStyle] = paragraph
         }

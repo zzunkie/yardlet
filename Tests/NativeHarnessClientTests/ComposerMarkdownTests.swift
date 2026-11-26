@@ -86,6 +86,7 @@ final class ComposerMarkdownTests: XCTestCase {
         XCTAssertEqual(indent("[a\n\nb]"), "  [a\n\n  b]", "Blank lines in between stay empty")
         XCTAssertEqual(indent("  [a\n  b]", outdent: true), "[a\nb]")
         XCTAssertEqual(indent("- a\n[- b\n]- c"), "- a\n  [- b\n]- c", "A line the selection ends at the start of stays")
+        XCTAssertNil(indent("a\n[\n\n]b"), "Only blank lines selected: nothing moves")
     }
 
     func testBackspaceRightAfterAMarkerStepsOutOrTakesTheMarker() {
@@ -108,6 +109,9 @@ final class ComposerMarkdownTests: XCTestCase {
         XCTAssertEqual(toggle(.code, "run [swift build]"), "run `[swift build]`")
         XCTAssertEqual(toggle(.code, "run `[swift build]`"), "run [swift build]")
         XCTAssertEqual(toggle(.bold, "type |"), "type **|**", "With no selection the caret goes between the marks")
+        // ⌘B, ⌘I, ⌘I: bold, then bold and italic, then bold again.
+        XCTAssertEqual(toggle(.italic, "***[word]***"), "**[word]**", "Only italic's star goes")
+        XCTAssertEqual(toggle(.bold, "***[word]***"), "*[word]*", "Only bold's stars go")
     }
 
     func testTheSpansDimTheMarksAndKnowListsQuotesAndCodeBlocks() {
@@ -120,6 +124,14 @@ final class ComposerMarkdownTests: XCTestCase {
         }
         XCTAssertEqual(kinds(of: "굵게"), [.strong])
         XCTAssertEqual(kinds(of: "slanted"), [.emphasis])
+        let korean = "*강조*를 하고 _밑줄_은 단어 끝에서만" as NSString
+        let koreanSpans = ComposerMarkdownSpans(text: korean, range: NSRange(location: 0, length: korean.length))
+        XCTAssertTrue(koreanSpans.runs.contains { $0.kind == .emphasis && korean.substring(with: $0.range) == "강조" },
+                      "A star marks emphasis before a particle too")
+        XCTAssertFalse(koreanSpans.runs.contains { $0.kind == .emphasis && korean.substring(with: $0.range) == "밑줄" },
+                       "An underscore inside a word does not")
+        XCTAssertEqual(ComposerMarkdownSpans.fenceLineCount(in: "```\n    ```\na```\n   ```swift"), 2,
+                       "Fence lines are counted by the rule the spans read them with")
         XCTAssertEqual(kinds(of: "code`"), [.code, .syntax])
         XCTAssertEqual(spans.runs.filter { $0.kind == .syntax && text.substring(with: $0.range) == "**" }.count, 2)
         XCTAssertEqual(kinds(of: "-"), [.listMarker])
@@ -182,6 +194,24 @@ final class ComposerMarkdownTests: XCTestCase {
         XCTAssertEqual(draft, typed + "**하**", "The commit reaches the draft once")
         let committed = try XCTUnwrap(storage.attribute(.font, at: end + 2, effectiveRange: nil) as? NSFont)
         XCTAssertGreaterThan(committed.fontDescriptor.weight, NSFont.Weight.regular.rawValue, "And is styled then")
+
+        // A composition committed by a send or a click elsewhere (`unmarkText`, no `textDidChange`)
+        // reaches the draft too.
+        let before = draft
+        textView.setMarkedText("녕", selectedRange: NSRange(location: 1, length: 0),
+                               replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(draft, before)
+        textView.unmarkText()
+        XCTAssertEqual(draft, before + "녕", "The last syllable is kept")
+
+        // A new line after a list item starts flush, not hanging under the item.
+        textView.insertText("\n", replacementRange: textView.selectedRange())
+        XCTAssertEqual((textView.typingAttributes[.paragraphStyle] as? NSParagraphStyle)?.headIndent ?? 0, 0)
+
+        // A disabled composer takes no typing.
+        controller.setEnabled(false)
+        XCTAssertFalse(textView.isEditable)
+        controller.setEnabled(true)
 
         // The draft set from outside (a sent message, a chosen command) replaces the text and its undo.
         controller.replaceText(with: "")
