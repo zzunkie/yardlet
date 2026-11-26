@@ -4952,12 +4952,15 @@ final class AppModel {
     /// no write to the other app, no worktree removed. It is checked again right before, since
     /// the person may have started on it while the sources were read; an attached task is never
     /// archived here, so no provider is asked. Archiving drops the task's local caches as an
-    /// archive always does; there is no draft or queued message to lose, by that check.
+    /// archive always does; there is no draft or queued message to lose, by that check. The row
+    /// records that the provider has the session archived, so restoring it unarchives it there as
+    /// restoring Yardlet's own archive does, where the provider keeps an archive of its own (a
+    /// Codex thread; a Claude session's archive is the Claude app's list, which nothing writes).
     private func archiveFollowingSource(_ id: UUID, sourceActivity: Date) async {
         guard let task = store.sessions.first(where: { $0.id == id }), !task.isPinned,
               task.updatedAt <= sourceActivity, !sessionListFollowKept(id),
               !sessionListFollowKeepsListed(task) else { return }
-        await removeSessionState(for: task, removal: .archive(providerArchived: false))
+        await removeSessionState(for: task, removal: .archive(providerArchived: true))
     }
 
     private static let sessionListFollowKeptListedKey = "Yardlet.sessionListFollow.keptListed"
