@@ -281,7 +281,6 @@
 "Active flags: %@" = "有効なフラグ: %@";
 "Search tasks" = "タスクを検索";
 "Select runtime" = "ランタイムを選択";
-"Steer" = "ステア";
 "Codex steer requires an active turn" = "Codex のステアにはアクティブなターンが必要です";
 "Codex steer is unavailable for this runtime" = "このランタイムでは Codex のステアを利用できません";
 "Send" = "送信";
@@ -959,6 +958,7 @@
 "Last checked: %@" = "最終確認: %@";
 "The task could not start. Your draft is still here." = "タスクを開始できませんでした。下書きはそのまま残っています。";
 "Add a harness to start a task." = "タスクを開始するにはハーネスを追加してください。";
+"Connect a harness, such as Claude Code or Codex, to start a task." = "タスクを開始するには、Claude Code や Codex などのハーネスを接続してください。";
 "Project" = "プロジェクト";
 "No available harnesses" = "利用可能なハーネスがありません";
 "Choose harness" = "ハーネスを選択";
@@ -1508,7 +1508,9 @@
 "Return" = "Return";
 "⌘Return for multiline" = "複数行には ⌘Return";
 "Always ⌘Return" = "常に ⌘Return";
-"Follow-up behavior" = "フォローアップの動作";
+"Messages sent while a task works" = "タスクの作業中に送ったメッセージ";
+"Send now reaches the running turn without stopping it. After the turn waits until it ends." = "「今すぐ送信」は実行中のターンを止めずにメッセージを届けます。「ターンの終了後」はターンが終わるまで待ってから送信します。";
+"After the turn" = "ターンの終了後";
 "Send or clear the current draft before editing a queued message." = "キュー内のメッセージを編集する前に、現在の下書きを送信または消去してください。";
 "Session limit reached" = "セッションの上限に達しました";
 "Weekly limit reached" = "週間の上限に達しました";
@@ -1567,8 +1569,8 @@
 "Antigravity did not take this message." = "Antigravity はこのメッセージを受け付けませんでした。";
 "Delivered · Antigravity reads it at its next step" = "送信済み · 次のステップで Antigravity が読み込みます";
 "Send now: Antigravity reads it at its next step without stopping" = "今すぐ送信: 停止せずに次のステップで Antigravity が読み込みます";
-"Steer Antigravity turns (experimental)" = "Antigravity のターンをステア（実験的）";
-"A message sent while an Antigravity task works reaches it at its next step, as with Claude Code, instead of after the turn. Adds a small Antigravity plugin to ~/.gemini/config/plugins, which Antigravity outside Yardlet also runs and which does nothing there. Turning this off removes it." = "Antigravity のタスクが作業中に送ったメッセージは、ターンの終了後ではなく、Claude Code と同様に次のステップで届きます。~/.gemini/config/plugins に小さな Antigravity プラグインを追加します。Yardlet 外の Antigravity もこのプラグインを実行しますが、そこでは何もしません。オフにすると削除されます。";
+"Send now in Antigravity tasks (experimental)" = "Antigravity タスクで今すぐ送信（実験的）";
+"Antigravity reads a message sent while it works at its next step, as Claude Code does, rather than after the turn. Adds a small plugin to ~/.gemini/config/plugins that does nothing outside Yardlet; turning this off removes it." = "作業中に送ったメッセージを、Antigravity はターンの終了後ではなく Claude Code と同様に次のステップで読み込みます。~/.gemini/config/plugins に小さなプラグインを追加しますが、Yardlet の外では何もしません。オフにすると削除されます。";
 "Claude Code cannot send this message now." = "Claude Code は現在このメッセージを送信できません。";
 "Copy message" = "メッセージをコピー";
 "Work locally" = "ローカルで作業";
@@ -1743,6 +1745,7 @@
 "Used a tool" = "ツールを使用";
 "Used %lld tools" = "%lld個のツールを使用";
 "Awaiting approval" = "承認待ち";
+"%lld more waiting" = "ほか%lld件が待機中";
 "Needs input" = "入力が必要";
 "Task encountered a system error" = "タスクでシステムエラーが発生しました";
 "Working" = "作業中";
@@ -3101,7 +3104,7 @@
 "Users and Access → Integrations → App Store Connect API. An Account Holder or Admin makes a team key and picks its role: Admin covers every tool here, App Manager all but answering reviews. An individual key, made in your profile, has your own access." = "「ユーザーとアクセス」→「統合」→「App Store Connect API」から作成します。Account Holder または Admin がチームキーを作成し、役割を選択します（Admin はここにあるすべてのツールに対応し、App Manager はレビューへの返信を除くすべてに対応します）。プロフィールから作成する個人キーには、ご自身のアクセス権限が適用されます。";
 "Xcode didn't answer: %@" = "Xcode から応答がありませんでした: %@";
 "This build of Yardlet can't sign App Store Connect tokens." = "このビルドの Yardlet では、App Store Connect トークンに署名できません。";
-"Show servers tasks start" = "タスクが起動したサーバーを表示";
+"Show servers that tasks start" = "タスクが起動したサーバーを表示";
 "Shows the server's localhost address beside the task's title." = "タスクのタイトルの横にサーバーの localhost アドレスを表示します。";
 "Open %@ in this task's browser" = "このタスクのブラウザで %@ を開く";
 "and %lld more" = "ほか %lld 件";

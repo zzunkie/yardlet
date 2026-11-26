@@ -281,7 +281,6 @@
 "Active flags: %@" = "已启用标志：%@";
 "Search tasks" = "搜索任务";
 "Select runtime" = "选择运行时";
-"Steer" = "引导";
 "Codex steer requires an active turn" = "Codex 引导需要有正在进行的轮次";
 "Codex steer is unavailable for this runtime" = "此运行时不支持 Codex 引导";
 "Send" = "发送";
@@ -959,6 +958,7 @@
 "Last checked: %@" = "上次检查：%@";
 "The task could not start. Your draft is still here." = "任务无法启动。您的草稿仍保留在此处。";
 "Add a harness to start a task." = "添加引擎以开始任务。";
+"Connect a harness, such as Claude Code or Codex, to start a task." = "连接 Claude Code 或 Codex 等引擎以开始任务。";
 "Project" = "项目";
 "No available harnesses" = "没有可用的引擎";
 "Choose harness" = "选择引擎";
@@ -1508,7 +1508,9 @@
 "Return" = "Return";
 "⌘Return for multiline" = "⌘Return 换行";
 "Always ⌘Return" = "始终使用 ⌘Return";
-"Follow-up behavior" = "后续消息处理方式";
+"Messages sent while a task works" = "任务运行时发送的消息";
+"Send now reaches the running turn without stopping it. After the turn waits until it ends." = "“立即发送”会在不停止当前轮次的情况下送达消息。“轮次结束后”会等到轮次结束再发送。";
+"After the turn" = "轮次结束后";
 "Send or clear the current draft before editing a queued message." = "请先发送或清空当前草稿，再编辑排队的消息。";
 "Session limit reached" = "已达到会话限额";
 "Weekly limit reached" = "已达到每周限额";
@@ -1567,8 +1569,8 @@
 "Antigravity did not take this message." = "Antigravity 未接收此消息。";
 "Delivered · Antigravity reads it at its next step" = "已发送 · Antigravity 将在下一步骤读取";
 "Send now: Antigravity reads it at its next step without stopping" = "立即发送：Antigravity 将在下一步骤读取，不停止当前任务";
-"Steer Antigravity turns (experimental)" = "引导 Antigravity 轮次（实验性）";
-"A message sent while an Antigravity task works reaches it at its next step, as with Claude Code, instead of after the turn. Adds a small Antigravity plugin to ~/.gemini/config/plugins, which Antigravity outside Yardlet also runs and which does nothing there. Turning this off removes it." = "在 Antigravity 任务运行期间发送的消息会像 Claude Code 一样在下一步骤送达，而不是等到轮次结束后。此功能会在 ~/.gemini/config/plugins 中添加一个小型 Antigravity 插件；Yardlet 之外的 Antigravity 也会运行它，但在那里不起任何作用。关闭此功能会将其移除。";
+"Send now in Antigravity tasks (experimental)" = "在 Antigravity 任务中立即发送（实验性）";
+"Antigravity reads a message sent while it works at its next step, as Claude Code does, rather than after the turn. Adds a small plugin to ~/.gemini/config/plugins that does nothing outside Yardlet; turning this off removes it." = "Antigravity 会像 Claude Code 一样，在下一步骤读取工作期间发送的消息，而不是等到轮次结束后。此功能会在 ~/.gemini/config/plugins 中添加一个小型插件，它在 Yardlet 之外不起任何作用；关闭此功能会将其移除。";
 "Claude Code cannot send this message now." = "Claude Code 当前无法发送此消息。";
 "Copy message" = "复制消息";
 "Work locally" = "在本地工作";
@@ -1743,6 +1745,7 @@
 "Used a tool" = "已使用 1 个工具";
 "Used %lld tools" = "已使用 %lld 个工具";
 "Awaiting approval" = "等待批准";
+"%lld more waiting" = "另有 %lld 项等待中";
 "Needs input" = "需要输入";
 "Task encountered a system error" = "任务遇到系统错误";
 "Working" = "处理中";
@@ -3101,7 +3104,7 @@
 "Users and Access → Integrations → App Store Connect API. An Account Holder or Admin makes a team key and picks its role: Admin covers every tool here, App Manager all but answering reviews. An individual key, made in your profile, has your own access." = "用户和访问 → 整合 → App Store Connect API。账户持有人或管理员可创建团队密钥并选择角色：“管理”包含此处所有工具，“App 管理”包含除回复评论外的所有工具。个人密钥在个人资料中创建，拥有你本人的访问权限。";
 "Xcode didn't answer: %@" = "Xcode 未响应：%@";
 "This build of Yardlet can't sign App Store Connect tokens." = "当前版本的 Yardlet 无法签署 App Store Connect 令牌。";
-"Show servers tasks start" = "显示任务启动的服务器";
+"Show servers that tasks start" = "显示任务启动的服务器";
 "Shows the server's localhost address beside the task's title." = "在任务标题旁显示服务器的 localhost 地址。";
 "Open %@ in this task's browser" = "在此任务的浏览器中打开 %@";
 "and %lld more" = "以及另外 %lld 项";
