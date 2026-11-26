@@ -957,7 +957,15 @@ final class BrowserHostVaultQA {
                 return check("agent setup: the setup page's snapshot names its code field", false, snapshot?.text ?? "")
             }
             let fill = Task { await agent(VaultToolCatalog.fillCredential, ["ref": .string(ref), "kind": .string("one_time_code")]) }
+            // The panel's task asks the person, so Yardlet's card asks about the fill before it runs
+            // (`AgentToolBroker+Approvals`); the QA allows it as the person would, and answers no other card.
+            let card = { BrowserHostQAFixture.model?.sessionTools.approvals(for: self.panelSession)
+                .first { $0.request.title == L10n.string("Allow this task to fill a saved sign-in?") } }
+            _ = await waitUntilAsync(.seconds(20)) { card() != nil || controller.vaultSetupOffer?.ask != nil }
+            let allowed = card().map { BrowserHostQAFixture.model?.sessionTools.answer($0.id, allow: true) == true } ?? false
             let asked = await waitUntilAsync(.seconds(20)) { controller.vaultSetupOffer?.ask != nil }
+            // A fill still waiting on a card would wait out the task's wait for the person; cancelled, it takes the card away.
+            if !asked { fill.cancel() }
             let offer = controller.vaultSetupOffer
             capture(controller, named: saves ? "vault-panel-agent-setup-bar.png" : "vault-panel-agent-setup-replace.png")
             if saves { controller.acceptSetupOffer() } else { controller.dismissSetupOffer() }
@@ -975,12 +983,12 @@ final class BrowserHostVaultQA {
                       asked && offer?.setups.first?.account == "agent@example.test" && result?.isError == false
                         && result?.text.contains("The person saved the page's two-factor setup") == true
                         && keptKey == first && kept?.sites.isEmpty == false && confirmed,
-                      "asked \(asked), kept \(keptKey == first), confirmed \(confirmed): \(result?.text ?? "no result")")
+                      "card allowed \(allowed), asked \(asked), kept \(keptKey == first), confirmed \(confirmed): \(result?.text ?? "no result")")
             } else {
                 check("agent setup: Not Now keeps nothing and the agent hears that the person did not save it",
                       asked && offer?.target?.id == kept?.id && result?.isError == true
                         && result?.text.contains("chose not to save") == true && keptKey == first,
-                      "asked \(asked), key unchanged \(keptKey == first): \(result?.text ?? "no result")")
+                      "card allowed \(allowed), asked \(asked), key unchanged \(keptKey == first): \(result?.text ?? "no result")")
             }
         }
     }
