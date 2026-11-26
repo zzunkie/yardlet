@@ -11,12 +11,18 @@ final class TaskArchiveTests: XCTestCase {
         title: String = "Archived Codex task",
         threadID: String = "codex-thread-archived",
         projectID: UUID? = nil,
-        status: SessionStatus = .completed
+        status: SessionStatus = .completed,
+        runtime: URL? = nil
     ) -> SessionRecord {
-        SessionRecord(
+        // A task that reaches its runtime has its account folder there, as a real account has one.
+        let connection = runtime.map {
+            ProviderConnection(id: "codex-work", name: "Work", harness: .codex, providerID: nil,
+                               homePath: $0.deletingLastPathComponent().path, credentialSelector: nil)
+        } ?? connection
+        return SessionRecord(
             harness: .codex,
             workspaceURL: URL(filePath: "/tmp/archive-project"),
-            runtimeExecutableURL: URL(filePath: "/tmp/codex"),
+            runtimeExecutableURL: runtime ?? URL(filePath: "/tmp/codex"),
             title: title,
             titleOrigin: .provider,
             status: status,
@@ -152,8 +158,7 @@ final class TaskArchiveTests: XCTestCase {
         )
         let project = model.projects.ensureProject(forRoot: URL(filePath: "/tmp/archive-project"))
         model.projects.hide(project.id)
-        var session = codexTask(projectID: project.id)
-        session.runtimeExecutableURL = executable
+        let session = codexTask(projectID: project.id, runtime: executable)
         try await repository.upsert(session)
         try await repository.archive(id: session.id, providerArchived: true)
         await model.loadArchivedTasks()
@@ -195,61 +200,126 @@ final class TaskArchiveTests: XCTestCase {
         XCTAssertEqual(model.store.sessions, [session])
     }
 
-    func testAFailedProviderUnarchiveKeepsTheTaskArchived() async throws {
+    /// A Codex task that cannot reach its thread stays where it was and says why, attached or not:
+    /// archiving with its CLI missing keeps it listed, and a failed `thread/unarchive` keeps it
+    /// archived, to be tried again. Codex answering that the thread is already out of the list the
+    /// action moves it from (archived or unarchived in the Codex app, or gone) lets the action go on.
+    func testCodexThreadFailuresKeepTheTaskWhereItWasUnlessCodexAlreadyMovedTheThread() async throws {
         let executable = try fakeCodexExecutable()
+        let missing = executable.deletingLastPathComponent().appending(path: "missing-codex")
         let transport = FakeCodexTransport(responses: [
             "initialize": [.object(["platformOs": .string("macos")])]
+        ], errorResponses: [
+            "thread/archive": [.object(["code": .integer(-32600),
+                "message": .string("no rollout found for thread id codex-thread-archived")])],
+            "thread/unarchive": [
+                .object(["code": .integer(-32603), "message": .string("failed to move the rollout")]),
+                .object(["code": .integer(-32600),
+                         "message": .string("no archived rollout found for thread id codex-thread-archived")])
+            ]
         ])
         let adapter = CodexAdapter(executableURL: executable, transport: transport)
-        var session = codexTask()
-        session.runtimeExecutableURL = executable
-        let repository = InMemorySessionRepository(sessions: [session])
-        try await repository.archive(id: session.id, providerArchived: true)
+        let unreachableAdapter = CodexAdapter(executableURL: missing, transport: FakeCodexTransport(responses: [:]))
+        let session = codexTask(runtime: executable)
+        let unreachable = codexTask(title: "No CLI", threadID: "codex-thread-unreachable", runtime: missing)
+        let repository = InMemorySessionRepository(sessions: [session, unreachable])
         let model = AppModel(
-            store: SessionStore(repository: repository),
-            runtimeSelections: RuntimeSelectionStore(defaults: try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("Archive")))),
-            registry: HarnessRegistry { _, _ in adapter },
+            store: SessionStore(sessions: [session, unreachable], repository: repository),
+            runtimeSelections: RuntimeSelectionStore(
+                defaults: try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("Archive"))), discoversRuntimes: false),
+            registry: HarnessRegistry { _, url in url.lastPathComponent == "missing-codex" ? unreachableAdapter : adapter },
             restoresIndexOnLaunch: false
         )
         await model.loadArchivedTasks()
-        let record = try XCTUnwrap(model.store.archivedSessions?.first)
 
-        await model.unarchive(record)
-
-        XCTAssertNotNil(model.archivedTaskError)
-        XCTAssertTrue(model.store.sessions.isEmpty)
-        XCTAssertEqual(model.store.archivedSessions?.map(\.id), [session.id])
-        let stillArchived = try await repository.loadArchivedSessions()
-        XCTAssertEqual(stillArchived.first?.isProviderArchived, true, "A retry still unarchives the thread")
-    }
-
-    func testArchivingAnAttachedCodexTaskRecordsTheProviderArchive() async throws {
-        let executable = try fakeCodexExecutable()
-        let transport = FakeCodexTransport(responses: [
-            "initialize": [.object(["platformOs": .string("macos")])],
-            "thread/start": [.object(["thread": .object(["id": .string("codex-thread-attached")])])],
-            "thread/archive": [.object([:])]
-        ])
-        let adapter = CodexAdapter(executableURL: executable, transport: transport)
-        let model = AppModel(
-            store: SessionStore(repository: InMemorySessionRepository()),
-            runtimeSelections: RuntimeSelectionStore(defaults: try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("Archive")))),
-            registry: HarnessRegistry { _, _ in adapter },
-            restoresIndexOnLaunch: false
-        )
-        let created = await model.createSession(harness: .codex, workspaceURL: URL(filePath: "/tmp/archive-attached"),
-            runtimeExecutableURL: executable, title: "Attached")
-        let session = try XCTUnwrap(created)
-        XCTAssertTrue(model.isAttached(session.id))
-        await model.loadArchivedTasks()
+        await model.archive(unreachable)
+        XCTAssertNotNil(model.bootstrapError)
+        XCTAssertTrue(model.store.sessions.contains { $0.id == unreachable.id }, "Not archived in Yardlet alone")
+        XCTAssertEqual(model.store.archivedSessions, [])
 
         await model.archive(session)
+        XCTAssertNil(model.bootstrapError, "Codex no longer lists the thread open: nothing is left to archive there")
+        let record = try XCTUnwrap(model.store.archivedSessions?.first)
+        XCTAssertEqual(record.id, session.id)
+        XCTAssertTrue(record.isProviderArchived)
 
-        let methods = await transport.requestMethods
-        XCTAssertEqual(methods.last, "thread/archive")
-        XCTAssertEqual(model.store.archivedSessions?.map(\.id), [session.id])
-        XCTAssertEqual(model.store.archivedSessions?.first?.isProviderArchived, true)
-        await model.shutdown()
+        await model.unarchive(record)
+        XCTAssertNotNil(model.archivedTaskError)
+        XCTAssertFalse(model.store.sessions.contains { $0.id == session.id })
+        let stillArchived = try await repository.loadArchivedSessions()
+        XCTAssertEqual(stillArchived.first?.isProviderArchived, true, "A retry still unarchives the thread")
+
+        await model.unarchive(record)
+        XCTAssertNil(model.archivedTaskError, "Codex no longer lists the thread archived: the task comes back")
+        XCTAssertEqual(model.store.sessions.first { $0.id == session.id }, session)
+        XCTAssertEqual(model.store.archivedSessions, [])
+        let requests = await transport.requests
+        XCTAssertEqual(requests.map(\.method), ["initialize", "thread/archive", "thread/unarchive", "thread/unarchive"])
+    }
+
+    /// Archiving a Codex task archives its thread in Codex whether a runtime holds the task or not,
+    /// with the same `thread/archive` through the App Server of its account and scope (Codex
+    /// archives a thread no App Server has loaded, 0.172.0), and leaves the same archived row.
+    /// Restoring it sends the same `thread/unarchive` and lists the task again, detached. Neither
+    /// resumes the thread or starts a turn. An existing row archived only in Yardlet stays as it is
+    /// (`testRestoringATaskYardletOnlyArchivedLocallyLeavesTheProviderAlone`).
+    func testAttachedAndDetachedCodexTasksArchiveAndUnarchiveTheirThreadTheSameWay() async throws {
+        for attached in [true, false] {
+            let executable = try fakeCodexExecutable()
+            let transport = FakeCodexTransport(responses: [
+                "initialize": [.object(["platformOs": .string("macos")]), .object(["platformOs": .string("macos")])],
+                "thread/start": [.object(["thread": .object(["id": .string("codex-thread-archived")])])],
+                "thread/archive": [.object([:])],
+                "thread/unarchive": [.object(["thread": .object(["id": .string("codex-thread-archived")])])]
+            ])
+            let adapter = YHPCodexCompatibilityAdapter(
+                adapter: CodexAdapter(executableURL: executable, transport: transport),
+                manifest: HarnessProtocolCompatibilityManifest.codex())
+            let detached = codexTask(runtime: executable)
+            let repository = InMemorySessionRepository(sessions: attached ? [] : [detached])
+            let model = AppModel(
+                store: SessionStore(sessions: attached ? [] : [detached], repository: repository),
+                runtimeSelections: RuntimeSelectionStore(defaults: try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("Archive")))),
+                registry: HarnessRegistry { _, _ in adapter },
+                restoresIndexOnLaunch: false
+            )
+            let session: SessionRecord
+            if attached {
+                let created = await model.createSession(harness: .codex, workspaceURL: URL(filePath: "/tmp/archive-attached"),
+                    runtimeExecutableURL: executable, title: "Attached")
+                session = try XCTUnwrap(created)
+            } else {
+                session = detached
+            }
+            XCTAssertEqual(model.isAttached(session.id), attached)
+            await model.loadArchivedTasks()
+
+            await model.archive(session)
+
+            XCTAssertNil(model.bootstrapError)
+            XCTAssertFalse(model.store.sessions.contains { $0.id == session.id })
+            XCTAssertFalse(model.isAttached(session.id))
+            let record = try XCTUnwrap(model.store.archivedSessions?.first)
+            XCTAssertEqual(record.id, session.id)
+            let persisted = try await repository.loadArchivedSessions()
+            XCTAssertEqual(persisted.map(\.isProviderArchived), [true], "attached: \(attached)")
+
+            await model.unarchive(record)
+
+            XCTAssertNil(model.archivedTaskError)
+            let restored = try XCTUnwrap(model.store.sessions.first { $0.id == session.id })
+            XCTAssertEqual(restored.providerSessionID, "codex-thread-archived")
+            if !attached { XCTAssertEqual(restored, detached) }
+            XCTAssertEqual(model.store.archivedSessions, [])
+            XCTAssertFalse(model.isAttached(session.id), "Restoring does not attach or resume the task")
+            let threadRequests = await transport.requests.filter {
+                ["thread/archive", "thread/unarchive", "thread/resume", "turn/start"].contains($0.method)
+            }
+            XCTAssertEqual(threadRequests.map { "\($0.method) \($0.params["threadId"]?.stringValue ?? "")" },
+                           ["thread/archive codex-thread-archived", "thread/unarchive codex-thread-archived"],
+                           "attached: \(attached)")
+            await model.shutdown()
+        }
     }
 
     func testArchiveListsTheTaskAndDeleteDoesNot() async throws {
@@ -308,10 +378,7 @@ final class TaskArchiveTests: XCTestCase {
         let adapter = YHPCodexCompatibilityAdapter(
             adapter: CodexAdapter(executableURL: executable, transport: transport),
             manifest: HarnessProtocolCompatibilityManifest.codex())
-        var session = codexTask()
-        session.runtimeExecutableURL = executable
-        session.connection = ProviderConnection(id: "codex-work", name: "Work", harness: .codex, providerID: nil,
-            homePath: executable.deletingLastPathComponent().path, credentialSelector: nil)
+        let session = codexTask(runtime: executable)
         let repository = InMemorySessionRepository(sessions: [session])
         try await repository.archive(id: session.id, providerArchived: true)
         let model = AppModel(
@@ -407,7 +474,7 @@ final class TaskArchiveTests: XCTestCase {
             XCTAssertEqual(calls, providesLifecycle ? [
                 "rename \(kept.id) Renamed",
                 "delete \(deleted.id)",
-                "archive \(kept.id)",
+                "archive stub-\(kept.id)",
                 "unarchive stub-\(kept.id)"
             ] : [])
             let refusedRenames = await (adapter as? RefusingRenameStubAdapter)?.renames ?? []
@@ -520,8 +587,8 @@ private actor LifecycleStubAdapter: HarnessAdapter, HarnessSessionLifecycleProvi
     }
     func close(_ handle: HarnessSessionHandle) async { await session.close(handle) }
 
-    func archiveProviderSession(_ handle: HarnessSessionHandle) async throws {
-        calls.append("archive \(handle.localSessionID)")
+    func archiveProviderSession(providerSessionID: String) async throws {
+        calls.append("archive \(providerSessionID)")
     }
 
     func unarchiveProviderSession(providerSessionID: String) async throws {

@@ -1341,15 +1341,16 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
         continuation?.resume(returning: result)
     }
 
-    func archiveThread(_ session: HarnessSessionHandle) async throws {
-        try requireRegistered(session)
+    /// Archives a thread by its ID, loaded here or not: `thread/archive` shuts a loaded thread down
+    /// and moves its rollout to `archived_sessions`, as the Codex app and CLI archive one. A thread
+    /// that is no longer open (archived elsewhere, or gone) is left as it is.
+    func archiveThread(threadID: String) async throws {
         try await ensureInitialized()
-        _ = try await transport.request(
-            CodexProtocol.archiveThread(
-                id: takeRequestID(),
-                threadID: session.providerSessionID
+        do {
+            _ = try await transport.request(
+                CodexProtocol.archiveThread(id: takeRequestID(), threadID: threadID)
             )
-        )
+        } catch let failure as CodexRPCRequestFailure where failure.isNoOpenThread {}
     }
 
     func backgroundTerminals(in session: HarnessSessionHandle) async throws -> [CodexBackgroundTerminal] {
@@ -1382,11 +1383,15 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
             id: takeRequestID(), threadID: session.providerSessionID))
     }
 
+    /// Brings an archived thread back to the open list. A thread that is no longer archived (unarchived
+    /// in the Codex app, say, or gone) is left as it is.
     func unarchiveThread(threadID: String) async throws {
         try await ensureInitialized()
-        _ = try await transport.request(
-            CodexProtocol.unarchiveThread(id: takeRequestID(), threadID: threadID)
-        )
+        do {
+            _ = try await transport.request(
+                CodexProtocol.unarchiveThread(id: takeRequestID(), threadID: threadID)
+            )
+        } catch let failure as CodexRPCRequestFailure where failure.isNoArchivedThread {}
     }
 
     func deleteThread(_ session: HarnessSessionHandle) async throws {
@@ -2426,8 +2431,8 @@ extension CodexAdapter: HarnessSessionBranching {
 
 /// A Codex task's archive, unarchive, delete, and rename also act on its thread.
 extension CodexAdapter: HarnessSessionLifecycleProviding {
-    func archiveProviderSession(_ session: HarnessSessionHandle) async throws {
-        try await archiveThread(session)
+    func archiveProviderSession(providerSessionID: String) async throws {
+        try await archiveThread(threadID: providerSessionID)
     }
 
     func unarchiveProviderSession(providerSessionID: String) async throws {

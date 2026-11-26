@@ -164,6 +164,18 @@ struct CodexRPCRequestFailure: LocalizedError, Equatable, Sendable {
     var isNoActiveTurn: Bool {
         payload["message"]?.stringValue?.hasPrefix("no active turn") == true
     }
+
+    /// `thread/archive` found no open thread by that ID: `-32600 "no rollout found for thread id
+    /// <id>"`, for a thread already archived and for one that is gone alike (0.172.0).
+    var isNoOpenThread: Bool {
+        payload["message"]?.stringValue?.hasPrefix("no rollout found for thread id") == true
+    }
+
+    /// `thread/unarchive` found no archived thread by that ID: `-32600 "no archived rollout found for
+    /// thread id <id>"`, for a thread that is open and for one that is gone alike (0.172.0).
+    var isNoArchivedThread: Bool {
+        payload["message"]?.stringValue?.hasPrefix("no archived rollout found for thread id") == true
+    }
 }
 
 /// A Codex thread that another App Server is writing, such as the one the ChatGPT app runs, cannot

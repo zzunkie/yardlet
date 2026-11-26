@@ -479,7 +479,7 @@ final class YHPCodexCompatibilityAdapterTests: XCTestCase {
         try await routed.selectCollaborationMode(try XCTUnwrap(modes.first), for: handle)
         try await routed.selectRunLocation(.approveForMe, for: handle)
         try await routed.setThreadName("Renamed", for: handle)
-        try await routed.archiveThread(handle)
+        try await routed.archiveThread(threadID: handle.providerSessionID)
 
         let forked = try await routed.fork(handle, newLocalSessionID: UUID())
         XCTAssertEqual(forked.providerSessionID, "codex-thread-forked")

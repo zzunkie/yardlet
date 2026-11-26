@@ -433,7 +433,7 @@ final class CodexAdapterTests: XCTestCase {
         )
 
         try await adapter.setThreadName("  Renamed task  ", for: handle)
-        try await adapter.archiveThread(handle)
+        try await adapter.archiveThread(threadID: handle.providerSessionID)
         try await adapter.deleteThread(handle)
 
         let requests = await transport.requests

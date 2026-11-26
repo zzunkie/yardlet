@@ -129,9 +129,11 @@ protocol HarnessStructuredPermissionResponding: Actor {
 /// Adapters without one do not conform, and those actions stay inside Yardlet's index.
 /// None of these calls resumes a session or starts a turn.
 protocol HarnessSessionLifecycleProviding: Actor {
-    func archiveProviderSession(_ session: HarnessSessionHandle) async throws
-    /// Restores a session this provider archived for Yardlet, by its provider ID. It takes no
-    /// handle because an archived session is not attached.
+    /// Archives a session by its provider ID, whether a task holds it attached or not. A session the
+    /// provider already lists as archived, or no longer has, is left as it is.
+    func archiveProviderSession(providerSessionID: String) async throws
+    /// Restores a session Yardlet archived in this provider, by its provider ID. A session the
+    /// provider already lists as open, or no longer has, is left as it is.
     func unarchiveProviderSession(providerSessionID: String) async throws
     func deleteProviderSession(_ session: HarnessSessionHandle) async throws
     func renameProviderSession(_ session: HarnessSessionHandle, to title: String) async throws

@@ -476,8 +476,11 @@ actor YHPCodexCompatibilityAdapter:
         )
     }
 
-    func archiveThread(_ session: HarnessSessionHandle) async throws {
-        try await performSessionAction(.codexThreadArchive, session: session)
+    func archiveThread(threadID: String) async throws {
+        let _: HarnessProtocolAcknowledgement = try await core.perform(
+            .codexThreadArchive,
+            params: HarnessProtocolCodexThreadReference(providerSessionID: threadID)
+        )
     }
 
     func unarchiveThread(threadID: String) async throws {
@@ -813,8 +816,8 @@ extension YHPCodexCompatibilityAdapter: CodexBackgroundTerminalControlling {
 }
 
 extension YHPCodexCompatibilityAdapter: HarnessSessionLifecycleProviding {
-    func archiveProviderSession(_ session: HarnessSessionHandle) async throws {
-        try await archiveThread(session)
+    func archiveProviderSession(providerSessionID: String) async throws {
+        try await archiveThread(threadID: providerSessionID)
     }
 
     func unarchiveProviderSession(providerSessionID: String) async throws {

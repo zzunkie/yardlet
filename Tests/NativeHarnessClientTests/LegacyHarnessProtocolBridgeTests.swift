@@ -654,7 +654,7 @@ final class LegacyHarnessProtocolBridgeTests: XCTestCase {
             HarnessProtocolRequest(
                 id: "codex-archive",
                 method: .codexThreadArchive,
-                typedParams: HarnessProtocolSessionReference(localSessionID: localSessionID)
+                typedParams: HarnessProtocolCodexThreadReference(providerSessionID: "codex-thread-1")
             )
         )
         _ = try await bridge.handle(
