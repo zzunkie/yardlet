@@ -42,7 +42,7 @@ final class ComposerSessionControlsRenderingTests: XCTestCase {
             host.settle()
             let elements = host.accessibilityElements()
             host.close()
-            let field = try XCTUnwrap(elements.firstIndex { $0.role == "AXTextField" }, name)
+            let field = try XCTUnwrap(elements.firstIndex { $0.role == "AXTextArea" }, name)
             rows[name] = Array(elements[(field + 1)...])
         }
         let shared = [L10n.string("Add files and more"), L10n.string("Permissions"),

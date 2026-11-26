@@ -978,7 +978,7 @@ final class NewTaskHomeRenderingTests: XCTestCase {
             size: size, appearance: .light)
         defer { host.close() }
         placeOffscreen(host)
-        let field = try XCTUnwrap(views(NSTextField.self, in: host.hosting).first { $0.isEditable })
+        let field = try XCTUnwrap(views(ComposerMarkdownTextView.self, in: host.hosting).first)
 
         XCTAssertTrue(host.window.makeFirstResponder(field))
         host.settle(passes: 4)
@@ -1043,7 +1043,7 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         XCTAssertEqual(opened.last, "Handle offline sync conflicts")
 
         // Tab from the composer to the first project's name; Return chooses it and gives the composer back.
-        let field = try XCTUnwrap(views(NSTextField.self, in: host.hosting).first { $0.isEditable })
+        let field = try XCTUnwrap(views(ComposerMarkdownTextView.self, in: host.hosting).first)
         XCTAssertTrue(host.window.makeFirstResponder(field))
         host.settle(passes: 4)
         try press("\t", keyCode: 48, in: host)
@@ -1190,7 +1190,7 @@ final class NewTaskHomeRenderingTests: XCTestCase {
 
         // Tab, ↓, Return answers the first project's waiting task; Escape in its composer gives the new
         // task its composer and draft back, the task's draft kept apart.
-        let field = try XCTUnwrap(views(NSTextField.self, in: host.hosting).first { $0.isEditable })
+        let field = try XCTUnwrap(views(ComposerMarkdownTextView.self, in: host.hosting).first)
         XCTAssertTrue(host.window.makeFirstResponder(field))
         host.settle(passes: 4)
         try press("\t", keyCode: 48, in: host)

@@ -450,10 +450,10 @@ final class CodexMessagePredictionTests: XCTestCase {
             let host = WindowlessRender.Host(AnyView(MainWindow(model: model).environment(\.colorScheme, appearance.colorScheme)),
                                              size: NSSize(width: 1180, height: 760), appearance: appearance)
             host.settle(passes: 12)
-            func fields(_ view: NSView) -> [NSTextField] {
-                (view as? NSTextField).map { [$0] } ?? view.subviews.flatMap(fields)
+            func fields(_ view: NSView) -> [ComposerMarkdownTextView] {
+                (view as? ComposerMarkdownTextView).map { [$0] } ?? view.subviews.flatMap(fields)
             }
-            XCTAssertTrue(fields(host.hosting).contains { $0.isEditable && $0.placeholderString == Self.prediction },
+            XCTAssertTrue(fields(host.hosting).contains { $0.placeholder == Self.prediction },
                           "The Codex task's composer shows the prediction as its faint text")
             try WindowlessRender.writePNG(try host.capture().bitmap,
                 to: directory.appending(path: "codex-task-prediction-\(appearance.suffix).png"))

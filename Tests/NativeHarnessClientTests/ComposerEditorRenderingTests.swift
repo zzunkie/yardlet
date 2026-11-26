@@ -51,6 +51,18 @@ final class ComposerEditorRenderingTests: XCTestCase {
     private static let longText = (1...14).map { "Line \($0) of a long request that runs past the composer's lines" }
         .joined(separator: "\n")
 
+    /// Markdown as the field shows it while it is typed: nested lists whose long items wrap under their
+    /// text, bold, inline code, a quote and Korean.
+    private static let markdownText = """
+        이번 주 작업을 **급한 것부터** 정리해 주세요.
+        1. 입력창 서식 확인
+          - **굵게**와 `swift build` 같은 코드가 바로 보이는지
+          - 긴 항목은 줄이 넘어가도 글머리 아래 글자에 맞춰 정렬되어야 하고, 다음 줄도 같은 자리에서 시작합니다. 문장이 길어져 두 줄이 되어도 읽기 편해야 합니다.
+        2. 다크 모드 대비 점검
+          1. 중첩된 번호 목록
+        > 인용은 조금 흐린 색으로 보입니다
+        """
+
     private static func taskDraft(_ text: String, attachments: [CodexUserInput] = [], notice: String? = nil)
         -> TaskComposerDraft {
         let draft = TaskComposerDraft()
@@ -100,6 +112,10 @@ final class ComposerEditorRenderingTests: XCTestCase {
                     isRunning: false, mentionRoots: [workspace])
                     .environment(\.claudeShellCommands, shell))
             },
+            Scenario(name: "task-claude-markdown", size: NSSize(width: 760, height: 260)) {
+                AnyView(PromptComposer(harness: .claudeCode, composerDraft: Self.taskDraft(Self.markdownText),
+                    isRunning: false, mentionRoots: [workspace]))
+            },
             // Past the field's lines it scrolls inside (`ComposerEditorTests` drives the scrolling).
             Scenario(name: "task-claude-long", size: NSSize(width: 760, height: 260)) {
                 AnyView(PromptComposer(harness: .claudeCode, composerDraft: Self.taskDraft(Self.longText),
@@ -131,6 +147,9 @@ final class ComposerEditorRenderingTests: XCTestCase {
             Scenario(name: "home-codex-chips", size: NSSize(width: 860, height: 420)) {
                 home(.codex, text: "Explain the build", attachments: Self.attachments)
             },
+            Scenario(name: "home-claude-markdown", size: NSSize(width: 860, height: 520)) {
+                home(.claudeCode, text: Self.markdownText)
+            },
             Scenario(name: "home-claude-slash", size: NSSize(width: 860, height: 520), typed: "/re") {
                 home(.claudeCode)
             },
@@ -161,7 +180,7 @@ final class ComposerEditorRenderingTests: XCTestCase {
                   let drawn = try? String(contentsOf: before.appending(path: "\(scenario.name)-ax.txt"), encoding: .utf8)
             else { continue }
             compared += 1
-            XCTAssertEqual(text, Self.expected(after: drawn, scenario: scenario.name),
+            XCTAssertEqual(Self.normalized(text), Self.expected(after: drawn, scenario: scenario.name),
                            "\(scenario.name) exposes different accessibility elements than before")
         }
         if Self.phase != "before", compared == 0 {
@@ -169,12 +188,14 @@ final class ComposerEditorRenderingTests: XCTestCase {
         }
     }
 
-    /// A `before` list as the shared editor should expose it. The one intended difference: the
-    /// new-task field is named by its placeholder, as the task field always was.
+    /// A `before` list as the editor should expose it now. The intended difference: the field is a
+    /// text area, as a text that takes many lines is. Object addresses differ from run to run.
     private static func expected(after before: String, scenario: String) -> String {
-        guard scenario.hasPrefix("home-") else { return before }
-        return before.replacingOccurrences(
-            of: "AXTextField = ", with: "AXTextField “\(L10n.string("Describe a task…"))” = ")
+        normalized(before.replacingOccurrences(of: "AXTextField “", with: "AXTextArea “"))
+    }
+
+    private static func normalized(_ list: String) -> String {
+        list.replacingOccurrences(of: "0x[0-9a-f]+", with: "0x", options: .regularExpression)
     }
 
     private func render(_ scenario: Scenario, into directory: URL) throws -> [WindowlessRender.AccessibilityElement] {
@@ -199,7 +220,7 @@ final class ComposerEditorRenderingTests: XCTestCase {
     /// Focuses the composer's field and types `text` through its field editor, one character
     /// at a time so each keystroke reaches the composer as typing does.
     private func type<Content: View>(_ text: String, in host: WindowlessRender.Host<Content>) throws {
-        let field = try XCTUnwrap(views(NSTextField.self, in: host.hosting).first { $0.isEditable })
+        let field = try XCTUnwrap(views(ComposerMarkdownTextView.self, in: host.hosting).first)
         XCTAssertTrue(host.window.makeFirstResponder(field))
         host.settle(passes: 4)
         let editor = try XCTUnwrap(host.window.firstResponder as? NSTextView)

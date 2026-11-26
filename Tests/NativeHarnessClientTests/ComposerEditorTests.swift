@@ -275,9 +275,9 @@ final class ComposerEditorTests: XCTestCase {
         let host = WindowlessRender.Host(AnyView(view.frame(width: 760, height: 460, alignment: .bottom)
             .background(ParityTheme.canvas)), size: NSSize(width: 760, height: 460))
         addTeardownBlock { @MainActor in host.close() }
-        var field: NSTextField?
+        var field: ComposerMarkdownTextView?
         host.settle(until: {
-            field = self.views(NSTextField.self, in: host.hosting).first { $0.isEditable }
+            field = self.views(ComposerMarkdownTextView.self, in: host.hosting).first
             return field != nil
         })
         XCTAssertTrue(host.window.makeFirstResponder(try XCTUnwrap(field)))
@@ -753,7 +753,7 @@ final class ComposerEditorTests: XCTestCase {
 
     /// Shift-Return adds a line in both composers, and past its line limit the field scrolls inside,
     /// as the Codex and Claude apps' composers do: the caret's line stays in view as lines are added
-    /// or the caret moves, and the wheel moves it (`scrollsPastLines`).
+    /// or the caret moves, and the wheel moves it (`ComposerTextScrollView`).
     func testShiftReturnAddsALineInTheNewTaskComposerTooAndALongDraftScrolls() throws {
         let workspace = try makeFolder()
         let home = HomeProbe()
@@ -798,10 +798,37 @@ final class ComposerEditorTests: XCTestCase {
         XCTAssertEqual(scroll.frame.height, document.frame.height, accuracy: 1, "A short draft shows whole again")
     }
 
+    /// The list keys in a real composer: Shift-Return carries a list on and ends it, Tab and Shift-Tab
+    /// move a list line a level before Tab's other uses, Backspace after a marker steps out, and ⌘B
+    /// marks the selection bold. The draft holds the Markdown as typed.
+    func testTheListAndFormatKeysEditTheDraftsMarkdown() throws {
+        let task = TaskProbe()
+        let mounted = try mount(taskComposer(task), editing: task.draft)
+        try type("1. 첫째", into: mounted)
+        try press("\r", keyCode: 36, modifiers: .shift, in: mounted, until: { task.draft.text == "1. 첫째\n2. " })
+        try press("\t", keyCode: 48, in: mounted, until: { task.draft.text == "1. 첫째\n  2. " })
+        XCTAssertEqual(task.draft.text, "1. 첫째\n  2. ", "Tab moves the item in")
+        try type("둘째", into: mounted)
+        try press("\u{19}", keyCode: 48, modifiers: .shift, in: mounted, until: { task.draft.text == "1. 첫째\n2. 둘째" })
+        XCTAssertEqual(task.draft.text, "1. 첫째\n2. 둘째", "Shift-Tab moves it out")
+        try press("\r", keyCode: 36, modifiers: .shift, in: mounted, until: { task.draft.text.hasSuffix("\n3. ") })
+        try press("\r", keyCode: 36, modifiers: .shift, in: mounted, until: { task.draft.text == "1. 첫째\n2. 둘째\n" })
+        XCTAssertEqual(task.draft.text, "1. 첫째\n2. 둘째\n", "A line break on an empty item ends the list")
+        try type("- 항목", into: mounted)
+        let editor = try editor(mounted)
+        editor.setSelectedRange(NSRange(location: (editor.string as NSString).length - 2, length: 0))
+        try press("\u{7f}", keyCode: 51, in: mounted, until: { task.draft.text.hasSuffix("\n항목") })
+        XCTAssertEqual(task.draft.text, "1. 첫째\n2. 둘째\n항목", "Backspace after the marker takes it")
+        editor.setSelectedRange((editor.string as NSString).range(of: "항목"))
+        try press("b", keyCode: 11, modifiers: .command, in: mounted, until: { task.draft.text.hasSuffix("**항목**") })
+        XCTAssertEqual(task.draft.text, "1. 첫째\n2. 둘째\n**항목**")
+        XCTAssertTrue(task.sent.isEmpty, "No list key sends")
+    }
+
     /// Typing that wraps the first line onto a new one grows the composer once, where scrollers take
     /// width (a mouse connected). The field lays out its taller text a moment before its scroll view
     /// takes the new height; a scroller that showed for that moment narrowed the text, the full line
-    /// below wrapped too, and the composer jumped a line too tall and back (`scrollsPastLines`).
+    /// below wrapped too, and the composer jumped a line too tall and back (`ComposerTextScrollView`).
     func testTypingThatWrapsTheFirstLineGrowsTheComposerOnceWhereScrollersTakeWidth() throws {
         let task = TaskProbe()
         let composer = try mount(taskComposer(task), editing: task.draft)

@@ -68,7 +68,7 @@ final class ClaudeBashModeRenderingTests: XCTestCase {
         window.contentView = hosting
         defer { window.contentView = nil; window.close() }
         settle()
-        let field = try XCTUnwrap(views(NSTextField.self, in: hosting).first)
+        let field = try XCTUnwrap(views(ComposerMarkdownTextView.self, in: hosting).first)
         XCTAssertTrue(window.makeFirstResponder(field))
         settle()
         let editor = try XCTUnwrap(window.firstResponder as? NSTextView)

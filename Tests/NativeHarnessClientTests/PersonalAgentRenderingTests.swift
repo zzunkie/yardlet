@@ -1173,8 +1173,8 @@ final class PersonalAgentRenderingTests: XCTestCase {
                 XCTAssertEqual(scroll.contentView.bounds.origin.y, place, accuracy: 1, "The room behind keeps its place")
 
                 // Escape while an input method composes belongs to it; the next one closes the dialog.
-                let field = try XCTUnwrap(Self.views(NSTextField.self, in: host.hosting).first {
-                    $0.isEditable && $0.placeholderString == L10n.string("Message your dot…")
+                let field = try XCTUnwrap(Self.views(ComposerMarkdownTextView.self, in: host.hosting).first {
+                    $0.placeholder == L10n.string("Message your dot…")
                 })
                 XCTAssertTrue(host.window.makeFirstResponder(field))
                 host.settle(passes: 4)

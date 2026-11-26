@@ -37,10 +37,10 @@ import XCTest
         func shows(_ label: String) -> Bool { elements.contains { $0.label == label } }
         /// The empty composer's faint text, where the suggestion shows.
         var placeholder: String? {
-            func fields(_ view: NSView) -> [NSTextField] {
-                (view as? NSTextField).map { [$0] } ?? view.subviews.flatMap(fields)
+            func fields(_ view: NSView) -> [ComposerMarkdownTextView] {
+                (view as? ComposerMarkdownTextView).map { [$0] } ?? view.subviews.flatMap(fields)
             }
-            return fields(host.hosting).first { $0.isEditable }?.placeholderString
+            return fields(host.hosting).first?.placeholder
         }
         func showsSuggestion(_ text: String) -> Bool { placeholder == text }
     }
@@ -52,7 +52,7 @@ import XCTest
         addTeardownBlock { @MainActor in host.close() }
         host.settle()
         if focus {
-            let field = try XCTUnwrap(views(NSTextField.self, in: host.hosting).first { $0.isEditable })
+            let field = try XCTUnwrap(views(ComposerMarkdownTextView.self, in: host.hosting).first)
             XCTAssertTrue(host.window.makeFirstResponder(field))
             host.settle(passes: 4)
         }

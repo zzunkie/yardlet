@@ -1084,9 +1084,9 @@ private final class PerfBenchRunner {
     private func composerInput() async {
         guard let window, let content = window.contentView else { problems.append("no composer window"); return }
         func all(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(all) }
-        guard let field = all(content).compactMap({ $0 as? NSTextField }).filter({
+        guard let field = all(content).compactMap({ $0 as? ComposerMarkdownTextView }).filter({
             let frame = $0.convert($0.bounds, to: nil)
-            return $0.isEditable && frame.width > 300 && frame.minY < 400
+            return frame.width > 300 && frame.minY < 400
         }).min(by: { $0.convert($0.bounds, to: nil).minY < $1.convert($1.bounds, to: nil).minY }),
               window.makeFirstResponder(field) else { problems.append("composer field could not take its window's first responder"); return }
         let before = model.publicationCounts.transcripts
