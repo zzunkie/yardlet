@@ -2509,7 +2509,7 @@
 "Allow this task to run the scheduled task “%@” now?" = "允许此任务立即运行定时任务“%@”吗？";
 "Allow this task to run a scheduled task now?" = "允许此任务立即运行定时任务吗？";
 "Allow this task to fill a saved sign-in?" = "允许此任务填写已保存的登录信息吗？";
-"Item: %@" = "项目：%@";
+"Item: %@" = "条目：%@";
 "Allow this task to run these browser actions?" = "允许此任务执行以下浏览器操作吗？";
 "Allow this task to run this browser action?" = "允许此任务执行此浏览器操作吗？";
 "Allow this task to use %@ in %@?" = "允许此任务在 %2$@ 中使用 %1$@ 吗？";

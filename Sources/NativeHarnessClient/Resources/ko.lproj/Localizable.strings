@@ -4283,4 +4283,4 @@
 "File: %@" = "파일: %@";
 "It is saving to the Downloads folder." = "다운로드 폴더에 저장하는 중입니다.";
 "Allow this task's download?" = "이 작업의 다운로드를 허용할까요?";
-"Allow downloads from %@ in this task?" = "이 작업에서 %@의 다운로드를 허용할까요?";
+"Allow downloads from %@ in this task?" = "이 작업에서 %@에서의 다운로드를 허용할까요?";
