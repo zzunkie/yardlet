@@ -1,17 +1,17 @@
 # Token usage
 
 Yardlet counts the tokens Claude Code and Codex record in their own transcripts on this Mac and shows them
-with each account's plan limits: on Home over the projects, in Settings › Usage, and on one line under Usage in
+with each account's plan limits: on Home's Projects view over the projects, in Settings › Usage, and on one line under Usage in
 the menu bar menu and the sidebar's account menu. Nothing is sent anywhere and no model is asked anything.
 
 ## Where it shows
 
-- **Home:** a band over the projects. Its heading reads today's tokens and their API-equivalent cost ("Usage ·
+- **Home:** a band over the projects in its Projects view. Its heading reads today's tokens and their API-equivalent cost ("Usage ·
   5.48B tokens today · $2,124 API equivalent") and opens Settings › Usage. Under it, the last 14 days as bars (today
   in the accent) and the three limit windows closest to running out, each with its account, harness mark, the share
   left and, when the window runs out before it resets at its recent pace, "runs out in 1 hr, 30 min". While the band
   shows, the line over the composer leaves out its nearly spent limits, which the band already says, and keeps the
-  Mac's own warnings. With Home shown, an account's limits are read again once its reading is 15 minutes old, the span
+  Mac's own warnings; on the desk (the Now view) the line names them. With Home shown, an account's limits are read again once its reading is 15 minutes old, the span
   the pace needs between two readings; a reading a menu, a list or a limit card made meanwhile is used instead of
   starting the account's CLI again (`AccountCheckPolicy.ifOlderThan`).
 - **Settings › Usage** (after Harness Accounts), as the Claude and Codex apps put usage in Settings:

@@ -20,9 +20,12 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         repository = root.appending(path: "yardlet", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: repository.appending(path: ".git"), withIntermediateDirectories: true)
         try Data("ref: refs/heads/feature/home\n".utf8).write(to: repository.appending(path: ".git/HEAD"))
+        // Most of these draw the projects; the desk's own tests forget the choice and the home opens on it.
+        NewTaskHomeView.choose(.projects)
     }
 
     override func tearDownWithError() throws {
+        NewTaskHomeView.choose(nil)
         try? FileManager.default.removeItem(at: root)
     }
 
@@ -210,7 +213,7 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         }
     }
 
-    private enum Scene { case full, quiet, empty }
+    private enum Scene { case full, quiet, few, empty }
 
     private typealias Fixture = (activity: NewTaskHomeActivity, monitor: TaskPullRequestMonitor, projects: [Project],
                                  names: [String: String], conversations: [UUID: [TranscriptEntry]])
@@ -237,6 +240,15 @@ final class NewTaskHomeRenderingTests: XCTestCase {
             activity.chats = []
             activity.schedules = Array(activity.schedules.prefix(1))
             activity.notices = { [] }
+        case .few:
+            // Someone starting out: one project and two results already read; nothing waits, runs or is scheduled.
+            let project = fixture.projects[0]
+            let done = [task("Set up the project", minutesAgo: 26 * 60, in: project.primaryRoot),
+                        task("Fix the sign-in button", minutesAgo: 3 * 60, in: project.primaryRoot)]
+            activity = NewTaskHomeActivity()
+            activity.sessions = done
+            activity.groups = [WorkspaceGroup(workspaceURL: project.primaryRoot, sessions: done, project: project)]
+            activity.placeName = { _ in project.name }
         case .empty:
             activity = NewTaskHomeActivity()
         }
@@ -251,7 +263,7 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         let names = fixture.names
         let shop = fixture.projects[1].primaryRoot
         return NewTaskHome(
-            recentSessions: [], projects: scene == .empty ? [] : fixture.projects, draft: draft, runtimeSelections: runtimes,
+            recentSessions: [], projects: scene == .empty ? [] : scene == .few ? [fixture.projects[0]] : fixture.projects, draft: draft, runtimeSelections: runtimes,
             onSelectSession: onOpen, onChooseWorkspace: { _ in }, onShowHarnesses: {}, onCreate: { _ in nil },
             onImportConversation: {}, onImportFromOtherApps: {},
             projectName: { names[ProjectSidebarPresentation.normalizedPath(for: $0)] ?? $0.lastPathComponent },
@@ -574,28 +586,28 @@ final class NewTaskHomeRenderingTests: XCTestCase {
 
     /// The desk at the widths a person's window gives the home (1,280 × 820 less a 240 pt sidebar,
     /// 1,800 × 1,125 less 351 pt, 980 × 760 less 240 pt), on a busy day, after the last waiting line was
-    /// handled, on a quiet day and on the first day, in both appearances, into `.build/desk-qa/<language>/`.
-    /// With the development switch off the home is as it was.
+    /// handled, on a quiet day, for someone with a project and two tasks read (mail off), and on the first day,
+    /// in both appearances, into `.build/desk-qa/<language>/`.
     func testTheDeskShowsWhatWaitsWhatRunsAndToday() async throws {
         let language = (Locale.preferredLanguages.first ?? "en").hasPrefix("ko") ? "ko" : "en"
         let directory = try WindowlessRender.directory("desk-qa/\(language)")
         let runtimes = try runtimes()
         let mailbox = try await deskMailbox()
-        DeskPreview.show()
-        defer { DeskPreview.hide() }
+        NewTaskHomeView.choose(nil)
         let regular = NSSize(width: 1_040, height: 820), wide = NSSize(width: 1_449, height: 1_125)
         let narrow = NSSize(width: 740, height: 760)
-        let scenes: [(name: String, day: DeskDay?, size: NSSize)] = [
-            ("busy-1040", .busy, regular), ("busy-1449", .busy, wide), ("busy-740", .busy, narrow),
-            ("cleared-1040", .cleared, regular), ("quiet-1040", .quiet, regular), ("first-run-1040", nil, regular),
+        let scenes: [(name: String, day: DeskDay?, home: Scene, size: NSSize)] = [
+            ("busy-1040", .busy, .full, regular), ("busy-1449", .busy, .full, wide), ("busy-740", .busy, .full, narrow),
+            ("cleared-1040", .cleared, .full, regular), ("quiet-1040", .quiet, .full, regular),
+            ("few-1040", nil, .few, regular), ("few-740", nil, .few, narrow), ("first-run-1040", nil, .empty, regular),
         ]
         var elements: [String: [WindowlessRender.AccessibilityElement]] = [:]
         for scene in scenes {
             for appearance in WindowlessRender.Appearance.allCases {
                 let fixture = scene.day.map { deskFixture($0).fixture }
-                let view = home(scene.day == nil ? .empty : .full, fixture: fixture, size: scene.size,
+                let view = home(scene.home, fixture: fixture, size: scene.size,
                                 scheme: appearance.colorScheme, runtimes: runtimes)
-                    .environment(\.mailbox, mailbox)
+                    .environment(\.mailbox, scene.home == .few ? nil : mailbox)
                 let host = WindowlessRender.Host(view, size: scene.size, appearance: appearance)
                 defer { host.close() }
                 host.settle(passes: 10)
@@ -644,6 +656,9 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         // A quiet day: today and the composer.
         XCTAssertFalse(shows("quiet-1040", L10n.string("Waiting on you (home)")), report["quiet-1040"]!)
         XCTAssertTrue(shows("quiet-1040", L10n.string("Unread mail")))
+        // A project and two tasks read: the header with the view switch, and the composer.
+        XCTAssertTrue(shows("few-1040", L10n.string("Now")), report["few-1040"]!)
+        XCTAssertFalse(shows("few-1040", L10n.string("Waiting on you (home)")), report["few-1040"]!)
         // The first day: the title and the composer, no view to switch to.
         XCTAssertFalse(shows("first-run-1040", L10n.string("Now")), report["first-run-1040"]!)
     }
@@ -681,8 +696,7 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         let mailbox = try await deskMailbox()
         let (center, service) = try deskCalendar()
         let off = CalendarCenter(defaults: try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("DeskCalendarOff"))))
-        DeskPreview.show()
-        defer { DeskPreview.hide() }
+        NewTaskHomeView.choose(nil)
         XCTAssertEqual(service.reads, 0, "Nothing is read before a screen shows the calendar")
         let w = Self.words
         let meeting = w("투자사 통화", "Investor call"), teamMeeting = w("팀 주간 회의", "Weekly team meeting")
@@ -792,7 +806,7 @@ final class NewTaskHomeRenderingTests: XCTestCase {
                     host.settle(passes: 5)
                     XCTAssertEqual(service.reads, reads, "Nothing is read while the desk is not shown")
                     // The home keeps the view chosen; the next scene opens on the desk again.
-                    DeskPreview.show()
+                    NewTaskHomeView.choose(nil)
                 }
             }
         }
@@ -809,8 +823,7 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         let runtimes = try runtimes()
         let mailbox = try await deskMailbox()
         let (center, _) = try deskCalendar()
-        DeskPreview.show()
-        defer { DeskPreview.hide() }
+        NewTaskHomeView.choose(nil)
         let size = NSSize(width: 1_449, height: 1_125)
         var fixture = deskFixture(.busy).fixture
         if heavy { fixture.activity.schedules = Self.heavyDay(now: fixture.activity.now) }
@@ -866,8 +879,7 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         let directory = try WindowlessRender.directory("desk-qa/\(language)")
         let runtimes = try runtimes()
         let mailbox = try await deskMailbox()
-        DeskPreview.show()
-        defer { DeskPreview.hide() }
+        NewTaskHomeView.choose(nil)
         for (name, size) in [("reply-1040", NSSize(width: 1_040, height: 820)), ("reply-1449", NSSize(width: 1_449, height: 1_125))] {
             for appearance in WindowlessRender.Appearance.allCases {
                 let fixture = deskFixture(.busy).fixture
@@ -907,33 +919,34 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         }
     }
 
-    /// The Projects view is the home as it was under the header the desk shares, which counts its projects;
-    /// the home opens on the view chosen last. Drawn beside the home without the development switch at the
-    /// widths a person's window gives it, into `.build/desk-qa/<language>/`.
-    func testTheProjectsViewIsTheHomeUnderTheHeader() throws {
+    /// The home opens on the desk until the person chooses a view, and on the view chosen last after. The
+    /// Projects view is the projects under the header the desk shares, which counts them. Drawn at the widths
+    /// a person's window gives the home, into `.build/desk-qa/<language>/`.
+    func testTheHomeOpensOnTheDeskAndThenOnTheViewChosen() throws {
         let language = (Locale.preferredLanguages.first ?? "en").hasPrefix("ko") ? "ko" : "en"
         let directory = try WindowlessRender.directory("desk-qa/\(language)")
         let runtimes = try runtimes()
-        defer { DeskPreview.hide() }
         for size in [NSSize(width: 1_040, height: 820), NSSize(width: 1_449, height: 1_125)] {
-            var names: [Bool: [String]] = [:]
-            for switchOn in [false, true] {
-                UserDefaults.yardlet.set(switchOn, forKey: DeskPreview.key)
-                UserDefaults.yardlet.set(NewTaskHomeView.projects.rawValue, forKey: NewTaskHomeView.key)
+            for chosen in [nil, NewTaskHomeView.projects] {
+                NewTaskHomeView.choose(chosen)
                 for appearance in WindowlessRender.Appearance.allCases {
                     let host = WindowlessRender.Host(home(size: size, scheme: appearance.colorScheme, runtimes: runtimes),
                                                      size: size, appearance: appearance)
                     defer { host.close() }
                     host.settle(passes: 10)
-                    let name = "\(switchOn ? "projects" : "home")-\(Int(size.width))-\(appearance.suffix).png"
+                    let name = "\(chosen == nil ? "home" : "projects")-\(Int(size.width))-\(appearance.suffix).png"
                     try WindowlessRender.writePNG(try host.capture().bitmap, to: directory.appending(path: name))
                     guard appearance == .light else { continue }
-                    names[switchOn] = headerNames(in: host)
                     let elements = host.accessibilityElements()
                     let report = elements.map(\.description).joined(separator: "\n")
-                    XCTAssertEqual(!controls(in: host, role: .radioButton).filter { $0.label == L10n.string("Projects") }.isEmpty,
-                                   switchOn, report)
-                    if switchOn {
+                    XCTAssertFalse(controls(in: host, role: .radioButton).filter { $0.label == L10n.string("Projects") }.isEmpty,
+                                   "The view switch: \(report)")
+                    if chosen == nil {
+                        XCTAssertTrue(elements.contains { $0.label.contains(L10n.string("Waiting on you (home)")) },
+                                      "The desk: \(report)")
+                        XCTAssertEqual(headerNames(in: host), [], "No project columns: \(report)")
+                    } else {
+                        XCTAssertEqual(headerNames(in: host).first, "yardlet", "The project columns: \(report)")
                         XCTAssertTrue(elements.contains {
                             $0.label.contains(L10n.format("%lld projects", 6) + " · " + L10n.format("%lld open pull requests", 4)
                                               + " · " + L10n.format("%lld left for a while", 2))
@@ -941,7 +954,6 @@ final class NewTaskHomeRenderingTests: XCTestCase {
                     }
                 }
             }
-            XCTAssertEqual(names[true], names[false], "The same projects in the same order")
         }
     }
 
@@ -951,8 +963,7 @@ final class NewTaskHomeRenderingTests: XCTestCase {
     func testTheKeyboardGoesThroughTheDesksZones() async throws {
         let runtimes = try runtimes()
         let mailbox = try await deskMailbox()
-        DeskPreview.show()
-        defer { DeskPreview.hide() }
+        NewTaskHomeView.choose(nil)
         let size = NSSize(width: 1_040, height: 820)
         var opened: [String] = []
         let host = WindowlessRender.Host(
@@ -1434,17 +1445,12 @@ private struct ReplyTaskHost: View {
     }
 }
 
-extension DeskPreview {
-    /// The desk on the home: its switch on and "Now" the view. The home remembers the view the person
-    /// chose, so a test that chose Projects would otherwise leave it to the next.
-    static func show() {
-        UserDefaults.yardlet.set(true, forKey: key)
-        UserDefaults.yardlet.removeObject(forKey: NewTaskHomeView.key)
-    }
-
-    static func hide() {
-        UserDefaults.yardlet.removeObject(forKey: key)
-        UserDefaults.yardlet.removeObject(forKey: NewTaskHomeView.key)
+extension NewTaskHomeView {
+    /// The view the home opens on, as if the person had chosen it last; nil forgets the choice, and the home
+    /// opens on the desk. The home remembers the view chosen, so a test that chose one would otherwise leave it
+    /// to the next.
+    static func choose(_ view: NewTaskHomeView?) {
+        if let view { UserDefaults.yardlet.set(view.rawValue, forKey: key) } else { UserDefaults.yardlet.removeObject(forKey: key) }
     }
 }
 

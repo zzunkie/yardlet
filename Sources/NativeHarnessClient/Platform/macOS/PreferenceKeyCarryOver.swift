@@ -10,6 +10,7 @@ import Foundation
 /// name now, once: while that name holds no value. The earlier name keeps its value for a build from before
 /// the change, which shares these preferences (a development bundle has the installed app's identifier), as
 /// the Application Support copy of the session index stays when it moves (`YardletProduct.storageRootURL`).
+/// A key no build reads any more is removed.
 @MainActor
 enum PreferenceKeyCarryOver {
     static let earlierKeys: KeyValuePairs<String, String> = [
@@ -43,9 +44,13 @@ enum PreferenceKeyCarryOver {
         "Yardlet.connectorSetup.opened": ConnectorSetupProgress.key,
     ]
 
+    /// The development switch that showed the home's desk before it became the home's first view.
+    static let retiredKeys = ["YardletDeskPreview"]
+
     static func run(in defaults: UserDefaults = .yardlet) {
         for (earlier, key) in earlierKeys where defaults.object(forKey: key) == nil {
             if let value = defaults.object(forKey: earlier) { defaults.set(value, forKey: key) }
         }
+        for key in retiredKeys { defaults.removeObject(forKey: key) }
     }
 }

@@ -1,20 +1,14 @@
 import AppKit
 import SwiftUI
 
-/// Which view the home shows: the desk ("Now") or the projects. The home opens on the one chosen last.
+/// Which view the home shows: the desk ("Now") or the projects. The home opens on the one chosen last, and on
+/// the desk until one is chosen; its header offers "Now | Projects" once there is a project or a task.
 enum NewTaskHomeView: String, CaseIterable, Sendable {
     case now
     case projects
 
     /// Where the choice is kept.
     static let key = "YardletHomeView"
-}
-
-/// The desk shows only while this development switch is on, until it becomes the home's first view:
-/// `defaults write com.zzunkie.yardlet YardletDeskPreview -bool true` turns it on, `defaults delete` off.
-/// With it on, the home's header offers "Now | Projects".
-enum DeskPreview {
-    static let key = "YardletDeskPreview"
 }
 
 /// Where the home's header stands, the same in both views so it stays put as they switch: over the

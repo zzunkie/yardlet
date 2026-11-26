@@ -1412,8 +1412,7 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
         XCTAssertEqual(lines(remoteDesk), ["\(fixture.task.id) checks failed #341"])
         XCTAssertEqual(remoteDesk.families.map(\.id), localDesk.families.map(\.id))
         XCTAssertEqual(remoteDesk.families.map(\.id), [fixture.task.id])
-        DeskPreview.show()
-        defer { DeskPreview.hide() }
+        NewTaskHomeView.choose(nil)
         model.select(.newTask)
         let wide = NSSize(width: 1_280, height: 820)
         try await render("remote-desk", size: wide, titled: true, title: model.name) {
