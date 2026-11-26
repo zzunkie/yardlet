@@ -71,7 +71,8 @@ public struct RemoteAccountClient: Sendable {
 
     /// The error the relay returned to the app instead of a code (`providerFailed`, or the provider's own).
     public static func callbackError(from callback: URL) -> String? {
-        URLComponents(url: callback, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "error" }?.value
+        let error = URLComponents(url: callback, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "error" }?.value
+        return error?.isEmpty == false ? error : nil
     }
 
     public let baseURL: URL

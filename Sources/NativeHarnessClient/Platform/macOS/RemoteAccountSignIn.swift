@@ -18,24 +18,33 @@ final class RemoteAccountSignIn: NSObject, ASWebAuthenticationPresentationContex
 
     func signIn(at url: URL, callbackScheme: String) async throws -> URL {
         let resume = SignInResumeOnce<URL>()
-        defer { session = nil }
-        return try await withTaskCancellationHandler {
+        var finished = false
+        // A sign-in that ends any other way than the session's own completion (its task was cancelled)
+        // closes the sheet it may have left open.
+        defer {
+            if !finished { session?.cancel() }
+            session = nil
+        }
+        let callback = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 resume.set(continuation)
                 guard !Task.isCancelled else { return resume.resume(throwing: CancellationError()) }
-                let started = Date()
+                let started = ProcessInfo.processInfo.systemUptime
                 // The session calls back on its own XPC queue, not the main actor this class runs on.
                 let session = ASWebAuthenticationSession(url: url, callback: .customScheme(callbackScheme)) { @Sendable callback, error in
-                    resume.resume(with: Self.outcome(callback: callback, error: error, after: Date().timeIntervalSince(started)))
+                    let elapsed = ProcessInfo.processInfo.systemUptime - started
+                    resume.resume(with: Self.outcome(callback: callback, error: error, after: elapsed))
                 }
                 session.presentationContextProvider = self
                 self.session = session
+                guard !Task.isCancelled else { return resume.resume(throwing: CancellationError()) }
                 if !session.start() { resume.resume(throwing: RemoteWebSignInUnavailable(code: "start_failed")) }
             }
         } onCancel: {
             resume.resume(throwing: CancellationError())
-            Task { @MainActor in self.session?.cancel() }
         }
+        finished = true
+        return callback
     }
 
     /// What the session's completion means: the return address, the person closing the sheet, or a sheet
@@ -55,12 +64,23 @@ final class RemoteAccountSignIn: NSObject, ASWebAuthenticationPresentationContex
 
     nonisolated func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
         MainActor.assumeIsolated {
-            // A sheet (Settings shows the account in one) or a panel can't present the session; its parent can.
-            let window = NSApp.keyWindow ?? NSApp.mainWindow ?? NSApp.windows.first {
-                $0.isVisible && $0.contentView != nil && !($0 is NSPanel) && $0.sheetParent == nil
-            }
-            return window?.sheetParent ?? window ?? ASPresentationAnchor()
+            // A sheet (Settings shows the account in one), a panel or the menu bar's window can't present the
+            // session; the window a sheet hangs from can.
+            let candidates = [NSApp.keyWindow, NSApp.mainWindow].compactMap { $0 } + NSApp.orderedWindows
+            return Self.anchor(among: candidates) ?? ASPresentationAnchor()
         }
+    }
+
+    /// The first window that can present the session, once each candidate's sheets are taken off.
+    static func anchor(among candidates: [NSWindow]) -> NSWindow? {
+        for window in candidates {
+            var candidate = window
+            while let parent = candidate.sheetParent { candidate = parent }
+            if candidate.isVisible, candidate.contentView != nil, candidate.canBecomeMain, !(candidate is NSPanel) {
+                return candidate
+            }
+        }
+        return nil
     }
 }
 

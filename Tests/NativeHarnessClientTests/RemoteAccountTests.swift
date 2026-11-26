@@ -1,3 +1,4 @@
+import AppKit
 import AuthenticationServices
 import CryptoKit
 import Foundation
@@ -270,7 +271,9 @@ final class RemoteAccountTests: XCTestCase {
         defaults.set("wss://relay.example.test", forKey: RemoteControlService.relayURLKey)
         let token = RemoteMemorySecret()
         var opened: URL?
-        let longName = String(repeating: "가", count: 40) + " MacBook Pro 👩‍💻"
+        // 55 + 13 + 5 = 73 UTF-16 code units: the relay refuses it whole.
+        let longName = String(repeating: "가", count: 55) + " MacBook Pro 👩‍💻"
+        XCTAssertGreaterThan(longName.utf16.count, RemoteAccountClient.maxNameLength)
         let service = RemoteControlService(
             bridge: FakeBridge(), deviceStore: RemoteDeviceStore(fileURL: nil), audit: nil,
             identityStore: RemoteMemoryIdentityStore(.generate()), accountToken: token,
@@ -303,9 +306,23 @@ final class RemoteAccountTests: XCTestCase {
         XCTAssertFalse(service.awaitsBrowserSignIn)
         let name = try XCTUnwrap(StubRelay.registered?.name)
         XCTAssertTrue(StubRelay.registered?.signatureValid == true, "The signature covers the name the relay keeps")
-        XCTAssertLessThanOrEqual(name.utf16.count, RemoteAccountClient.maxNameLength)
-        XCTAssertTrue(longName.hasPrefix(name))
+        XCTAssertEqual(name, String(longName.prefix(64)))
+        XCTAssertEqual(StubRelay.deviceName, name)
         XCTAssertEqual(RemoteAccountClient.relayName("  Mac  "), "Mac")
+        XCTAssertEqual(RemoteAccountClient.relayName("   "), "")
+        let exact = String(repeating: "m", count: 64)
+        XCTAssertEqual(RemoteAccountClient.relayName(exact), exact)
+        let edge = String(repeating: "m", count: 62) + "👩‍💻"
+        XCTAssertEqual(RemoteAccountClient.relayName(edge), String(repeating: "m", count: 62),
+                       "A character that doesn't fit whole is left out, not split")
+
+        // The relay refuses an uncut name (the stub as the relay does), so the cut above is what made it through.
+        let refused = try await StubRelay.status(posting: ["code": "C1", "codeVerifier": "v", "deviceName": longName],
+                                                 to: "https://relay.example.test/v1/auth/token")
+        XCTAssertEqual(refused, 400)
+
+        // Nothing that can't present the sign-in is its anchor: a panel, or a window not on screen.
+        XCTAssertNil(RemoteAccountSignIn.anchor(among: [NSPanel(), NSWindow()]))
     }
 
     /// What Settings shows and a problem report carries when signing in fails: a sentence instead of
@@ -395,6 +412,17 @@ final class StubRelay: URLProtocol {
     nonisolated(unsafe) static var accountPort: Int?
     nonisolated(unsafe) static var macs: [[String: String]] = []
     nonisolated(unsafe) static var providers = ["github"]
+    nonisolated(unsafe) static var deviceName: String?
+
+    /// The HTTP status the stub answers a JSON body with.
+    static func status(posting body: [String: String], to address: String) async throws -> Int {
+        var request = URLRequest(url: URL(string: address)!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (_, response) = try await URLSession.shared.data(for: request)
+        return (response as? HTTPURLResponse)?.statusCode ?? 0
+    }
 
     static func reset() {
         challenge = nil
@@ -404,6 +432,7 @@ final class StubRelay: URLProtocol {
         accountPort = nil
         calls = []
         providers = ["github"]
+        deviceName = nil
     }
 
     override class func canInit(with request: URLRequest) -> Bool {
@@ -425,7 +454,12 @@ final class StubRelay: URLProtocol {
         switch (method, url.path()) {
         case ("GET", "/v1/auth/providers"):
             answer = ["providers": Self.providers]
+        case ("POST", "/v1/auth/token") where (json["deviceName"] ?? "").utf16.count > 64,
+             ("PUT", _) where (json["name"] ?? "").utf16.count > 64:
+            status = 400
+            answer = ["error": "badRequest"]
         case ("POST", "/v1/auth/token"):
+            Self.deviceName = json["deviceName"]
             let verifier = json["codeVerifier"] ?? ""
             let challenge = RemoteEncoding.base64url(Data(SHA256.hash(data: Data(verifier.utf8))))
             if json["code"] == "C1", challenge == Self.challenge {

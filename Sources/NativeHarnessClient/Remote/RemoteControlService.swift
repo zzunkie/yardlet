@@ -298,8 +298,8 @@ final class RemoteControlService {
         } catch is CancellationError {
             return
         } catch is RemoteWebSignInUnavailable {
-            browserSignIn = BrowserSignIn(state: state, pkce: pkce, identity: identity, generation: accountGeneration,
-                                          expires: Date().addingTimeInterval(Self.browserSignInLifetime))
+            browserSignIn = BrowserSignIn(state: state, pkce: pkce, identity: identity, client: client,
+                                          generation: accountGeneration, expires: Date().addingTimeInterval(Self.browserSignInLifetime))
             awaitsBrowserSignIn = true
             openInBrowser(url)
             return
@@ -318,18 +318,25 @@ final class RemoteControlService {
     @discardableResult
     func receiveSignInCallback(_ callback: URL) -> Bool {
         guard RemoteAccountClient.isSignInCallback(callback), let pending = browserSignIn,
-              pending.generation == accountGeneration, Date() < pending.expires, !isSigningIn,
-              URLComponents(url: callback, resolvingAgainstBaseURL: false)?.queryItems?
-                .first(where: { $0.name == "state" })?.value == pending.state,
-              let client = accountClient
-        else { return false }
+              pending.generation == accountGeneration, !isSigningIn else { return false }
+        guard Date() < pending.expires else {
+            browserSignIn = nil
+            awaitsBrowserSignIn = false
+            return false
+        }
+        guard URLComponents(url: callback, resolvingAgainstBaseURL: false)?.queryItems?
+            .first(where: { $0.name == "state" })?.value == pending.state else { return false }
         browserSignIn = nil
         awaitsBrowserSignIn = false
+        // A new generation, so an account refresh already under way can't undo this sign-in when it returns.
+        accountGeneration = UUID()
+        accountError = nil
+        accountErrorCode = nil
         isSigningIn = true
         Task {
             defer { isSigningIn = false }
             await finishSignIn(callback: callback, state: pending.state, pkce: pending.pkce, identity: pending.identity,
-                               client: client, step: "browser")
+                               client: pending.client, step: "browser")
         }
         return true
     }
@@ -921,6 +928,8 @@ private struct BrowserSignIn {
     var state: String
     var pkce: RemoteAccountClient.PKCE
     var identity: RemoteIdentity
+    /// The relay the sign-in started on, which the code is exchanged with.
+    var client: RemoteAccountClient
     var generation: UUID
     var expires: Date
 }
