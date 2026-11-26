@@ -281,7 +281,7 @@ final class SidePanelQATests: XCTestCase {
 
             if light {
                 // The tab's composer is the other task's: type, then ⌘Return.
-                let fields = views(NSTextField.self, in: host.hosting).filter {
+                let fields = views(ComposerMarkdownTextView.self, in: host.hosting).filter {
                     $0.convert($0.bounds, to: nil).minX >= panelMinX
                 }
                 let field = try XCTUnwrap(fields.last, "the panel's composer")

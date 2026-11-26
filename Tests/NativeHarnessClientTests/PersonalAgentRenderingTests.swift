@@ -755,10 +755,13 @@ final class PersonalAgentRenderingTests: XCTestCase {
                 $0.isEditable && ($0.accessibilityLabel() == name || $0.placeholderString == name)
             }
         }
+        func composerField() -> ComposerMarkdownTextView? {
+            Self.views(ComposerMarkdownTextView.self, in: host.hosting).first { $0.placeholder == composerName }
+        }
         // Typed into the render's own window, which is never the person's key window.
-        func type(_ text: String, into field: NSTextField) throws {
+        func type(_ text: String, into field: NSView) throws {
             XCTAssertTrue(host.window.makeFirstResponder(field))
-            let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+            let editor = try XCTUnwrap((field as? NSTextField)?.currentEditor() as? NSTextView ?? field as? NSTextView)
             editor.insertText(text, replacementRange: editor.selectedRange())
             host.settle(passes: 6)
         }
@@ -776,7 +779,7 @@ final class PersonalAgentRenderingTests: XCTestCase {
         let states = draft.files.map(\.state)
         let chips = ["plan-notes.txt", "budget.csv, " + L10n.string("Uploading")]
         await host.settle(until: { chips.allSatisfy { chip in host.accessibilityElements().contains { $0.label == chip } } })
-        let composer = try XCTUnwrap(field(composerName))
+        let composer = try XCTUnwrap(composerField())
         try type("Keep this draft while I read the task.", into: composer)
 
         func conversationScroll() throws -> NSScrollView {
@@ -805,7 +808,7 @@ final class PersonalAgentRenderingTests: XCTestCase {
         let back = L10n.format("Back to %@", "Atlas")
         await host.settle(until: { host.accessibilityElements().contains { $0.label == back } })
         host.settle(passes: 12)
-        XCTAssertFalse(composer.isEnabled, "The conversation under the task takes no input")
+        XCTAssertFalse(composer.isEditable, "The conversation under the task takes no input")
         let responder = host.window.firstResponder
         XCTAssertFalse(responder === composer || (responder as? NSText)?.delegate === composer,
                        "The covered editor is not where typing goes")
@@ -815,7 +818,7 @@ final class PersonalAgentRenderingTests: XCTestCase {
         host.settle(passes: 30)
         let returned = try conversationScroll()
         XCTAssertEqual(returned.documentVisibleRect.minY, readAt, accuracy: 2, "The conversation is where it was read")
-        XCTAssertEqual(try XCTUnwrap(field(composerName)).stringValue, "Keep this draft while I read the task.")
+        XCTAssertEqual(try XCTUnwrap(composerField()).string, "Keep this draft while I read the task.")
         XCTAssertTrue(drafts.opened.first === draft)
         XCTAssertEqual(draft.files.map(\.id), ids)
         XCTAssertEqual(draft.files.map(\.state), states, "The files and their uploads are as they were")
@@ -844,7 +847,7 @@ final class PersonalAgentRenderingTests: XCTestCase {
         try type("Book the hall on the river.", into: try XCTUnwrap(venueField()))
         let typing = try XCTUnwrap(venueField())
         XCTAssertTrue(host.window.firstResponder === typing.currentEditor(), "The answer in the dialog is being typed")
-        let composing = try XCTUnwrap(field(composerName)).stringValue
+        let composing = try XCTUnwrap(composerField()).string
         let monitor = try XCTUnwrap(Self.views(PersonalAgentReplyPanelMonitor.MonitorView.self, in: host.hosting).first)
         // The thread read to its start, and the heights the list measured meanwhile told to it.
         await host.settle(until: { !Self.views(PersonalAgentReplyRowView.self, in: table).contains { $0.entry == .earlier } })
@@ -878,7 +881,7 @@ final class PersonalAgentRenderingTests: XCTestCase {
         let answer = try XCTUnwrap(venueField())
         XCTAssertTrue(answer.isEnabled, "The dialog takes input again")
         XCTAssertEqual(answer.stringValue, "Book the hall on the river.")
-        XCTAssertEqual(try XCTUnwrap(field(composerName)).stringValue, composing)
+        XCTAssertEqual(try XCTUnwrap(composerField()).string, composing)
         XCTAssertTrue(drafts.opened.first === draft)
         XCTAssertEqual(draft.files.map(\.state), states, "The files and their uploads are as they were")
         try WindowlessRender.writePNG(dialogBefore.bitmap, to: directory.appending(path: "replies-before-activity.png"))
@@ -1173,8 +1176,8 @@ final class PersonalAgentRenderingTests: XCTestCase {
                 XCTAssertEqual(scroll.contentView.bounds.origin.y, place, accuracy: 1, "The room behind keeps its place")
 
                 // Escape while an input method composes belongs to it; the next one closes the dialog.
-                let field = try XCTUnwrap(Self.views(NSTextField.self, in: host.hosting).first {
-                    $0.isEditable && $0.placeholderString == L10n.string("Message your dot…")
+                let field = try XCTUnwrap(Self.views(ComposerMarkdownTextView.self, in: host.hosting).first {
+                    $0.placeholder == L10n.string("Message your dot…")
                 })
                 XCTAssertTrue(host.window.makeFirstResponder(field))
                 host.settle(passes: 4)
@@ -1544,8 +1547,8 @@ final class PersonalAgentRenderingTests: XCTestCase {
         XCTAssertFalse(labels().contains(newReplies))
 
         // Focus goes back where it was on Close and on Escape, not over what a press outside chose.
-        let field = try XCTUnwrap(Self.views(NSTextField.self, in: host.hosting).first {
-            $0.isEditable && $0.placeholderString == L10n.string("Message your dot…")
+        let field = try XCTUnwrap(Self.views(ComposerMarkdownTextView.self, in: host.hosting).first {
+            $0.placeholder == L10n.string("Message your dot…")
         })
         let earlierField = NSTextField(frame: NSRect(x: 4, y: 4, width: 80, height: 22))
         let chosenField = NSTextField(frame: NSRect(x: 90, y: 4, width: 80, height: 22))

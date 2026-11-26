@@ -181,9 +181,8 @@ final class ComposerPasteAndDropTests: XCTestCase {
         }
 
         private func composer(_ name: String, text: Binding<String>) -> some View {
-            TextField(name, text: text, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(2...8)
+            ComposerTextField(text: text, placeholder: name, accessibilityLabel: name, accessibilityHint: nil,
+                              style: ComposerTextStyle(), lineLimit: 2...8, minHeight: nil, actions: ComposerTextActions())
                 .padding(12)
                 .frame(height: 120)
                 .overlay {
@@ -208,7 +207,7 @@ final class ComposerPasteAndDropTests: XCTestCase {
 
         let targets = views(ComposerExternalInputView.self, in: hosting)
             .sorted { $0.convert($0.bounds, to: nil).maxY > $1.convert($1.bounds, to: nil).maxY }
-        let fields = views(NSTextField.self, in: hosting)
+        let fields = views(ComposerMarkdownTextView.self, in: hosting)
             .sorted { $0.convert($0.bounds, to: nil).maxY > $1.convert($1.bounds, to: nil).maxY }
         XCTAssertEqual(targets.count, 2)
         XCTAssertEqual(fields.count, 2)

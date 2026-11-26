@@ -2263,20 +2263,18 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
             // local New task action now, then compare the same native input-focus state on both sides.
             onMounted?()
             if let focusedPlaceholder {
-                func field(in view: NSView) -> NSTextField? {
-                    if let field = view as? NSTextField, field.placeholderString == focusedPlaceholder { return field }
+                func field(in view: NSView) -> ComposerMarkdownTextView? {
+                    if let field = view as? ComposerMarkdownTextView, field.placeholder == focusedPlaceholder { return field }
                     return view.subviews.lazy.compactMap { field(in: $0) }.first
                 }
                 try await waitUntil {
                     Self.turnRunLoop(hosting)
-                    guard let field = field(in: hosting), let editor = field.currentEditor() else { return false }
-                    return window.firstResponder === editor
+                    guard let field = field(in: hosting) else { return false }
+                    return window.firstResponder === field
                 }
                 let composer = try XCTUnwrap(field(in: hosting))
-                XCTAssertTrue(composer.stringValue.isEmpty)
-                XCTAssertNil(composer.placeholderAttributedString)
-                XCTAssertEqual(composer.textColor, NSColor.controlTextColor)
-                XCTAssertTrue(composer.isEnabled)
+                XCTAssertTrue(composer.string.isEmpty)
+                XCTAssertTrue(composer.isEditable)
                 XCTAssertFalse(window.isKeyWindow)
                 XCTAssertFalse(window.isVisible)
             }

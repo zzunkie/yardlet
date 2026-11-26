@@ -145,6 +145,8 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
 
     @Environment(\.yardletColorTheme) private var theme
     @Environment(\.yardletInterfaceScale) private var interfaceScale
+    @Environment(\.yardletCodeFont) private var codeFont
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.taskKeyboardFocus) private var keyboardFocus
     @Environment(\.splitPaneEmphasis) private var paneEmphasis
     @Environment(\.activateSplitPane) private var activatePane
@@ -216,11 +218,6 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
                 }
                 textField
             }
-            .scrollsPastLines(metrics.lineLimit.upperBound, atLeast: metrics.lineLimit.lowerBound)
-            .textFieldStyle(.plain)
-            .font(isBashMode
-                ? .system(size: 13 * interfaceScale, design: .monospaced)
-                : ParityTheme.conversationFont(scale: interfaceScale)).fontDesign(isBashMode ? .monospaced : theme.font.design)
             .padding(metrics.text)
 
             if let notice = draft.notice {
@@ -337,89 +334,82 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
     }
 
     private var textField: some View {
-        // It grows with its text from the line limit's lower bound; past its upper bound the editor
-        // scrolls it (`scrollsPastLines`), which also gives it its font and style.
-        TextField(suggestion ?? placeholder, text: $draft.text, axis: .vertical)
-            .wrapsBetweenWords()
-            .frame(minHeight: metrics.minTextHeight, alignment: .topLeading)
+        // It grows with its text from the line limit's lower bound and past its upper bound scrolls.
+        let style = ComposerTextStyle(scale: interfaceScale, font: theme.font, codeFont: codeFont,
+                                      text: theme[ThemeMode(colorScheme)].text, isBashMode: isBashMode)
+        let baseline = style.firstBaseline
+        return ComposerTextField(
+            text: $draft.text, placeholder: suggestion ?? placeholder, accessibilityLabel: placeholder,
+            accessibilityHint: accessibilityHint, style: style,
+            lineLimit: metrics.lineLimit, minHeight: metrics.minTextHeight,
+            actions: textActions)
+            .alignmentGuide(.firstTextBaseline) { _ in baseline }
+            // SwiftUI gives the text view keyboard focus and tells the composer when it has it.
             .focused(isFocused)
-            .accessibilityLabel(placeholder)
-            .accessibilityHint(accessibilityHint ?? "")
-            .onSubmit {
-                // The field editor's Return: a plain one, or one an input method passed on after
-                // committing its composition, which the key handler noted.
-                if !MacShortcut.composerSend.isCustomized && !MacShortcut.composerAlternate.isCustomized
-                    && !MacShortcut.composerNewline.isCustomized {
-                    takeReturn(fieldContext.takeComposedReturn()
-                        ?? ComposerReturnKey(event: NSApp.currentEvent, sendShortcut: sendShortcut, draft: draft.text) ?? .send)
-                } else if let composed = fieldContext.takeComposedReturn() { takeReturn(composed) }
-                else if let event = NSApp.currentEvent, event.type == .keyDown {
-                    if let chord = MacKeyChord(event: MacShortcutEvent(event)),
-                       let action = ComposerReturnKey.resolve(chord, send: sendShortcut, draft: draft.text) {
-                        takeReturn(action)
-                    } else if event.keyCode == 36 || event.keyCode == 76 {
-                        fieldContext.insertLine(into: draft)
-                    }
-                } else { takeReturn(.send) }
-            }
-            .onMacShortcutExit(.composerEscape) {
-                if typedCommandQuery != nil { dismissedCommandText = draft.text }
-                else if typedMention != nil { dismissedMentionText = draft.text }
-                else { onEscape() }
-            }
-            .onKeyPress(keys: ComposerReturnKey.keys(send: sendShortcut), phases: [.down, .repeat]) { press in
-                // The send shortcut says which Return sends, adds a line or sends the other way
-                // (`ComposerReturnKey`); a plain Return that sends reaches `onSubmit` through the field
-                // editor and Option-Return adds a line there. While an input method composes, the key
-                // is the input method's: it commits the composition first, and `onSubmit` then does
-                // what this Return asks, never a send for a line.
-                let chord = MacKeyChord(KeyboardShortcut(press.key, modifiers: press.modifiers))
-                guard let key = ComposerReturnKey.resolve(chord, send: sendShortcut, draft: draft.text) else {
-                    return .ignored
-                }
-                if fieldContext.hasMarkedText {
-                    if press.key == .return { fieldContext.composedReturn = key }
-                    return .ignored
-                }
-                fieldContext.composedReturn = nil
-                // A typed list's row takes a plain Return here, as it takes Tab. The field can go on
-                // calling the `onSubmit` of an earlier evaluation until its text changes, and that
-                // one chooses from the list as it was then: nothing, when the list was read after
-                // the last keystroke.
-                guard press.key != .return || key != .send || !press.modifiers.intersection([.control, .shift, .command, .option]).isEmpty || typedListTakesReturn else { return .ignored }
-                takeReturn(key)
-                return .handled
-            }
-            .onMacKeyPress(.previousSuggestion) { moveHighlight(by: -1) }
-            .onMacKeyPress(.nextSuggestion) { moveHighlight(by: 1) }
-            // → in the empty composer takes the suggestion too, as the Claude app's composer does.
-            .onMacKeyPress(.acceptSuggestion) {
-                guard suggestion != nil, draft.text.isEmpty, !fieldContext.hasMarkedText,
-                      takeSuggestion?() == true else { return .ignored }
-                return .handled
-            }
-            .onMacKeyPress(.complete, phases: [.down, .repeat]) { press in
-                if typedCommandQuery != nil {
-                    guard !ComposerFieldEditor.hasMarkedText, let command = highlightedCommand else { return .ignored }
-                    commands?.choose(command)
-                    return .handled
-                }
-                if let mention = typedMention {
-                    guard !ComposerFieldEditor.hasMarkedText, let match = fileMentions.highlightedMatch else { return .ignored }
-                    insertMention(match, replacing: mention)
-                    return .handled
-                }
-                // The suggested next message, as the Claude app's composer takes it on Tab. While an
-                // input method composes, the key is the input method's and nothing is taken.
-                if ComposerTypedLists.takesSuggestion(
-                    modifiers: MacShortcutPreferences.shared.snapshot.overrides[MacShortcut.complete.id] == nil ? press.modifiers : [], isRepeat: press.phase == .repeat,
-                    hasMarkedText: fieldContext.hasMarkedText, take: takeSuggestion) { return .handled }
-                // Then, on the new-task screen, its lists take the keyboard, on the same plain Tab.
-                return ComposerTypedLists.takesSuggestion(
-                    modifiers: MacShortcutPreferences.shared.snapshot.overrides[MacShortcut.complete.id] == nil ? press.modifiers : [], isRepeat: press.phase == .repeat,
-                    hasMarkedText: fieldContext.hasMarkedText, take: onTab)
-                    ? .handled : .ignored
-            }
+    }
+
+    /// The keys the composer answers in its field, as the Codex and Claude apps' composers do; the rest
+    /// are the text's, and an input method's while it composes.
+    private var textActions: ComposerTextActions {
+        ComposerTextActions(
+            key: { event, textView in handleKey(event, in: textView) },
+            composingKey: { event in
+                // The input method commits its composition first; the line break it passes on then does
+                // what this Return asks (`newline`), never a send for a line.
+                guard [36, 76].contains(event.keyCode), let chord = MacKeyChord(event: MacShortcutEvent(event)) else { return }
+                fieldContext.composedReturn = ComposerReturnKey.resolve(chord, send: sendShortcut, draft: draft.text)
+            },
+            newline: {
+                guard let composed = fieldContext.takeComposedReturn() else { return false }
+                takeReturn(composed)
+                return true
+            })
+    }
+
+    /// A key in the field with no input method composing: true when the composer used it.
+    private func handleKey(_ event: NSEvent, in textView: ComposerMarkdownTextView) -> Bool {
+        fieldContext.composedReturn = nil
+        let shortcut = MacShortcutEvent(event)
+        if MacShortcut.composerEscape.matches(shortcut) {
+            if typedCommandQuery != nil { dismissedCommandText = draft.text }
+            else if typedMention != nil { dismissedMentionText = draft.text }
+            else { onEscape() }
+            return true
+        }
+        // The send shortcut says which Return sends, adds a line or sends the other way
+        // (`ComposerReturnKey`); a typed list's row takes any of them.
+        if let chord = MacKeyChord(event: shortcut),
+           let key = ComposerReturnKey.resolve(chord, send: sendShortcut, draft: draft.text) {
+            takeReturn(key)
+            return true
+        }
+        if MacShortcut.previousSuggestion.matches(shortcut) { return moveHighlight(by: -1) }
+        if MacShortcut.nextSuggestion.matches(shortcut) { return moveHighlight(by: 1) }
+        // → in the empty composer takes the suggestion too, as the Claude app's composer does.
+        if MacShortcut.acceptSuggestion.matches(shortcut) {
+            return suggestion != nil && draft.text.isEmpty && takeSuggestion?() == true
+        }
+        guard MacShortcut.complete.matches(shortcut) else { return false }
+        if typedCommandQuery != nil {
+            guard let command = highlightedCommand else { return false }
+            commands?.choose(command)
+            return true
+        }
+        if let mention = typedMention {
+            guard let match = fileMentions.highlightedMatch else { return false }
+            insertMention(match, replacing: mention)
+            return true
+        }
+        let modifiers = MacShortcutPreferences.shared.snapshot.overrides[MacShortcut.complete.id] == nil
+            ? EventModifiers(shortcutFlags: event.modifierFlags) : []
+        // The suggested next message, as the Claude app's composer takes it on Tab.
+        if ComposerTypedLists.takesSuggestion(modifiers: modifiers, isRepeat: event.isARepeat,
+                                              hasMarkedText: false, take: takeSuggestion) { return true }
+        // A list line steps in a level, as in the Codex app's composer.
+        if textView.indentMarkdown(outdent: false) { return true }
+        // Then, on the new-task screen, its lists take the keyboard, on the same plain Tab.
+        return ComposerTypedLists.takesSuggestion(modifiers: modifiers, isRepeat: event.isARepeat,
+                                                  hasMarkedText: false, take: onTab)
     }
 
     // MARK: - The typed lists
@@ -449,20 +439,20 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
 
     /// Arrow keys move through the list only while it shows matches. An input method still
     /// composing a character keeps the key, so composition is never interrupted.
-    private func moveHighlight(by offset: Int) -> KeyPress.Result {
+    private func moveHighlight(by offset: Int) -> Bool {
         if let query = typedCommandQuery {
             let count = commands.map { ComposerCommands.matching($0.commands, query: query).count } ?? 0
             guard let highlight = ComposerTypedLists.movedCommandHighlight(
                 commandHighlight, by: offset, count: count, hasMarkedText: ComposerFieldEditor.hasMarkedText)
-            else { return .ignored }
+            else { return false }
             commandHighlight = highlight
-            return .handled
+            return true
         }
         guard typedMention != nil, !fileMentions.matches.isEmpty, !ComposerFieldEditor.hasMarkedText else {
-            return .ignored
+            return false
         }
         fileMentions.moveHighlight(by: offset)
-        return .handled
+        return true
     }
 
     /// Whether a typed list shows whose row takes a Return (`takeReturn`).

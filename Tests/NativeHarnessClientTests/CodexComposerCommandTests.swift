@@ -519,7 +519,7 @@ final class CodexComposerCommandTests: XCTestCase {
         window.appearance = NSAppearance(named: appearance)
         window.contentView = hosting
         settle()
-        let field = try XCTUnwrap(views(NSTextField.self, in: hosting).first)
+        let field = try XCTUnwrap(views(ComposerMarkdownTextView.self, in: hosting).first)
         XCTAssertTrue(window.makeFirstResponder(field))
         settle()
         addTeardownBlock { @MainActor in window.contentView = nil }
