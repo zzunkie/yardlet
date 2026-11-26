@@ -92,76 +92,74 @@ struct AppearanceThemeEditor: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: ParitySpace.s8) {
-            SettingsGroup {
-                SettingsRow(title: YardletSetting.accent.title, anchor: YardletSetting.accent.id) {
-                    Circle().fill(Color(nsColor: model.draft.accent(in: ThemeMode(scheme))))
-                        .overlay { Circle().strokeBorder(ParityTheme.strongSeparator) }
-                        .frame(width: 12, height: 12).accessibilityHidden(true)
-                    Picker(YardletSetting.accent.title, selection: Binding(get: { model.draft.selectedPreset }, set: {
-                        if let preset = $0 { model.select(preset) }
-                    })) {
-                        if model.draft.selectedPreset == nil {
-                            Text(L10n.string("Custom")).tag(nil as YardletAccentPreference?).disabled(true)
-                        }
-                        Text(YardletAccentPreference.system.title).tag(Optional(YardletAccentPreference.system))
-                        Section(L10n.string("Color themes")) {
-                            presetOptions(YardletAccentPreference.completePresets)
-                        }
-                        Section(L10n.string("Accent only")) {
-                            presetOptions(YardletAccentPreference.accentOnlyPresets)
-                        }
+        SettingsGroup {
+            SettingsRow(title: YardletSetting.accent.title, anchor: YardletSetting.accent.id) {
+                Circle().fill(Color(nsColor: model.draft.accent(in: ThemeMode(scheme))))
+                    .overlay { Circle().strokeBorder(ParityTheme.strongSeparator) }
+                    .frame(width: 12, height: 12).accessibilityHidden(true)
+                Picker(YardletSetting.accent.title, selection: Binding(get: { model.draft.selectedPreset }, set: {
+                    if let preset = $0 { model.select(preset) }
+                })) {
+                    if model.draft.selectedPreset == nil {
+                        Text(L10n.string("Custom")).tag(nil as YardletAccentPreference?).disabled(true)
                     }
-                    .labelsHidden().fixedSize()
+                    Text(YardletAccentPreference.system.title).tag(Optional(YardletAccentPreference.system))
+                    Section(L10n.string("Color themes")) {
+                        presetOptions(YardletAccentPreference.completePresets)
+                    }
+                    Section(L10n.string("Accent only")) {
+                        presetOptions(YardletAccentPreference.accentOnlyPresets)
+                    }
                 }
-                Divider()
-                SettingsRow(title: L10n.string("Interface font"), anchor: "ui_font") {
-                    Picker(L10n.string("Interface font"), selection: $model.draft.font) {
-                        ForEach(InterfaceFont.allCases, id: \.self) { Text($0.title).tag($0) }
-                    }
-                    .labelsHidden().fixedSize()
-                }
-                Divider()
-                HStack {
-                    Spacer()
-                    ForEach(ThemeMode.allCases, id: \.self) { mode in
-                        Text(mode.title).font(SettingsMetrics.detailFont).foregroundStyle(.secondary)
-                            .frame(width: 54)
-                    }
-                }.padding(.top, ParitySpace.s12)
-                ForEach(ThemeField.allCases, id: \.self) { field in
-                    SettingsRow(title: field.title, anchor: SettingsSearch.Anchor.themeColor(field.rawValue)) {
-                        ForEach(ThemeMode.allCases, id: \.self) { mode in
-                            let label = L10n.format("%@ · %@", mode.title, field.title)
-                            ColorPicker(label, selection: Binding(
-                                get: { model.color(field, in: mode) },
-                                set: { model.set($0, for: field, in: mode) }), supportsOpacity: false)
-                                .labelsHidden().frame(width: 54).accessibilityLabel(label)
-                        }
-                    }
-                    Divider()
-                }
-                // The group's own end, as its buttons act on every row above them.
-                VStack(alignment: .leading, spacing: ParitySpace.s8) {
-                    if !model.failures.isEmpty {
-                        VStack(alignment: .leading, spacing: ParitySpace.s4) {
-                            ForEach(model.failures, id: \.message) { failure in
-                                Text(failure.message).font(SettingsMetrics.detailFont)
-                                    .foregroundStyle(ParityTheme.warningText)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }.accessibilityElement(children: .combine)
-                    }
-                    HStack {
-                        Button(L10n.string("Reset to defaults")) { model.reset() }
-                            .disabled(model.draft == MacColorTheme() && model.saved == MacColorTheme())
-                        Spacer()
-                        Button(L10n.string("Save")) { model.save() }
-                            .disabled(model.draft == model.saved)
-                    }.controlSize(.small)
-                }
-                .padding(.vertical, SettingsMetrics.rowVerticalPadding)
+                .labelsHidden().fixedSize()
             }
+            Divider()
+            SettingsRow(title: L10n.string("Interface font"), anchor: "ui_font") {
+                Picker(L10n.string("Interface font"), selection: $model.draft.font) {
+                    ForEach(InterfaceFont.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .labelsHidden().fixedSize()
+            }
+            Divider()
+            HStack {
+                Spacer()
+                ForEach(ThemeMode.allCases, id: \.self) { mode in
+                    Text(mode.title).font(SettingsMetrics.detailFont).foregroundStyle(.secondary)
+                        .frame(width: 54)
+                }
+            }.padding(.top, ParitySpace.s12)
+            ForEach(ThemeField.allCases, id: \.self) { field in
+                SettingsRow(title: field.title, anchor: SettingsSearch.Anchor.themeColor(field.rawValue)) {
+                    ForEach(ThemeMode.allCases, id: \.self) { mode in
+                        let label = L10n.format("%@ · %@", mode.title, field.title)
+                        ColorPicker(label, selection: Binding(
+                            get: { model.color(field, in: mode) },
+                            set: { model.set($0, for: field, in: mode) }), supportsOpacity: false)
+                            .labelsHidden().frame(width: 54).accessibilityLabel(label)
+                    }
+                }
+                Divider()
+            }
+            // The group's own end, as its buttons act on every row above them.
+            VStack(alignment: .leading, spacing: ParitySpace.s8) {
+                if !model.failures.isEmpty {
+                    VStack(alignment: .leading, spacing: ParitySpace.s4) {
+                        ForEach(model.failures, id: \.message) { failure in
+                            Text(failure.message).font(SettingsMetrics.detailFont)
+                                .foregroundStyle(ParityTheme.warningText)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }.accessibilityElement(children: .combine)
+                }
+                HStack {
+                    Button(L10n.string("Reset to defaults")) { model.reset() }
+                        .disabled(model.draft == MacColorTheme() && model.saved == MacColorTheme())
+                    Spacer()
+                    Button(L10n.string("Save")) { model.save() }
+                        .disabled(model.draft == model.saved)
+                }.controlSize(.small)
+            }
+            .padding(.vertical, SettingsMetrics.rowVerticalPadding)
         }
         .onChange(of: data) { model.refresh() }
         .onChange(of: legacy) { model.refresh() }

@@ -7,14 +7,16 @@ import Foundation
 /// Every default sits in `:where(…)`, which has no specificity, so any rule the widget writes wins. The page stays
 /// transparent over the conversation's canvas, and nothing is loaded from outside: the system fonts, no images.
 /// Colors are the defaults of docs/DESIGN_SYSTEM.md ("Semantic colors"); text and status colors keep 4.5:1 on the
-/// canvas, the surface and the elevated surface in both appearances.
+/// canvas, the surface and the elevated surface in both appearances, a status badge's tint under them included.
+/// A state such as `:hover` stays inside the `:where(…)` too, or it would lift the rule over the widget's own and over
+/// a later default (a primary button's accent fill under the pointer).
 enum YardletWidgetTheme {
     static let stylesheet = """
     :root{color-scheme:light dark;
     --y-bg:#FCFCFC;--y-surface:#F4F5F7;--y-surface-elevated:#FFFFFF;--y-input:#FFFFFF;
     --y-text:#1D1D1F;--y-text-secondary:#5F6066;--y-border:rgba(0,0,0,.095);--y-border-strong:rgba(0,0,0,.16);
     --y-fill:rgba(0,0,0,.035);--y-fill-hover:rgba(0,0,0,.062);--y-fill-selected:rgba(0,0,0,.095);
-    --y-accent:#0A62C9;--y-on-accent:#FFFFFF;--y-success:#1B7A3A;--y-warning:#985500;--y-danger:#C4291F;
+    --y-accent:#0A62C9;--y-on-accent:#FFFFFF;--y-success:#177033;--y-warning:#8F5000;--y-danger:#B8261C;
     --y-radius-control:6px;--y-radius:8px;--y-radius-surface:12px;
     --y-font-sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","Apple SD Gothic Neo",system-ui,sans-serif;
     --y-font-mono:ui-monospace,"SF Mono",Menlo,monospace}
@@ -26,7 +28,7 @@ enum YardletWidgetTheme {
     :where(html){-webkit-text-size-adjust:100%;accent-color:var(--y-accent)}
     :where(body){margin:0;padding:0;background:transparent;color:var(--y-text);font:14px/1.5 var(--y-font-sans);
     -webkit-font-smoothing:antialiased}
-    :where(*,*::before,*::after){box-sizing:border-box}
+    :where(*){box-sizing:border-box}
     :where(h1,h2,h3,h4){margin:0 0 8px;font-weight:600;line-height:1.3}
     :where(h1){font-size:18px}:where(h2){font-size:16px}:where(h3){font-size:14px}
     :where(h4){font-size:13px;color:var(--y-text-secondary)}
@@ -48,10 +50,10 @@ enum YardletWidgetTheme {
     :where(button,input[type=button],input[type=submit],input[type=reset]){min-height:28px;padding:0 12px;
     border:1px solid var(--y-border-strong);border-radius:var(--y-radius-control);background:var(--y-surface-elevated);
     cursor:pointer}
-    :where(button,input[type=button],input[type=submit],input[type=reset]):hover{background:var(--y-fill-hover)}
+    :where(button:hover,input[type=button]:hover,input[type=submit]:hover,input[type=reset]:hover){background:var(--y-fill-hover)}
     :where(button.y-primary,button[type=submit],input[type=submit]){background:var(--y-accent);border-color:transparent;
     color:var(--y-on-accent);font-weight:500}
-    :where(button.y-primary,button[type=submit],input[type=submit]):hover{filter:brightness(1.08)}
+    :where(button.y-primary:hover,button[type=submit]:hover,input[type=submit]:hover){filter:brightness(1.08)}
     :where(button:disabled,input:disabled,select:disabled,textarea:disabled){opacity:.5;cursor:default}
     :where(input:not([type=checkbox],[type=radio],[type=range],[type=color],[type=button],[type=submit],[type=reset]),
     select,textarea){min-height:28px;padding:4px 8px;border:1px solid var(--y-border-strong);

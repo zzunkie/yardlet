@@ -406,12 +406,17 @@ final class CodexVisualizationRenderingTests: XCTestCase {
         XCTAssertTrue(page.contains("@media (prefers-color-scheme:dark)"))
         XCTAssertTrue(page.contains("font-variant-numeric:tabular-nums"))
         XCTAssertTrue(page.contains("<p>chart</p>"))
-        // Each element default has no specificity, so the widget's own rules win.
+        // Each element default has no specificity, so the widget's own rules win: its whole selector is one
+        // `:where(…)`, with nothing after the closing parenthesis (no `:hover`, no combinator).
         let rules = YardletWidgetTheme.stylesheet.split(separator: "}").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         for rule in rules where !rule.isEmpty && !rule.hasPrefix(":root") && !rule.hasPrefix("@media") && !rule.hasPrefix("--")
-            && !rule.hasPrefix("::-webkit-scrollbar") && !rule.hasPrefix(":where") {
-            XCTFail("A rule outside :where(…): \(rule.prefix(60))")
+            && !rule.hasPrefix("::-webkit-scrollbar") {
+            let selector = rule.prefix { $0 != "{" }.trimmingCharacters(in: .whitespacesAndNewlines)
+            XCTAssertTrue(Self.isWholeWhere(selector), "A selector with specificity: \(selector)")
         }
+        XCTAssertFalse(Self.isWholeWhere(":where(button):hover"))
+        XCTAssertFalse(Self.isWholeWhere(":where(a) b"))
+        XCTAssertTrue(Self.isWholeWhere(":where(input:not([type=range]),select)"))
         XCTAssertFalse(YardletWidgetTheme.stylesheet.contains("url("), "The theme loads nothing")
         XCTAssertFalse(YardletWidgetTheme.stylesheet.contains("@import"), "The theme loads nothing")
         XCTAssertFalse(CodexVisualizationPage.page("<p>v</p>", kit: nil, state: nil).contains("--y-text"),
@@ -421,6 +426,20 @@ final class CodexVisualizationRenderingTests: XCTestCase {
                        "A whole document keeps its own styles")
         XCTAssertTrue(CodexVisualizationPage.policy.contains("default-src 'none'"))
         XCTAssertTrue(CodexVisualizationPage.policy.contains("connect-src blob: data:"))
+    }
+
+    /// Whether `selector` is a single `:where(…)` whose parenthesis closes at its very end.
+    private static func isWholeWhere(_ selector: String) -> Bool {
+        guard selector.hasPrefix(":where(") else { return false }
+        var depth = 0
+        for (offset, character) in selector.enumerated() {
+            if character == "(" { depth += 1 }
+            if character == ")" {
+                depth -= 1
+                if depth == 0 { return offset == selector.count - 1 }
+            }
+        }
+        return false
     }
 
     /// Only an HTML file in the task's folder or in a Codex home's thread visualizations is read.

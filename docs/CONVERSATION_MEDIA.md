@@ -156,7 +156,7 @@ search, so it adds little to a turn's prompt.
   and failure card as a Codex visualization (`MCPAppViewController.startWidget`). Its `prefers-color-scheme` is the
   app's appearance. In place of the kit it gets Yardlet's theme (`YardletWidgetTheme`), inline and loading nothing:
   `--y-*` variables for the default surfaces, text, border, accent and status colors of docs/DESIGN_SYSTEM.md in light
-  and dark (text and status colors keep 4.5:1 on each surface), quiet defaults for plain elements (system font at
+  and dark (text and status colors keep 4.5:1 on each surface, a status badge's tint included), quiet defaults for plain elements (system font at
   14 px, tables with tabular figures, buttons, fields, range sliders, code) and the classes `y-card`, `y-grid`,
   `y-kpi`, `y-badge`, `y-muted` and `y-num`. Every default is inside `:where(…)`, so the widget's own rules win, and
   the page stays transparent over the conversation. A whole document keeps its own head and gets none of it; a Codex
