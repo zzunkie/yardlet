@@ -524,12 +524,14 @@ final class AgentToolBroker: AgentToolLaunchProviding {
     private func handleConnectorGateway(_ call: AgentToolCall, for sessionID: UUID) async -> AgentToolResult {
         if call.tool == ConnectorGatewayToolCatalog.listTools {
             let connectorTools = await filteredConnectorTools(for: sessionID)
-            return ConnectorGatewayToolCatalog.formatList(
-                tools: connectorTools,
-                service: call.arguments["service"]?.stringValue,
-                query: call.arguments["query"]?.stringValue,
-                exactTool: call.arguments["tool"]?.stringValue
-            )
+            let service = call.arguments["service"]?.stringValue
+            let query = call.arguments["query"]?.stringValue
+            let exactTool = call.arguments["tool"]?.stringValue
+            // Off the UI actor for the same reason as Code Mode's search.
+            return await Task.detached(priority: .userInitiated) {
+                ConnectorGatewayToolCatalog.formatList(tools: connectorTools, service: service, query: query,
+                                                       exactTool: exactTool)
+            }.value
         }
         let innerTool = (call.arguments["tool"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !innerTool.isEmpty else {
@@ -565,12 +567,13 @@ final class AgentToolBroker: AgentToolLaunchProviding {
     private func handleCodeMode(_ call: AgentToolCall, for sessionID: UUID) async -> AgentToolResult {
         if call.tool == CodeModeToolCatalog.searchTools {
             let all = await searchableToolsForCodeMode(for: sessionID)
-            return CodeModeToolCatalog.formatSearch(
-                tools: all,
-                query: call.arguments["query"]?.stringValue,
-                category: call.arguments["category"]?.stringValue,
-                exactTool: call.arguments["tool"]?.stringValue
-            )
+            let query = call.arguments["query"]?.stringValue
+            let category = call.arguments["category"]?.stringValue
+            let exactTool = call.arguments["tool"]?.stringValue
+            // Matching and encoding a few hundred tools takes long enough to stall the UI actor.
+            return await Task.detached(priority: .userInitiated) {
+                CodeModeToolCatalog.formatSearch(tools: all, query: query, category: category, exactTool: exactTool)
+            }.value
         }
         let code = call.arguments["code"]?.stringValue ?? ""
         let timeoutSeconds: Double? = switch call.arguments["timeoutSeconds"] {

@@ -96,20 +96,28 @@ package enum CodeModeToolCatalog {
         }
 
         let categoryFilter = category?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let queryFilter = query?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let filtered = tools.filter { entry in
+            .nonEmpty
+        let queryFilter = query?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().nonEmpty
+        // A catalog holds hundreds of descriptions: one is lowercased only when the name alone did not decide.
+        let filtered = categoryFilter == nil && queryFilter == nil ? tools : tools.filter { entry in
             let name = (entry["name"]?.stringValue ?? "").lowercased()
-            let description = (entry["description"]?.stringValue ?? "").lowercased()
-            if let categoryFilter, !categoryFilter.isEmpty {
+            var lowercasedDescription: String?
+            func description() -> String {
+                if let lowercasedDescription { return lowercasedDescription }
+                let lowercased = (entry["description"]?.stringValue ?? "").lowercased()
+                lowercasedDescription = lowercased
+                return lowercased
+            }
+            if let categoryFilter {
                 let compact = categoryFilter.replacingOccurrences(of: " ", with: "")
                 let matchesCategory = name.hasPrefix(categoryFilter + "_")
                     || name.hasPrefix(categoryFilter)
                     || name.hasPrefix(compact + "_")
-                    || description.contains("[\(categoryFilter)")
+                    || contains(description(), "[\(categoryFilter)")
                 if !matchesCategory { return false }
             }
-            if let queryFilter, !queryFilter.isEmpty {
-                if !name.contains(queryFilter) && !description.contains(queryFilter) { return false }
+            if let queryFilter, !contains(name, queryFilter), !contains(description(), queryFilter) {
+                return false
             }
             return true
         }
@@ -156,11 +164,46 @@ package enum CodeModeToolCatalog {
             fields["description"] = .string(description)
             if let schema = entry["inputSchema"] { fields["inputSchema"] = schema }
         } else {
-            let firstLine = description.split(whereSeparator: \.isNewline).first
-                .map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
+            let firstLine = firstLine(of: description).trimmingCharacters(in: .whitespaces)
             fields["description"] = .string(firstLine.count > 100 ? String(firstLine.prefix(100)) + "…" : firstLine)
         }
         return .object(fields)
+    }
+
+    /// Whether `text` holds `part` as whole characters, as Foundation's `contains` answers, without going through ICU
+    /// for each of hundreds of descriptions. An ASCII `part` is found by its bytes, a match counting only where it
+    /// starts and ends on a character boundary (not `e` in `é` written with a combining accent).
+    private static func contains(_ text: String, _ part: String) -> Bool {
+        let needle = Array(part.utf8)
+        guard let first = needle.first, needle.allSatisfy({ $0 < 0x80 && $0 != 0x0D }) else {
+            return text.firstRange(of: part) != nil
+        }
+        let bytes = text.utf8
+        var from = bytes.startIndex
+        while let start = bytes[from...].firstIndex(of: first) {
+            guard let end = bytes.index(start, offsetBy: needle.count, limitedBy: bytes.endIndex) else { return false }
+            if bytes[start..<end].elementsEqual(needle),
+               String.Index(start, within: text) != nil, String.Index(end, within: text) != nil {
+                return true
+            }
+            from = bytes.index(after: start)
+        }
+        return false
+    }
+
+    /// The first line that is not empty. Line breaks are found by scalar, as grapheme breaks always fall around
+    /// them (what `Character.isNewline` matches), so a long description is not walked character by character.
+    private static func firstLine(of text: String) -> Substring {
+        let scalars = text.unicodeScalars
+        func breaksLine(_ scalar: Unicode.Scalar) -> Bool {
+            switch scalar.value {
+            case 0x0A...0x0D, 0x85, 0x2028, 0x2029: true
+            default: false
+            }
+        }
+        let start = scalars.firstIndex { !breaksLine($0) } ?? scalars.endIndex
+        let end = scalars[start...].firstIndex(where: breaksLine) ?? scalars.endIndex
+        return text[start..<end]
     }
 
     private static func encodeDetailed(_ tools: [ToolJSON]) -> String {
@@ -182,4 +225,8 @@ package enum CodeModeToolCatalog {
         }
         return text
     }
+}
+
+private extension String {
+    var nonEmpty: String? { isEmpty ? nil : self }
 }
