@@ -271,7 +271,7 @@ struct DeskHome<Switch: View, Bottom: View>: View {
                     header(desk)
                     keyboardZones(desk) { todayZone(desk) }
                 }
-                .frame(maxWidth: 640)
+                .frame(maxWidth: NewTaskHomeLayout.composerWidth)
                 .padding(.horizontal, NewTaskHomeLayout.inset)
                 .padding(.top, max(28, size.height * 0.18))
                 .frame(maxWidth: .infinity)
@@ -373,8 +373,8 @@ struct DeskHome<Switch: View, Bottom: View>: View {
     private func finishedZone(_ desk: Desk) -> some View {
         if !desk.finished.isEmpty {
             VStack(alignment: .leading, spacing: 2) {
-                DeskSectionTitle(title: L10n.string("Just finished"), count: "\(desk.finished.count)",
-                                 dotColor: .green)
+                // A result is done: its zone has no dot, and each line keeps the unread dot.
+                DeskSectionTitle(title: L10n.string("Just finished"), count: "\(desk.finished.count)")
                 ForEach(shownFinished(desk)) { session in
                     let entry = NewTaskHomeListKeyboard.Entry.row(.desk(.finished), session.id.uuidString)
                     DeskFinishedRow(
@@ -539,7 +539,7 @@ struct DeskHome<Switch: View, Bottom: View>: View {
 }
 
 /// A zone's scroll area, faded at its foot where more of it scrolls, so a cut line reads as one that goes on.
-private struct DeskScroll<Content: View>: View {
+struct DeskScroll<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
     var body: some View {
@@ -614,15 +614,14 @@ struct DeskSectionTitle: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 7) {
-            if let dotColor {
-                Circle()
-                    .fill(dotColor)
-                    .frame(width: 7 * interfaceScale, height: 7 * interfaceScale)
-                    .accessibilityHidden(true)
-            }
-            Text(title).font(.system(size: 14 * interfaceScale, weight: .semibold))
+            // A zone without a dot keeps its place, so every title starts where the others do.
+            Circle()
+                .fill(dotColor ?? .clear)
+                .frame(width: 7 * interfaceScale, height: 7 * interfaceScale)
+                .accessibilityHidden(true)
+            Text(title).font(.parity(.body, weight: .semibold, scale: interfaceScale))
             if let count {
-                Text(count).font(.system(size: 12.5 * interfaceScale, weight: .medium).monospacedDigit()).foregroundStyle(.secondary)
+                Text(count).font(.parity(.caption, weight: .medium, scale: interfaceScale).monospacedDigit()).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
         }
@@ -648,7 +647,7 @@ struct DeskWaitingRow: View, @MainActor Equatable {
     var isHighlighted = false
     var isAnswering = false
     let answerLine: (UUID) -> String?
-    let requestLine: (SessionRecord) -> String?
+    let requestLine: (SessionRecord) -> NewTaskHomeRequestLine?
     /// Chosen: true to open the task rather than answer it in place (a double-click).
     let onChoose: (Bool) -> Void
     let onMarkRead: (() -> Void)?
@@ -663,21 +662,22 @@ struct DeskWaitingRow: View, @MainActor Equatable {
 #if DEBUG
         let _ = ViewBodyCensus.note(.deskRow)
 #endif
+        let request = requestDetail
         NewTaskHomeRow(isHighlighted: isHighlighted, isAnswering: isAnswering, symbol: "arrowshape.turn.up.left",
                        markRead: onMarkRead, action: { onChoose((NSApp.currentEvent?.clickCount ?? 1) > 1) }) {
             HStack(alignment: .center, spacing: 9) {
                 RoundedRectangle(cornerRadius: 1.5, style: .continuous)
-                    .fill(statusBarColor)
+                    .fill(statusBarColor(request))
                     .frame(width: 3)
                     .padding(.vertical, 2)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
                     // The place goes before the title is cut.
                     ViewThatFits(in: .horizontal) {
-                        firstLine(showsPlace: true)
-                        firstLine(showsPlace: false)
+                        firstLine(showsPlace: true, request: request)
+                        firstLine(showsPlace: false, request: request)
                     }
-                    if let detail {
+                    if let detail = detail(request) {
                         detailText(detail)
                             .padding(.leading, 21)
                     }
@@ -688,32 +688,39 @@ struct DeskWaitingRow: View, @MainActor Equatable {
         .accessibilityAddTraits(isAnswering ? .isSelected : [])
     }
 
-    private var statusBarColor: Color {
+    /// The sidebar's colors: green for an approval, orange for a question or anything else that waits, red for
+    /// what failed.
+    private func statusBarColor(_ request: NewTaskHomeRequestLine?) -> Color {
         switch item.kind {
-        case .request(.awaitingApproval): .green
-        case .request: .orange
+        case let .request(status): status.asking(request) == .awaitingApproval ? .green : .orange
         case .stopped(.failed), .checksFailed: .red
         case .stopped: .orange
         case .report: ParityTheme.accent
         }
     }
 
-    private var readableLabelColor: Color {
-        ThemeContrast.readableTint(statusBarColor, over: ThemeSurface.canvas.resolve(in: environment), in: environment)
+    /// What the newest request asks, for a line that waits on one.
+    private var requestDetail: NewTaskHomeRequestLine? {
+        if case .request = item.kind { return requestLine(item.session) }
+        return nil
     }
 
-    private func firstLine(showsPlace: Bool) -> some View {
+    private func readableLabelColor(_ request: NewTaskHomeRequestLine?) -> Color {
+        ThemeContrast.readableTint(statusBarColor(request), over: ThemeSurface.canvas.resolve(in: environment), in: environment)
+    }
+
+    private func firstLine(showsPlace: Bool, request: NewTaskHomeRequestLine?) -> some View {
         HStack(spacing: 7) {
-            mark.accessibilityHidden(true)
-            Text(label)
-                .font(.system(size: 12 * interfaceScale, weight: .semibold))
-                .foregroundStyle(readableLabelColor)
+            mark(request).accessibilityHidden(true)
+            Text(label(request))
+                .font(.parity(.caption, weight: .semibold, scale: interfaceScale))
+                .foregroundStyle(readableLabelColor(request))
                 .lineLimit(1)
                 .fixedSize()
             HarnessIdentityIcon(harness: item.session.harness, size: 14)
                 .accessibilityLabel(item.session.harness.displayName)
             Text(item.session.title)
-                .font(.system(size: 13.5 * interfaceScale, weight: .medium))
+                .font(.parity(.control, weight: .medium, scale: interfaceScale))
                 .lineLimit(1)
                 .layoutPriority(1)
             if showsPlace {
@@ -729,9 +736,9 @@ struct DeskWaitingRow: View, @MainActor Equatable {
     }
 
     @ViewBuilder
-    private var mark: some View {
+    private func mark(_ request: NewTaskHomeRequestLine?) -> some View {
         if let status = item.status {
-            SidebarTaskStatusView(status: status)
+            SidebarTaskStatusView(status: status.asking(request))
         } else {
             Image(systemName: "xmark.circle")
                 .font(.system(size: 10.5 * interfaceScale, weight: .semibold))
@@ -740,21 +747,21 @@ struct DeskWaitingRow: View, @MainActor Equatable {
         }
     }
 
-    private var label: String {
+    /// The state's name; a question its task reports as an approval is named as a question.
+    private func label(_ request: NewTaskHomeRequestLine?) -> String {
         switch item.kind {
-        case let .request(status), let .stopped(status): status.homeName
+        case let .request(status): status.asking(request).homeName
+        case let .stopped(status): status.homeName
         case .checksFailed: L10n.string("Checks failed")
         case .report: L10n.string("Coordinator report")
         }
     }
 
-    /// What the line says under the title.
-    private var detail: (text: String, isCommand: Bool)? {
+    /// What the line says under the title: a command to approve as code, anything else as a sentence.
+    private func detail(_ request: NewTaskHomeRequestLine?) -> (text: String, isCommand: Bool)? {
         switch item.kind {
-        case .request(.awaitingApproval):
-            return requestLine(item.session).map { ($0, true) }
         case .request:
-            return requestLine(item.session).map { ($0, false) }
+            return request.map { ($0.text, $0.kind == .command) }
         case let .stopped(status):
             return status.homeDetail.map { ($0, false) }
         case let .checksFailed(pullRequest):
@@ -768,7 +775,7 @@ struct DeskWaitingRow: View, @MainActor Equatable {
     private func detailText(_ detail: (text: String, isCommand: Bool)) -> some View {
         if detail.isCommand {
             Text(detail.text)
-                .font(.system(size: 11.5 * interfaceScale, design: .monospaced)).fontDesign(nil)
+                .font(.system(size: ParityType.caption.size * interfaceScale, design: .monospaced)).fontDesign(nil)
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .padding(.horizontal, 6)
@@ -781,7 +788,7 @@ struct DeskWaitingRow: View, @MainActor Equatable {
                 }
         } else {
             Text(detail.text)
-                .font(.system(size: 12.5 * interfaceScale))
+                .font(.parity(.caption, scale: interfaceScale))
                 .foregroundStyle(.secondary)
                 .lineLimit(detailLines)
                 .truncationMode(.tail)
@@ -865,16 +872,18 @@ struct DeskFamilyView: View, @MainActor Equatable {
             HStack(spacing: 7) {
                 SidebarTaskStatusView(status: member.status).accessibilityHidden(true)
                 Text(member.session.title)
-                    .font(.system(size: 12.5 * interfaceScale))
+                    .font(.parity(.caption, scale: interfaceScale))
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                Text(member.status.homeName)
-                    .font(.system(size: 12 * interfaceScale))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .frame(maxWidth: 120, alignment: .trailing)
-                if DeskProjection.runs(member.status), let since = latestTurn(member.id)?.startedAt {
-                    NewTaskHomeElapsed(since: since)
+                // Under "Running" a running member says how long instead of its state again.
+                if DeskProjection.runs(member.status) {
+                    if let since = latestTurn(member.id)?.startedAt { NewTaskHomeElapsed(since: since) }
+                } else {
+                    Text(member.status.homeName)
+                        .font(.parity(.caption, scale: interfaceScale))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .frame(maxWidth: 120, alignment: .trailing)
                 }
             }
             .padding(.leading, 31)
@@ -892,7 +901,8 @@ struct DeskFamilyView: View, @MainActor Equatable {
         var facts: [String] = []
         func count(_ value: Int, _ key: String) { if value > 0 { facts.append(L10n.format(key, value)) } }
         if family.members.isEmpty {
-            if let status = family.status { facts.append(status.homeName) }
+            // Under "Running" a task that runs needs no state's name; one that stopped to wait says so.
+            if let status = family.status, !DeskProjection.runs(status) { facts.append(status.homeName) }
         } else {
             let statuses = family.members.map(\.status) + [family.status].compactMap { $0 }
             count(family.running, "%lld running in the family")
@@ -1025,7 +1035,7 @@ struct DeskTodayZone: View {
     private var recurringLine: some View {
         NewTaskHomeRow(isHighlighted: highlightedID == Self.recurringLineID, showsChevron: false,
                        action: onToggleRecurring) {
-            timeText("", isPast: false)
+            timeText("")
             Image(systemName: "clock.arrow.circlepath")
                 .font(.system(size: 10.5 * interfaceScale, weight: .medium))
                 .foregroundStyle(.secondary)
@@ -1042,10 +1052,10 @@ struct DeskTodayZone: View {
     /// The runs that already ran, folded: their count, or "Show less" once they show.
     private var ranLine: some View {
         NewTaskHomeRow(isHighlighted: highlighted == .toggle(.desk(.today)), showsChevron: false, action: onToggleRan) {
-            timeText("", isPast: true)
+            timeText("")
             Image(systemName: "clock")
                 .font(.system(size: 10.5 * interfaceScale, weight: .medium))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
                 .frame(width: 14)
             Text(showsRan ? L10n.string("Show less") : L10n.format("%lld of today's runs already ran", ran))
                 .font(.system(size: 12 * interfaceScale))
@@ -1077,7 +1087,7 @@ struct DeskTodayZone: View {
         let isPast = run.kind != .upcoming
         return NewTaskHomeRow(isHighlighted: highlightedID == run.id, showsChevron: false,
                               action: { onOpenSchedule(run.schedule.id) }) {
-            timeText(Self.time(run.at), isPast: isPast)
+            timeText(Self.time(run.at))
             Image(systemName: "clock")
                 .font(.system(size: 10.5 * interfaceScale, weight: .medium))
                 .foregroundStyle(.secondary)
@@ -1086,7 +1096,7 @@ struct DeskTodayZone: View {
             Spacer(minLength: 6)
             Text(Self.note(run.kind))
                 .font(.system(size: 12 * interfaceScale))
-                .foregroundStyle(run.kind == .failed ? AnyShapeStyle(.red) : AnyShapeStyle(.tertiary))
+                .foregroundStyle(run.kind == .failed ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
                 .fixedSize()
         }
     }
@@ -1098,7 +1108,7 @@ struct DeskTodayZone: View {
         let start = max(event.start, DeskProjection.today(of: now).start)
         return NewTaskHomeRow(isHighlighted: highlightedID == DeskTodayItem.eventID(event.id), showsChevron: false,
                               action: { onOpenEvent(event) }) {
-            timeText(event.isAllDay ? L10n.string("All day") : Self.time(start), isPast: isPast)
+            timeText(event.isAllDay ? L10n.string("All day") : Self.time(start))
             RoundedRectangle(cornerRadius: 1.5)
                 .fill(color.opacity(isPast ? 0.45 : 1))
                 .frame(width: 3, height: 14)
@@ -1107,23 +1117,23 @@ struct DeskTodayZone: View {
             Spacer(minLength: 6)
             // The title goes first; an invitation's note is cut to "Not replied" where it would cut the title.
             ViewThatFits(in: .horizontal) {
-                noteText(Self.note(event, now: now), isPast: isPast)
-                if event.awaitsAnswer, !isPast { noteText(L10n.string("Not replied"), isPast: isPast) }
+                noteText(Self.note(event, now: now))
+                if event.awaitsAnswer, !isPast { noteText(L10n.string("Not replied")) }
             }
         }
     }
 
-    private func noteText(_ note: String, isPast: Bool) -> some View {
+    private func noteText(_ note: String) -> some View {
         Text(note)
             .font(.system(size: 12 * interfaceScale))
-            .foregroundStyle(isPast ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.secondary))
+            .foregroundStyle(.secondary)
             .fixedSize()
     }
 
-    private func timeText(_ time: String, isPast: Bool) -> some View {
+    private func timeText(_ time: String) -> some View {
         Text(time)
             .font(.system(size: 12 * interfaceScale).monospacedDigit())
-            .foregroundStyle(isPast ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.secondary))
+            .foregroundStyle(.secondary)
             .lineLimit(1)
             .frame(width: 44, alignment: .leading)
     }

@@ -176,7 +176,8 @@ struct NewTaskHome: View {
                 DeskHeader(date: activity.now, summary: projectFacts.summary) { NewTaskHomeViewSwitch(selection: $homeView) }
                     .modifier(DeskHeaderPlacement(width: viewport.size.width))
             }
-            ScrollView {
+            // Faded at its foot, as the desk's zones are, so a project cut by the window's edge reads as more to scroll.
+            DeskScroll {
                 VStack(alignment: .leading, spacing: 22) {
                     if let usage = activity.usage {
                         TokenUsageHomeBand(overview: usage, columns: columns, onOpen: activity.onOpenUsage)
@@ -186,11 +187,10 @@ struct NewTaskHome: View {
                     .frame(maxWidth: columns > 1 ? NewTaskHomeLayout.gridWidth : NewTaskHomeLayout.composerWidth)
                     .padding(.horizontal, NewTaskHomeLayout.inset)
                     .padding(.top, showsViewSwitch ? 4 : 28)
-                    .padding(.bottom, 16)
+                    .padding(.bottom, 24)
                     .frame(maxWidth: .infinity)
                     .accessibilitySortPriority(ParityAccessibility.secondary)
             }
-            .defaultScrollAnchor(.top)
             VStack(spacing: 10) { bottom(viewport: viewport) }
                 .frame(maxWidth: NewTaskHomeLayout.composerWidth)
                 .padding(.horizontal, NewTaskHomeLayout.inset)
@@ -425,7 +425,8 @@ struct NewTaskHomeNoticeLine: View {
 /// The Codex app's title (`home.hero.*`): "What should we build in {project}?" for a project in
 /// Git, "What should we work on in {project}?" for one outside it, and "What should we build?" for a
 /// chat or before a project is chosen. The project's name is the project menu, underlined with dots
-/// as the Codex app's `projectSelect` is.
+/// as the Codex app's `projectSelect` is. The button that clears the project ends the sentence rather
+/// than standing inside it, where it would part the name from a particle written right after it, as in Korean.
 struct NewTaskHeroTitle<Destination: View>: View {
     let kind: NewTaskHeroTitleKind
     /// Switches from the selected project to a chat with no project; nil hides the clear button.
@@ -440,8 +441,17 @@ struct NewTaskHeroTitle<Destination: View>: View {
             line(parts, size: 22)
             VStack(spacing: 2) {
                 if !parts.before.isEmpty { text(parts.before, size: 22) }
-                if let project = parts.project { projectMenu(project, size: 22) }
-                if !parts.after.isEmpty { text(parts.after, size: 22) }
+                line((before: "", project: parts.project, after: parts.after), size: 22)
+            }
+            // Narrowest: a line each, the clear button still ending the sentence's last line.
+            VStack(spacing: 2) {
+                if !parts.before.isEmpty { text(parts.before, size: 22) }
+                if parts.after.isEmpty {
+                    line((before: "", project: parts.project, after: ""), size: 22)
+                } else {
+                    if let project = parts.project { projectMenu(project, size: 22) }
+                    line((before: "", project: nil, after: parts.after), size: 22)
+                }
             }
         }
         .accessibilityElement(children: .contain)
@@ -454,6 +464,16 @@ struct NewTaskHeroTitle<Destination: View>: View {
             if !parts.before.isEmpty { text(parts.before, size: size) }
             if let project = parts.project { projectMenu(project, size: size) }
             if !parts.after.isEmpty { text(parts.after, size: size) }
+            clearButton(size: size)
+        }
+    }
+
+    /// Only a title that names a project offers to clear it.
+    @ViewBuilder
+    private func clearButton(size: CGFloat) -> some View {
+        if kind.parts.project != nil, let onClearProject {
+            NewTaskProjectClearButton(size: size * interfaceScale, onClear: onClearProject)
+                .padding(.leading, 4)
         }
     }
 
@@ -466,68 +486,71 @@ struct NewTaskHeroTitle<Destination: View>: View {
     }
 
     private func projectMenu(_ name: String, size: CGFloat) -> some View {
-        NewTaskProjectNameMenu(name: name, size: size * interfaceScale, onClear: onClearProject, items: destination)
+        NewTaskProjectNameMenu(name: name, size: size * interfaceScale, items: destination)
     }
 }
 
 /// The project's name in the title, which opens the project menu: underlined with dots, brighter
-/// while the pointer is on it, with a small clear button beside it to switch directly to a chat.
+/// while the pointer is on it.
 private struct NewTaskProjectNameMenu<Items: View>: View {
     let name: String
     let size: CGFloat
-    var onClear: (() -> Void)? = nil
     @ViewBuilder let items: () -> Items
     @State private var isHovering = false
-    @State private var isHoveringClear = false
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 2) {
-            Menu {
-                items()
-            } label: {
-                // The dots are drawn under the name rather than as an underline style: a styled title
-                // reaches assistive technologies as an attributed string where a plain one is expected.
-                Text(name)
-                    .font(.system(size: size, weight: .semibold))
-                    .tracking(-0.45)
-                    .foregroundStyle(isHovering ? Color.primary : Color.primary.opacity(0.88))
-                    .lineLimit(1)
-                    .padding(.bottom, max(2, size * 0.08))
-                    .overlay(alignment: .bottom) {
-                        NewTaskDottedLine()
-                            .stroke(Color.secondary.opacity(isHovering ? 0.9 : 0.6),
-                                    style: StrokeStyle(lineWidth: max(1, size / 18), lineCap: .round,
-                                                       dash: [max(1, size / 18), max(3, size / 7)]))
-                            .frame(height: max(1, size / 18))
-                    }
-            }
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .parityPointer()
-            .onHover { isHovering = $0 }
-            .help(L10n.string("Project"))
-            .accessibilityLabel(L10n.string("Project"))
-            .accessibilityValue(name)
-
-            if let onClear {
-                Button(action: onClear) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: max(10, size * 0.42), weight: .semibold))
-                        .foregroundStyle(isHoveringClear ? Color.primary : Color.secondary)
-                        .frame(width: max(18, size * 0.72), height: max(18, size * 0.72))
-                        .background(isHoveringClear ? ParityTheme.hoverFill : .clear, in: Circle())
-                        .contentShape(Circle())
+        Menu {
+            items()
+        } label: {
+            // The dots are drawn under the name rather than as an underline style: a styled title
+            // reaches assistive technologies as an attributed string where a plain one is expected.
+            Text(name)
+                .font(.system(size: size, weight: .semibold))
+                .tracking(-0.45)
+                .foregroundStyle(isHovering ? Color.primary : Color.primary.opacity(0.88))
+                .lineLimit(1)
+                .padding(.bottom, max(2, size * 0.08))
+                .overlay(alignment: .bottom) {
+                    NewTaskDottedLine()
+                        .stroke(Color.secondary.opacity(isHovering ? 0.9 : 0.6),
+                                style: StrokeStyle(lineWidth: max(1, size / 18), lineCap: .round,
+                                                   dash: [max(1, size / 18), max(3, size / 7)]))
+                        .frame(height: max(1, size / 18))
                 }
-                .buttonStyle(.plain)
-                .parityPointer()
-                .onHover { isHoveringClear = $0 }
-                .centeredOnCapHeight(ofTextSize: size)
-                .help(L10n.string("Switch to chat"))
-                .accessibilityLabel(L10n.string("Switch to chat"))
-            }
         }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .parityPointer()
+        .onHover { isHovering = $0 }
+        .help(L10n.string("Project"))
+        .accessibilityLabel(L10n.string("Project"))
+        .accessibilityValue(name)
+    }
+}
+
+/// The small button at the title's end that switches from the chosen project directly to a chat.
+private struct NewTaskProjectClearButton: View {
+    let size: CGFloat
+    let onClear: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: onClear) {
+            Image(systemName: "xmark")
+                .font(.system(size: max(10, size * 0.42), weight: .semibold))
+                .foregroundStyle(isHovering ? Color.primary : Color.secondary)
+                .frame(width: max(18, size * 0.72), height: max(18, size * 0.72))
+                .background(isHovering ? ParityTheme.hoverFill : .clear, in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .parityPointer()
+        .onHover { isHovering = $0 }
+        .centeredOnCapHeight(ofTextSize: size)
+        .help(L10n.string("Switch to chat"))
+        .accessibilityLabel(L10n.string("Switch to chat"))
     }
 }
 
@@ -859,9 +882,14 @@ private struct NewTaskComposer: View {
         ) {
             if draft.creationFailed {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Text(draft.creationError ?? L10n.string("The task could not start. Your draft is still here."))
-                        .foregroundStyle(.red)
-                        .fixedSize(horizontal: false, vertical: true)
+                    // The mark carries the red; the sentence stays readable text.
+                    Label {
+                        Text(draft.creationError ?? L10n.string("The task could not start. Your draft is still here."))
+                            .foregroundStyle(.primary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
+                    }
                     if let sendFeedback {
                         Button(L10n.string("Send problem report")) {
                             sendFeedback(.problem(surface: .home, harness: draft.harness, failure: .init(
@@ -890,7 +918,8 @@ private struct NewTaskComposer: View {
                 homeGuidance("The selected harness is unavailable. Choose another harness or manage harnesses.",
                              action: "Manage harnesses", perform: onShowHarnesses)
             } else if availableHarnesses.isEmpty {
-                homeGuidance("Add a harness to start a task.", action: "Manage harnesses", perform: onShowHarnesses)
+                homeGuidance("Connect a harness, such as Claude Code or Codex, to start a task.",
+                             action: "Manage harnesses", prominent: true, perform: onShowHarnesses)
             }
 
             if let signIn = accountNeedingSignIn {
@@ -908,7 +937,8 @@ private struct NewTaskComposer: View {
                 addMenu
                 primaryRootMenu
                 worktreeMenu
-                harnessMenu
+                // With no harness connected the guidance's button is the way on; the menu would only repeat it.
+                if !availableHarnesses.isEmpty { harnessMenu }
             } secondary: {
                 accountPicker
                 sessionControls(.leading)
@@ -1217,19 +1247,32 @@ private struct NewTaskComposer: View {
         return [workspace] + others
     }
 
-    private func homeGuidance(_ message: String, action: String, perform: @escaping () -> Void) -> some View {
+    /// A line in the composer that says what is missing, with the button that fixes it; `prominent` when that
+    /// button is the only way on.
+    private func homeGuidance(_ message: String, action: String, prominent: Bool = false,
+                              perform: @escaping () -> Void) -> some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 10) {
                 Text(L10n.string(message)).foregroundStyle(.secondary)
-                Button(L10n.string(action), action: perform).parityPointer()
+                guidanceButton(action, prominent: prominent, perform: perform)
             }
             VStack(alignment: .leading, spacing: 6) {
                 Text(L10n.string(message)).foregroundStyle(.secondary)
-                Button(L10n.string(action), action: perform).parityPointer()
+                    .fixedSize(horizontal: false, vertical: true)
+                guidanceButton(action, prominent: prominent, perform: perform)
             }
         }
-        .font(.yardlet(.caption, scale: interfaceScale))
+        .font(.parity(.control, scale: interfaceScale))
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 16).padding(.bottom, 12)
+    }
+
+    @ViewBuilder
+    private func guidanceButton(_ title: String, prominent: Bool, perform: @escaping () -> Void) -> some View {
+        if prominent {
+            Button(L10n.string(title), action: perform).parityProminentButton().parityPointer()
+        } else {
+            Button(L10n.string(title), action: perform).parityPointer()
+        }
     }
 }

@@ -52,7 +52,7 @@ struct NewTaskHomeActivity {
     /// counts as coordinators.
     var archivedParents: Set<UUID> = []
     /// What a waiting task's newest request asks, on one line: the question, or the command to approve.
-    var requestLine: (SessionRecord) -> String? = { _ in nil }
+    var requestLine: (SessionRecord) -> NewTaskHomeRequestLine? = { _ in nil }
     /// Each task's pull request where it comes with the tasks (a remote window, from the host's list); nil
     /// asks this Mac's pull request lookup.
     var pullRequest: ((UUID) -> TaskPullRequest?)?
@@ -83,5 +83,30 @@ extension AppModel {
             latestTurn: { self.latestTurnBySessionID[$0] },
             archivedParents: store.archivedParentTaskIDs,
             requestLine: { AppModelRemoteBridge.requestLine(of: $0, in: self) })
+    }
+}
+
+/// What a waiting task's newest request asks, on one line for the desk, and what kind of answer it waits for:
+/// a command to approve shows in a code box, any other approval and a question as a sentence.
+struct NewTaskHomeRequestLine: Equatable, Sendable {
+    enum Kind: Equatable, Sendable {
+        /// A command to run, shown as code.
+        case command
+        /// A file change or another tool's permission.
+        case approval
+        /// A question, a form or a plan to review: it waits for an answer, not an approval.
+        case question
+    }
+
+    let text: String
+    let kind: Kind
+}
+
+extension SidebarTaskStatus {
+    /// The state a home line names for a task waiting on `request`: a question its task reports as an approval
+    /// reads as the question it is, with its words and color; every other state stays the task's own, in the
+    /// colors the sidebar gives it.
+    func asking(_ request: NewTaskHomeRequestLine?) -> SidebarTaskStatus {
+        self == .awaitingApproval && request?.kind == .question ? .needsInput : self
     }
 }

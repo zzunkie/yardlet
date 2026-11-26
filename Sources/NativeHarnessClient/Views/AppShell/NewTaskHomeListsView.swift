@@ -145,7 +145,11 @@ struct NewTaskHomeLists: View {
                 EmptyView()
             case .projects:
                 if summaries.isEmpty && idle.isEmpty {
-                    if !recentSessions.isEmpty || onImportConversation != nil { recentTasks }
+                    if !recentSessions.isEmpty {
+                        recentTasks
+                    } else if let importAction {
+                        importButton(importAction)
+                    }
                 } else {
                     VStack(alignment: .leading, spacing: 20) {
                         columns(layout)
@@ -244,7 +248,7 @@ struct NewTaskHomeLists: View {
                     .foregroundStyle(.secondary)
                     .frame(width: 16)
                 Text(L10n.string("Left for a while"))
-                    .font(.system(size: 14.5 * interfaceScale, weight: .semibold))
+                    .font(.parity(.body, weight: .semibold, scale: interfaceScale))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -374,9 +378,9 @@ struct NewTaskHomeLists: View {
                 .font(.parity(.caption, weight: .medium, scale: interfaceScale))
                 .foregroundStyle(isChosen ? AnyShapeStyle(ParityTheme.accent) : AnyShapeStyle(.secondary))
                 .frame(width: 16)
-                .centeredOnCapHeight(ofTextSize: 14.5 * interfaceScale)
+                .centeredOnCapHeight(ofTextSize: ParityType.body.size * interfaceScale)
             Text(summary.name)
-                .font(.system(size: 14.5 * interfaceScale, weight: .semibold))
+                .font(.parity(.body, weight: .semibold, scale: interfaceScale))
                 .foregroundStyle(isChosen ? AnyShapeStyle(ParityTheme.accentText) : AnyShapeStyle(.primary))
                 .lineLimit(1)
                 .layoutPriority(1)
@@ -390,11 +394,11 @@ struct NewTaskHomeLists: View {
             Spacer(minLength: 8)
             if let first = summary.pullRequests.first {
                 pill(first)
-                    .centeredOnCapHeight(ofTextSize: 14.5 * interfaceScale)
+                    .centeredOnCapHeight(ofTextSize: ParityType.body.size * interfaceScale)
                 if summary.pullRequests.count > 1 {
                     Text(verbatim: "+\(summary.pullRequests.count - 1)")
-                        .font(.system(size: 11.5 * interfaceScale).monospacedDigit())
-                        .foregroundStyle(.tertiary)
+                        .font(.parity(.caption, scale: interfaceScale).monospacedDigit())
+                        .foregroundStyle(.secondary)
                         .fixedSize()
                         .help(summary.pullRequests.dropFirst().map { "#\($0.pullRequest.number) \($0.pill.title)" }
                             .joined(separator: "\n"))
@@ -417,14 +421,16 @@ struct NewTaskHomeLists: View {
     private func taskLine(_ task: NewTaskProjectTask) -> some View {
         switch task {
         case let .attention(row) where row.waitsOnPerson:
-            let tint: Color = switch row.status {
+            // A question its task reports as an approval reads as the question it is, as on the desk.
+            let status = row.status == .awaitingApproval ? row.status.asking(activity.requestLine(row.session)) : row.status
+            let tint: Color = switch status {
             case .awaitingApproval: .green
             case .failed: .red
             default: .orange
             }
-            SidebarTaskStatusView(status: row.status)
+            SidebarTaskStatusView(status: status)
                 .accessibilityHidden(true)
-            Text(row.status.homeName)
+            Text(status.homeName)
                 .font(.system(size: 12 * interfaceScale, weight: .semibold))
                 .foregroundStyle(ThemeContrast.readableTint(tint, over: ThemeSurface.canvas.resolve(in: environment), in: environment))
                 .lineLimit(1)
@@ -454,7 +460,7 @@ struct NewTaskHomeLists: View {
             taskName(row.session, weight: .medium)
             if row.subtasks > 0 {
                 Text(row.subtasks == 1 ? L10n.string("1 subtask") : L10n.format("%lld subtasks", row.subtasks))
-                    .font(.system(size: 11.5 * interfaceScale).monospacedDigit())
+                    .font(.parity(.caption, scale: interfaceScale).monospacedDigit())
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 6)
                     .frame(height: 18)
@@ -507,7 +513,7 @@ struct NewTaskHomeLists: View {
                 .layoutPriority(1)
             Spacer(minLength: 8)
             Text(Layout.nextRunText(nextRun, now: activity.now))
-                .font(.system(size: 11.5 * interfaceScale).monospacedDigit())
+                .font(.parity(.caption, scale: interfaceScale).monospacedDigit())
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .fixedSize()
@@ -523,7 +529,7 @@ struct NewTaskHomeLists: View {
                 .layoutPriority(1)
             Text(L10n.format("Suggested in %@", task.title))
                 .font(.system(size: 12 * interfaceScale))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
                 .lineLimit(1)
             Spacer(minLength: 8)
         }
@@ -580,13 +586,39 @@ struct NewTaskHomeLists: View {
             Text(verbatim: "#\(row.pullRequest.number)").monospacedDigit()
             Text(pill.title)
         }
-        .font(.system(size: 11 * interfaceScale, weight: .medium))
+        .font(.parity(.caption, weight: .medium, scale: interfaceScale))
         .foregroundStyle(TaskPullRequestBadgeView.color(pill.tone))
         .padding(.horizontal, 6)
         .frame(height: 18 * interfaceScale)
         .background(TaskPullRequestBadgeView.color(pill.tone).opacity(0.12), in: Capsule())
         .fixedSize()
         .help(row.pullRequest.url.absoluteString)
+    }
+
+    /// With no task yet, the one way to bring conversations in: from the Claude and Codex apps, else from a CLI.
+    /// Both stay in the File menu.
+    private var importAction: (title: String, help: String, perform: () -> Void)? {
+        if let onImportFromOtherApps {
+            return (L10n.string("Import Conversations from Other Apps…"),
+                    L10n.string("Bring in the conversations open in the Claude and Codex apps."), onImportFromOtherApps)
+        }
+        if let onImportConversation {
+            return (L10n.string("Import conversation…"),
+                    L10n.string("Continue a conversation started in another app or CLI."), onImportConversation)
+        }
+        return nil
+    }
+
+    private func importButton(_ action: (title: String, help: String, perform: () -> Void)) -> some View {
+        Button(action: action.perform) {
+            Label(action.title, systemImage: "square.and.arrow.down")
+                .font(.parity(.control, scale: interfaceScale))
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(ParityTheme.accentText)
+        .parityPointer()
+        .help(action.help)
+        .padding(.horizontal, 10)
     }
 
     private var recentTasks: some View {
@@ -697,8 +729,8 @@ struct NewTaskHomeTime: View {
 
     var body: some View {
         Text(date, format: .relative(presentation: .named, unitsStyle: .abbreviated))
-            .font(.system(size: 11.5 * interfaceScale).monospacedDigit())
-            .foregroundStyle(.tertiary)
+            .font(.parity(.caption, scale: interfaceScale).monospacedDigit())
+            .foregroundStyle(.secondary)
             .lineLimit(1)
             .fixedSize()
     }
@@ -712,8 +744,8 @@ struct NewTaskHomeElapsed: View {
     var body: some View {
         TimelineView(.periodic(from: since, by: 60)) { context in
             Text(L10n.format("%@ so far", Self.duration(from: since, to: context.date)))
-                .font(.system(size: 11.5 * interfaceScale).monospacedDigit())
-                .foregroundStyle(.tertiary)
+                .font(.parity(.caption, scale: interfaceScale).monospacedDigit())
+                .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .fixedSize()
         }

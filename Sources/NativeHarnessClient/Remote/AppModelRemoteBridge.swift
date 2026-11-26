@@ -270,19 +270,37 @@ final class AppModelRemoteBridge: RemoteBridge {
     /// What the newest request a task waits on asks, on one line for the home's desk: a question's first
     /// line, or the command to approve before its description, masked as a notification's line is. The
     /// line is cut where the desk's row ends; the request's card shows it whole.
-    static func requestLine(of session: SessionRecord, in model: AppModel) -> String? {
+    static func requestLine(of session: SessionRecord, in model: AppModel) -> NewTaskHomeRequestLine? {
         switch newestRequest(of: session, in: model) {
-        case let .held(request)? where request.form == nil:
-            RemoteSummary.line([request.command ?? request.detail ?? request.title], limit: requestLineLimit)
-        case let .held(request)?:
-            RemoteTaskProjection.requestSummary(request)
-        case let .permission(request)? where request.structured == nil:
-            RemoteSummary.line([request.command ?? request.detail ?? request.title], limit: requestLineLimit)
-        case let .permission(request)?:
-            RemoteTaskProjection.requestSummary(request)
-        case nil:
-            nil
+        case let .held(request)?: requestLine(request)
+        case let .permission(request)?: requestLine(request)
+        case nil: nil
         }
+    }
+
+    /// A held request's line. A plan to review is an approval, as the task's attention reads it
+    /// (`TaskAttentionDetail.reading`); a question or a form waits for an answer.
+    static func requestLine(_ request: ConversationRequest) -> NewTaskHomeRequestLine? {
+        switch request.form {
+        case nil: approvalLine(command: request.command, other: request.detail ?? request.title)
+        case .planReview: RemoteTaskProjection.requestSummary(request).map { .init(text: $0, kind: .approval) }
+        case .choices, .freeText, .mcpForm: RemoteTaskProjection.requestSummary(request).map { .init(text: $0, kind: .question) }
+        }
+    }
+
+    /// A transcript's permission request's line, read as the held request's is.
+    static func requestLine(_ request: PermissionRequest) -> NewTaskHomeRequestLine? {
+        switch request.structured {
+        case nil: approvalLine(command: request.command, other: request.detail ?? request.title)
+        case .plan?: RemoteTaskProjection.requestSummary(request).map { .init(text: $0, kind: .approval) }
+        case .questions?: RemoteTaskProjection.requestSummary(request).map { .init(text: $0, kind: .question) }
+        }
+    }
+
+    /// The command to approve as code; without one, or with one of only blanks, the request's own words.
+    private static func approvalLine(command: String?, other: String?) -> NewTaskHomeRequestLine? {
+        if let text = RemoteSummary.line([command], limit: requestLineLimit) { return .init(text: text, kind: .command) }
+        return RemoteSummary.line([other], limit: requestLineLimit).map { .init(text: $0, kind: .approval) }
     }
 
     /// Longer than a notification's: the desk's row is wider than a lock screen's.
