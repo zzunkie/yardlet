@@ -136,6 +136,14 @@ final class HarnessCatalogTests: XCTestCase {
             let pixelsHigh = image.representations.map(\.pixelsHigh).max() ?? 0
             XCTAssertGreaterThanOrEqual(pixelsWide, 128, descriptor.displayName)
             XCTAssertGreaterThanOrEqual(pixelsHigh, 128, descriptor.displayName)
+            // A dark mark, where there is one, is packaged and as sharp as the light one.
+            if HarnessLogoAsset.darkName(for: descriptor.id) != nil {
+                let dark = try XCTUnwrap(HarnessLogoCatalog.image(for: descriptor.id, isDark: true),
+                                         "Missing dark logo for \(descriptor.displayName)")
+                XCTAssertFalse(dark === image, descriptor.displayName)
+                XCTAssertGreaterThanOrEqual(dark.representations.map(\.pixelsWide).max() ?? 0, 128,
+                                            descriptor.displayName)
+            }
         }
     }
 }

@@ -1464,12 +1464,13 @@ final class AccountLoginTerminalView: LocalProcessTerminalView {
 struct HarnessLogoView: View {
     let descriptor: HarnessDescriptor
     let size: CGFloat
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: size * 0.24)
                 .fill(ParityTheme.subtleFill)
-            if let image = HarnessLogoCatalog.image(for: descriptor.id) {
+            if let image = HarnessLogoCatalog.image(for: descriptor.id, colorScheme: colorScheme) {
                 Image(nsImage: image)
                     .resizable()
                     .interpolation(.high)

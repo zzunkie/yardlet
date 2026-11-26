@@ -334,7 +334,7 @@ enum ParityTheme {
             ? NSColor.white.withAlphaComponent(0.18)
             : NSColor.black.withAlphaComponent(0.16)
     })
-    /// Status marks (docs/DESIGN_SYSTEM.md, "Color"): the system green and orange in dark mode; in light mode a deeper
+    /// Status marks (docs/DESIGN_SYSTEM.md, "Semantic colors"): the system green and orange in dark mode; in light mode a deeper
     /// shade of each, as the system's own increased-contrast green, so a 6 pt dot or a small glyph keeps 3:1 against
     /// the light sidebar and canvas, where the plain system colors measure about 2:1. The hue keeps its meaning.
     static let statusSuccess = Color(nsColor: NSColor(name: "YardletStatusSuccess") { appearance in

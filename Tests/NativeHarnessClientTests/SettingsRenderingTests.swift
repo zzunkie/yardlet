@@ -45,6 +45,24 @@ import XCTest
         }
     }
 
+    /// The sidebar's approval and question marks keep 3:1 against the sidebar and the canvas in both appearances.
+    func testStatusMarksStandApartFromTheirSurfacesInBothAppearances() throws {
+        for appearance in WindowlessRender.Appearance.allCases {
+            var environment = EnvironmentValues()
+            environment.colorScheme = appearance.colorScheme
+            let native = try XCTUnwrap(NSAppearance(named: appearance.appKitName))
+            native.performAsCurrentDrawingAppearance {
+                for (name, status) in [("success", ParityTheme.statusSuccess), ("warning", ParityTheme.statusWarning)] {
+                    let resolved = status.resolve(in: environment)
+                    for surface in [ParityTheme.originalSidebar, ParityTheme.originalCanvas] {
+                        XCTAssertGreaterThanOrEqual(Self.contrast(resolved, surface.resolve(in: environment)), 3,
+                                                    "\(name) \(appearance.suffix)")
+                    }
+                }
+            }
+        }
+    }
+
     /// The same mounted window picks up a settings write, including a change from one preset to another.
     func testAnOpenWindowFollowsTheAccentSetting() throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("WindowAccent")))
