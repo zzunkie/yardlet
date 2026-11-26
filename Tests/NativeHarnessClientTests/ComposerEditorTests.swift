@@ -829,12 +829,21 @@ final class ComposerEditorTests: XCTestCase {
     /// width (a mouse connected). The field lays out its taller text a moment before its scroll view
     /// takes the new height; a scroller that showed for that moment narrowed the text, the full line
     /// below wrapped too, and the composer jumped a line too tall and back (`ComposerTextScrollView`).
+    /// Composition, whole words or a syllable at a time as 2-Set Korean composes, and Shift-Return grow
+    /// it with the first line at the top and no empty band, with scrollers of either style.
     func testTypingThatWrapsTheFirstLineGrowsTheComposerOnceWhereScrollersTakeWidth() throws {
+        for style in [NSScroller.Style.legacy, .overlay] {
+            try checkGrowing(scrollers: style)
+        }
+    }
+
+    private func checkGrowing(scrollers style: NSScroller.Style) throws {
         let task = TaskProbe()
         let composer = try mount(taskComposer(task), editing: task.draft)
+        defer { composer.host.close() }
         let editor = try editor(composer)
         let scroll = try XCTUnwrap(editor.enclosingScrollView)
-        scroll.scrollerStyle = .legacy
+        scroll.scrollerStyle = style
         // The longest line that fits the field: one character more wraps it.
         let words = String(repeating: "lorem ipsum dolor sit amet ", count: 8)
         func height(withSecondLine count: Int) -> CGFloat {
@@ -888,6 +897,50 @@ final class ComposerEditorTests: XCTestCase {
         }
         XCTAssertEqual(task.draft.text, line + "\n" + line + "lorem")
         XCTAssertEqual(committed, [], "The commit leaves the height")
+
+        // The composer shows its text from the top and is as tall as its lines: no band above the first
+        // line, none below the last, while composing and after.
+        let layout = try XCTUnwrap(editor.layoutManager), container = try XCTUnwrap(editor.textContainer)
+        func checkNoBand(_ step: String, file: StaticString = #filePath, line: UInt = #line) {
+            layout.ensureLayout(for: container)
+            let text = max(layout.usedRect(for: container).maxY, layout.extraLineFragmentRect.maxY)
+            let clip = editor.superview?.bounds.minY ?? 0
+            XCTAssertEqual(clip, 0, accuracy: 0.5, "\(style): the first line at the top after \(step)", file: file, line: line)
+            XCTAssertEqual(editor.frame.minY, 0, accuracy: 0.5, "\(style): \(step)", file: file, line: line)
+            XCTAssertEqual(layout.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil).minY, 0, accuracy: 0.5,
+                           "\(style): \(step)", file: file, line: line)
+            XCTAssertEqual(scroll.frame.height, text.rounded(.up), accuracy: 1,
+                           "\(style): the composer as tall as its lines after \(step)", file: file, line: line)
+        }
+        // 2-Set Korean composes a syllable at a time: a consonant, the syllable, its commit, the next one,
+        // across the point where the second line wraps.
+        func composeSyllables(_ syllables: [(jamo: String, syllable: String)]) {
+            for (jamo, syllable) in syllables {
+                editor.setMarkedText(jamo, selectedRange: NSRange(location: 1, length: 0),
+                                     replacementRange: NSRange(location: NSNotFound, length: 0))
+                composer.host.settle(passes: 3)
+                checkNoBand("composing \(jamo)")
+                editor.setMarkedText(syllable, selectedRange: NSRange(location: 1, length: 0),
+                                     replacementRange: NSRange(location: NSNotFound, length: 0))
+                composer.host.settle(passes: 3)
+                checkNoBand("composing \(syllable)")
+                editor.insertText(syllable, replacementRange: NSRange(location: NSNotFound, length: 0))
+                composer.host.settle(passes: 3)
+                checkNoBand("committing \(syllable)")
+            }
+        }
+        let syllables = [("ㄱ", "가"), ("ㄴ", "나"), ("ㄷ", "다"), ("ㄹ", "라"), ("ㅁ", "마"), ("ㅂ", "바")]
+        task.draft.text = line + "\n" + line
+        composer.host.settle()
+        editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
+        let unwrapped = scroll.frame.height
+        composeSyllables(syllables)
+        XCTAssertGreaterThan(scroll.frame.height, unwrapped, "\(style): the syllables wrapped the line")
+        try press("\r", keyCode: 36, modifiers: .shift, in: composer)
+        checkNoBand("Shift-Return")
+        composeSyllables(syllables)
+        XCTAssertEqual(task.draft.text, line + "\n" + line + "가나다라마바\n가나다라마바")
+        XCTAssertTrue(task.sent.isEmpty)
     }
 
     /// Every height `view` takes while `action` runs, in order.
