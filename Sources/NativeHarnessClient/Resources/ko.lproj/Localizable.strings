@@ -1553,7 +1553,7 @@
 "Remove from queue" = "대기열에서 빼기";
 "Add to the running task" = "진행 중인 작업에 추가";
 "Deliver at the next step" = "다음 단계에서 전달";
-"Send when this turn ends" = "이번 턴이 끝나면 보냄";
+"Send when this turn ends" = "작업이 끝나면 보냄";
 "Stop and send" = "중지하고 보내기";
 "%@ · %@" = "%@ · %@";
 "Send now" = "지금 보내기";
@@ -1742,8 +1742,7 @@
 "Searched files" = "파일 검색함";
 "Used a tool" = "도구 사용함";
 "Used %lld tools" = "도구 %lld개 사용함";
-"Awaiting approval" = "승인을 기다리는 중";
-"%lld more waiting" = "외 %lld건 대기 중";
+"Awaiting approval" = "승인 대기 중";
 "Needs input" = "입력 필요";
 "Task encountered a system error" = "작업에 시스템 오류가 발생했습니다";
 "Working" = "작업 중";
