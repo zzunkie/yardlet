@@ -8,7 +8,7 @@ extension AppModel {
     /// names. Only the one session file is read; nothing starts.
     func task(linkedBy link: TaskLink) async -> SessionRecord? {
         switch link {
-        case let .task(id):
+        case let .task(id), let .conversation(id):
             return store.sessions.first { $0.id == id } ?? task(providerSessionID: id.uuidString)
         case let .codexThread(id):
             return task(providerSessionID: id, harness: .codex)

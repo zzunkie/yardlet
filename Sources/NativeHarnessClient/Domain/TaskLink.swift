@@ -2,8 +2,9 @@ import Foundation
 
 /// A link in a conversation that names a task rather than a page or a file, in the forms agents
 /// write them: a Yardlet task ID as an anchor (`[title](#<UUID>)`, as Claude Code writes the Claude
-/// app's session links), the Claude app's own session anchor (`#local_<id>`), and the Codex app's
-/// thread link (`codex://threads/<id>`). Clicking one opens that task in Yardlet.
+/// app's session links), the Claude app's own session anchor (`#local_<id>`), the Codex app's
+/// thread link (`codex://threads/<id>`), and a conversation link (`conversation://<UUID>`), as
+/// Antigravity writes its subagents' and other conversations'. Clicking one opens that task in Yardlet.
 enum TaskLink: Equatable, Sendable {
     /// A Yardlet task ID, or a harness session ID that is a UUID (a Claude Code session, a Codex
     /// thread).
@@ -13,6 +14,9 @@ enum TaskLink: Equatable, Sendable {
     case claudeDesktopSession(String)
     /// A Codex thread by its ID.
     case codexThread(String)
+    /// A conversation by its ID (`conversation://<UUID>`): one of the task's own subagents, or a
+    /// task whose harness session has that ID. No app opens these, so they never leave Yardlet.
+    case conversation(UUID)
 
     init?(_ url: URL) {
         if url.scheme == nil {
@@ -28,6 +32,13 @@ enum TaskLink: Equatable, Sendable {
             }
             return
         }
+        if Self.isConversation(url) {
+            guard url.user == nil, url.password == nil, url.port == nil, url.query == nil, url.fragment == nil,
+                  ["", "/"].contains(url.path(percentEncoded: false)),
+                  let host = url.host(percentEncoded: false), let id = UUID(uuidString: host) else { return nil }
+            self = .conversation(id)
+            return
+        }
         // The Codex app opens `codex://threads/<id>` in its own window (`codex-dev:` is its
         // development build's).
         guard url.scheme?.lowercased() == "codex", url.host()?.lowercased() == "threads",
@@ -36,6 +47,12 @@ enum TaskLink: Equatable, Sendable {
         guard parts.count == 1, let id = parts.first.map(String.init),
               id.wholeMatch(of: /[A-Za-z0-9_-]{1,128}/) != nil else { return nil }
         self = .codexThread(id)
+    }
+
+    /// Whether `url` is a conversation link (`conversation:`), read as one or not: no app opens these, so
+    /// one Yardlet cannot read stays in the conversation rather than going to the system.
+    static func isConversation(_ url: URL) -> Bool {
+        url.scheme?.lowercased() == "conversation"
     }
 
     /// The anchor that links to a Yardlet task, as agents write one (`[title](#<UUID>)`).
