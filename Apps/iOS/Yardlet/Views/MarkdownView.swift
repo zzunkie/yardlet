@@ -19,9 +19,10 @@ struct ConversationText: View {
 }
 
 /// An answer's Markdown (CommonMark and GFM tables, docs/REMOTE_PROTOCOL.md §6.3), drawn in blocks: paragraphs and
-/// lists with their inline styles, inline and standalone images, headings, quotes, code blocks that scroll sideways,
-/// and tables as monospaced text. Selectable, so a part can be copied. Links underlined, and with `opensFiles` a code
-/// span that names a file links it too (`ConversationLinks`); the screen's `openURL` decides what a link opens.
+/// lists with their inline styles and hanging indents, inline and standalone images, headings, quotes, code blocks and
+/// tables that scroll sideways with their scroll bar shown. Selectable, so a part can be copied. Links in the link
+/// color and underlined, and with `opensFiles` a code span that names a file links it too (`ConversationLinks`); the
+/// screen's `openURL` decides what a link opens.
 struct MarkdownView: View {
     let text: String
     var font: Font = .body
@@ -68,19 +69,21 @@ struct MarkdownView: View {
             }
         case let .pictures(pictures):
             MarkdownPicturesView(pictures: pictures, opensFiles: opensFiles)
-        case let .code(code), let .table(code):
-            ScrollView(.horizontal, showsIndicators: false) {
+        case let .list(items):
+            MarkdownListView(items: items, font: font, opensFiles: opensFiles)
+        case let .code(code):
+            SidewaysBlock {
                 Text(code)
                     .font(.system(.footnote, design: .monospaced))
                     .foregroundStyle(YardletPalette.onSurface)
                     .textSelection(.enabled)
                     .padding(12)
+                    .padding(.trailing, 8)
             }
-            .background(YardletPalette.surfaceContainerLow, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(YardletPalette.outlineVariant, lineWidth: 0.5)
-            )
+        case let .table(table):
+            SidewaysBlock(fitsContent: true) {
+                MarkdownTableView(table: table, opensFiles: opensFiles)
+            }
         case .rule:
             Divider()
         }
@@ -108,20 +111,50 @@ struct MarkdownView: View {
         case heading(Int, String)
         case quote(String)
         case pictures([Picture])
+        case list([ListItem])
         case code(String)
-        case table(String)
+        case table(Table)
         case rule
+    }
+
+    /// One item of a list: how deep it is, its marker ("•", "3.", "☐") and its words, continuation lines included.
+    struct ListItem: Equatable {
+        let depth: Int
+        let marker: String
+        var text: String
+    }
+
+    /// A GFM table: its header row, its rows, and each column's alignment from the delimiter row.
+    struct Table: Equatable {
+        let header: [String]
+        let rows: [[String]]
+        let alignments: [HorizontalAlignment]
+
+        static func == (lhs: Table, rhs: Table) -> Bool {
+            lhs.header == rhs.header && lhs.rows == rhs.rows
+                && lhs.alignments.map(Self.name) == rhs.alignments.map(Self.name)
+        }
+
+        private static func name(_ alignment: HorizontalAlignment) -> String {
+            alignment == .center ? "center" : alignment == .trailing ? "trailing" : "leading"
+        }
     }
 
     static func blocks(_ text: String) -> [Block] {
         var blocks: [Block] = []
         var paragraph: [String] = []
+        var list: [ListItem] = []
         var lines = text.components(separatedBy: "\n")[...]
 
         func flush() {
-            guard !paragraph.isEmpty else { return }
-            blocks.append(contentsOf: splitParagraph(paragraph.joined(separator: "\n")))
-            paragraph = []
+            if !paragraph.isEmpty {
+                blocks.append(contentsOf: splitParagraph(paragraph.joined(separator: "\n")))
+                paragraph = []
+            }
+            if !list.isEmpty {
+                blocks.append(.list(list))
+                list = []
+            }
         }
 
         while let line = lines.popFirst() {
@@ -157,8 +190,17 @@ struct MarkdownView: View {
                     lines.removeFirst()
                 }
                 blocks.append(.quote(quote.joined(separator: "\n")))
+            } else if let item = listItem(line) {
+                if !paragraph.isEmpty {
+                    blocks.append(contentsOf: splitParagraph(paragraph.joined(separator: "\n")))
+                    paragraph = []
+                }
+                list.append(item)
+            } else if !list.isEmpty {
+                // A line under an item, indented or not, goes on with it.
+                list[list.count - 1].text += "\n" + trimmed
             } else {
-                paragraph.append(bullet(line))
+                paragraph.append(line)
             }
         }
         flush()
@@ -479,35 +521,76 @@ struct MarkdownView: View {
         return hashes
     }
 
-    /// "- item" and "* item" as "• item", keeping the indent of a nested item.
-    private static func bullet(_ line: String) -> String {
-        let indent = line.prefix(while: { $0 == " " })
+    /// A list item's line: "- ", "* " or "+ " as "•", a task box as "☐" or "☑", "1. " or "1) " as "1.", and how deep
+    /// its indent puts it (two spaces a level, a tab as four).
+    static func listItem(_ line: String) -> ListItem? {
+        let indent = line.prefix(while: { $0 == " " || $0 == "\t" })
+        let depth = indent.reduce(0) { $0 + ($1 == "\t" ? 4 : 1) } / 2
         let rest = line.dropFirst(indent.count)
-        if rest.hasPrefix("- [ ] ") { return indent + "☐ " + rest.dropFirst(6) }
-        if rest.hasPrefix("- [x] ") || rest.hasPrefix("- [X] ") { return indent + "☑ " + rest.dropFirst(6) }
-        if rest.hasPrefix("- ") || rest.hasPrefix("* ") || rest.hasPrefix("+ ") { return indent + "• " + rest.dropFirst(2) }
-        return line
+        if rest.hasPrefix("- [ ] ") { return ListItem(depth: depth, marker: "☐", text: String(rest.dropFirst(6))) }
+        if rest.hasPrefix("- [x] ") || rest.hasPrefix("- [X] ") {
+            return ListItem(depth: depth, marker: "☑", text: String(rest.dropFirst(6)))
+        }
+        if rest.hasPrefix("- ") || rest.hasPrefix("* ") || rest.hasPrefix("+ ") {
+            return ListItem(depth: depth, marker: "•", text: String(rest.dropFirst(2)))
+        }
+        let digits = rest.prefix(while: \.isNumber)
+        guard (1...9).contains(digits.count) else { return nil }
+        let after = rest.dropFirst(digits.count)
+        guard after.hasPrefix(". ") || after.hasPrefix(") ") else { return nil }
+        return ListItem(depth: depth, marker: digits + ".", text: String(after.dropFirst(2)))
     }
 
-    /// A GFM table as aligned columns, its delimiter row left out.
-    private static func table(_ rows: [String]) -> String {
-        let cells = rows.compactMap { row -> [String]? in
-            var parts = row.split(separator: "|", omittingEmptySubsequences: false).map {
-                $0.trimmingCharacters(in: .whitespaces)
+    /// A GFM table: its first row the header, and the row under it, when every cell is dashes with optional colons,
+    /// the delimiter that sets each column's alignment. Any other row, a body row of dashes included, is a row.
+    static func table(_ rows: [String]) -> Table {
+        var cells = rows.map(tableCells).filter { !$0.isEmpty }
+        var alignments: [HorizontalAlignment] = []
+        if cells.count > 1, cells[1].allSatisfy(isDelimiterCell) {
+            alignments = cells[1].map { cell in
+                cell.hasPrefix(":") && cell.hasSuffix(":") ? .center : cell.hasSuffix(":") ? .trailing : .leading
             }
-            if parts.first == "" { parts.removeFirst() }
-            if parts.last == "" { parts.removeLast() }
-            if parts.allSatisfy({ !$0.isEmpty && $0.allSatisfy { "-:".contains($0) } }) { return nil }
-            return parts
+            cells.remove(at: 1)
         }
-        let columns = cells.map(\.count).max() ?? 0
-        let widths = (0..<columns).map { column in cells.map { column < $0.count ? $0[column].count : 0 }.max() ?? 0 }
-        return cells.map { row in
-            (0..<columns).map { column in
-                let cell = column < row.count ? row[column] : ""
-                return cell.padding(toLength: widths[column], withPad: " ", startingAt: 0)
-            }.joined(separator: "  ")
-        }.joined(separator: "\n")
+        return Table(header: cells.first ?? [], rows: Array(cells.dropFirst()), alignments: alignments)
+    }
+
+    /// "---", ":--", "--:" or ":-:": at least one dash, a colon only at either end.
+    private static func isDelimiterCell(_ cell: String) -> Bool {
+        let core = cell.drop { $0 == ":" }.reversed().drop { $0 == ":" }
+        return !core.isEmpty && core.allSatisfy { $0 == "-" }
+    }
+
+    /// A table row's cells, split at its pipes but not at an escaped one (`\|`, kept as "|") or one inside a code
+    /// span; the row's outer pipes are left out.
+    static func tableCells(_ row: String) -> [String] {
+        var cells: [String] = []
+        var cell = ""
+        var index = row.startIndex
+        while index < row.endIndex {
+            let ch = row[index]
+            if ch == "\\", row.index(after: index) < row.endIndex, row[row.index(after: index)] == "|" {
+                cell.append("|")
+                index = row.index(index, offsetBy: 2)
+            } else if ch == "`" {
+                let runEnd = advanceWhile(row, from: index, matching: "`")
+                let end = findClosingBackticks(row, from: runEnd, count: row.distance(from: index, to: runEnd)) ?? runEnd
+                cell.append(contentsOf: row[index..<end])
+                index = end
+            } else if ch == "|" {
+                cells.append(cell)
+                cell = ""
+                index = row.index(after: index)
+            } else {
+                cell.append(ch)
+                index = row.index(after: index)
+            }
+        }
+        cells.append(cell)
+        var trimmed = cells.map { $0.trimmingCharacters(in: .whitespaces) }
+        if trimmed.first == "" { trimmed.removeFirst() }
+        if trimmed.last == "" { trimmed.removeLast() }
+        return trimmed
     }
 
     static func inline(_ text: String, opensFiles: Bool = false) -> AttributedString {
@@ -521,10 +604,184 @@ struct MarkdownView: View {
                 parsed[run.range].link = ConversationLinks.fileLink(path)
             }
         }
-        // The accent alone hardly tells a link from the words around it.
+        // In the link color and underlined: the app's tint is its monochrome primary, which tells a link from the
+        // words around it by the underline alone.
         for run in parsed.runs where run.link != nil {
             parsed[run.range].underlineStyle = .single
+            parsed[run.range].foregroundColor = YardletPalette.link
         }
         return parsed
+    }
+}
+
+/// A block wider than the screen, in its box: it scrolls sideways, its scroll bar shows (and flashes as it appears),
+/// and while more of it is out of view on the right that edge fades, so a cut-off edge reads as more to see.
+private struct SidewaysBlock<Content: View>: View {
+    /// The box as wide as what it holds when that is narrower than the screen (a table), rather than the screen's width.
+    var fitsContent = false
+    @ViewBuilder let content: Content
+    @State private var contentWidth: CGFloat = 0
+    @State private var boxWidth: CGFloat = 0
+    @State private var offset: CGFloat = 0
+
+    private var moreOnRight: Bool { contentWidth - offset > boxWidth + 1 }
+
+    var body: some View {
+        ScrollView(.horizontal) {
+            content
+                .padding(.bottom, fitsContent ? 0 : 4)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { contentWidth = $0 }
+                .background(GeometryReader { proxy in
+                    Color.clear.preference(key: SidewaysOffset.self, value: -proxy.frame(in: .named(Self.space)).minX)
+                })
+        }
+        .coordinateSpace(.named(Self.space))
+        .onPreferenceChange(SidewaysOffset.self) { value in MainActor.assumeIsolated { offset = value } }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { boxWidth = $0 }
+        .overlay(alignment: .trailing) {
+            if moreOnRight {
+                LinearGradient(colors: [YardletPalette.surfaceContainerLow.opacity(0), YardletPalette.surfaceContainerLow],
+                               startPoint: .leading, endPoint: .trailing)
+                    .frame(width: 28)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.15), value: moreOnRight)
+        .scrollIndicators(.visible)
+        .scrollIndicatorsFlash(onAppear: true)
+        .background(YardletPalette.surfaceContainerLow, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(YardletPalette.outlineVariant, lineWidth: 0.5)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .frame(maxWidth: fitsContent && contentWidth > 0 ? contentWidth : nil, alignment: .leading)
+    }
+
+    private static var space: String { "sideways" }
+}
+
+/// How far a sideways block has scrolled.
+private struct SidewaysOffset: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+/// A Markdown table as a table: a header band, rules between the rows and columns, and each cell's inline Markdown
+/// (code, emphasis, links) drawn as in a sentence. Every cell fills its column's width and its row's height, so the
+/// band and the rules run unbroken from edge to edge; a long cell wraps at a column's widest.
+private struct MarkdownTableView: View {
+    let table: MarkdownView.Table
+    let opensFiles: Bool
+
+    private var columns: Int { max(table.header.count, table.rows.map(\.count).max() ?? 0, 1) }
+
+    var body: some View {
+        let rows = [table.header] + table.rows
+        TableLayout(columns: columns, maxColumnWidth: 264) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { rowIndex, cells in
+                ForEach(0..<columns, id: \.self) { column in
+                    cell(column < cells.count ? cells[column] : "", row: rowIndex, column: column)
+                }
+            }
+        }
+        .textSelection(.enabled)
+    }
+
+    private func cell(_ text: String, row: Int, column: Int) -> some View {
+        let alignment = column < table.alignments.count ? table.alignments[column] : .leading
+        return ConversationText(text, opensFiles: opensFiles)
+            .font(row == 0 ? .footnote.weight(.semibold) : .footnote)
+            .foregroundStyle(YardletPalette.onSurface)
+            .multilineTextAlignment(alignment == .trailing ? .trailing : alignment == .center ? .center : .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: Alignment(horizontal: alignment, vertical: .top))
+            .background(row == 0 ? YardletPalette.surfaceContainer : Color.clear, in: .rect)
+            .overlay(alignment: .leading) {
+                if column > 0 { Rectangle().fill(YardletPalette.outlineVariant).frame(width: 0.5) }
+            }
+            .overlay(alignment: .top) {
+                if row > 0 { Rectangle().fill(YardletPalette.outlineVariant).frame(height: 0.5) }
+            }
+    }
+}
+
+/// Lays a table's cells, given row by row, in columns as wide as their widest cell (up to `maxColumnWidth`, where a
+/// cell wraps) and rows as tall as their tallest, offering each cell its column's width and its row's height.
+private struct TableLayout: Layout {
+    let columns: Int
+    let maxColumnWidth: CGFloat
+
+    struct Measure {
+        var widths: [CGFloat]
+        var heights: [CGFloat]
+    }
+
+    func makeCache(subviews: Subviews) -> Measure { measure(subviews) }
+
+    func updateCache(_ cache: inout Measure, subviews: Subviews) { cache = measure(subviews) }
+
+    private func measure(_ subviews: Subviews) -> Measure {
+        var widths = [CGFloat](repeating: 0, count: columns)
+        for (index, cell) in subviews.enumerated() {
+            let column = index % columns
+            widths[column] = max(widths[column], min(cell.sizeThatFits(.unspecified).width, maxColumnWidth))
+        }
+        var heights = [CGFloat](repeating: 0, count: (subviews.count + columns - 1) / columns)
+        for (index, cell) in subviews.enumerated() {
+            let size = cell.sizeThatFits(ProposedViewSize(width: widths[index % columns], height: nil))
+            heights[index / columns] = max(heights[index / columns], size.height)
+        }
+        return Measure(widths: widths, heights: heights)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Measure) -> CGSize {
+        CGSize(width: cache.widths.reduce(0, +), height: cache.heights.reduce(0, +))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Measure) {
+        var y = bounds.minY
+        for row in cache.heights.indices {
+            var x = bounds.minX
+            for column in 0..<columns {
+                let index = row * columns + column
+                guard index < subviews.count else { break }
+                subviews[index].place(at: CGPoint(x: x, y: y),
+                                      proposal: ProposedViewSize(width: cache.widths[column], height: cache.heights[row]))
+                x += cache.widths[column]
+            }
+            y += cache.heights[row]
+        }
+    }
+}
+
+/// A Markdown list: each item's marker in a column of its own, so a line that wraps starts under the words rather
+/// than under the marker, a nested item indented under its parent.
+private struct MarkdownListView: View {
+    let items: [MarkdownView.ListItem]
+    let font: Font
+    let opensFiles: Bool
+    @ScaledMetric(relativeTo: .body) private var levelIndent: CGFloat = 18
+    @ScaledMetric(relativeTo: .body) private var markerWidth: CGFloat = 18
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(verbatim: item.marker)
+                        .font(font.monospacedDigit())
+                        .foregroundStyle(YardletPalette.onSurfaceVariant)
+                        .frame(minWidth: markerWidth, alignment: .trailing)
+                        .fixedSize()
+                    ConversationText(item.text, opensFiles: opensFiles)
+                        .font(font)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.leading, CGFloat(item.depth) * levelIndent)
+            }
+        }
     }
 }

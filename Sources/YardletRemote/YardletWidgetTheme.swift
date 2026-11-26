@@ -3,6 +3,7 @@ import Foundation
 /// The stylesheet a `show_widget` view's fragment gets in place of the Codex skill's kit (docs/CONVERSATION_MEDIA.md,
 /// "Views from other harnesses"): Yardlet's light and dark surfaces, text and status colors as `--y-*` variables, and
 /// quiet defaults for plain elements, so a view without styles of its own reads like the conversation around it.
+/// The Mac and the iPhone app both put it under a fragment, so a view looks the same on each.
 ///
 /// Every default sits in `:where(…)`, which has no specificity, so any rule the widget writes wins. The page stays
 /// transparent over the conversation's canvas, and nothing is loaded from outside: the system fonts, no images.
@@ -10,8 +11,8 @@ import Foundation
 /// canvas, the surface and the elevated surface in both appearances, a status badge's tint under them included.
 /// A state such as `:hover` stays inside the `:where(…)` too, or it would lift the rule over the widget's own and over
 /// a later default (a primary button's accent fill under the pointer).
-enum YardletWidgetTheme {
-    static let stylesheet = """
+public enum YardletWidgetTheme {
+    public static let stylesheet = """
     :root{color-scheme:light dark;
     --y-bg:#FCFCFC;--y-surface:#F4F5F7;--y-surface-elevated:#FFFFFF;--y-input:#FFFFFF;
     --y-text:#1D1D1F;--y-text-secondary:#5F6066;--y-border:rgba(0,0,0,.095);--y-border-strong:rgba(0,0,0,.16);

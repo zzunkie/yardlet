@@ -16,6 +16,8 @@ struct HomeView: View {
     @State private var isSearching = false
     @State private var search = ""
     @FocusState private var isSearchFocused: Bool
+    /// The mail tab's search field has the keyboard.
+    @State private var isMailSearchFocused = false
     @State private var expanded: Set<String> = []
     @State private var activeSheet: ActiveSheet?
     @State private var pendingSheet: ActiveSheet?
@@ -96,7 +98,8 @@ struct HomeView: View {
                             session: session,
                             store: mailCalendarStore,
                             isActive: selectedTab == .mail,
-                            onOpenConnectors: { activeSheet = .connectors }
+                            onOpenConnectors: { activeSheet = .connectors },
+                            onSearchFocusChange: { isMailSearchFocused = $0 }
                         )
                         .opacity(selectedTab == .mail ? 1 : 0)
                         .allowsHitTesting(selectedTab == .mail)
@@ -193,7 +196,9 @@ struct HomeView: View {
                 guard let taskID else { return }
                 model.taskToOpen = nil
                 selectedTab = .tasks
-                path = NavigationPath([taskID])
+                // Pushed on the main actor's next turn, not while the stack draws its first frame: a notification
+                // that launched the app sets the task before the home screen has appeared.
+                Task { @MainActor in path = NavigationPath([taskID]) }
             }
             .onChange(of: selectedTab) { _, tab in
                 if tab != .tasks && isSearching {
@@ -286,6 +291,8 @@ struct HomeView: View {
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
+            // Room under the last row, so the list's end clears the bars below it instead of meeting them.
+            .contentMargins(.bottom, 24, for: .scrollContent)
             .background(YardletPalette.background)
             .environment(\.defaultMinListHeaderHeight, 28)
             .overlay {
@@ -304,7 +311,7 @@ struct HomeView: View {
                 Image(systemName: "magnifyingglass")
                     .font(.subheadline)
                     .foregroundStyle(YardletPalette.onSurfaceVariant)
-                TextField("Search tasks", text: $search)
+                TextField("Search tasks", text: $search, prompt: .placeholder("Search tasks"))
                     .font(.subheadline)
                     .foregroundStyle(YardletPalette.onSurface)
                     .textInputAutocapitalization(.never)
@@ -377,7 +384,7 @@ struct HomeView: View {
                 CommandErrorBanner(session: session)
                     .padding(.bottom, 8)
             }
-            if !isSearching {
+            if !isSearching && !(isMailSearchFocused && selectedTab == .mail) {
                 if session.isDemo {
                     demoBar
                 }
@@ -845,6 +852,8 @@ struct MacSheet: View {
     let onScanQR: () -> Void
     let onPasteLink: () -> Void
     let onOpenAccountMacs: () -> Void
+    /// The rows' height, for a first detent that shows them all rather than cutting the last one in half.
+    @State private var contentHeight: CGFloat = 0
 
     var body: some View {
         NavigationStack {
@@ -857,6 +866,7 @@ struct MacSheet: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
                 .padding(.bottom, 28)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
             }
             .background(YardletPalette.background)
             .navigationTitle("Macs")
@@ -869,14 +879,15 @@ struct MacSheet: View {
                 }
             }
         }
-        .presentationDetents([.medium, .large])
+        // The rows and the title bar above them; the sheet still opens to full height for more.
+        .presentationDetents(contentHeight > 0 ? [.height(contentHeight + 72), .large] : [.medium, .large])
         .presentationDragIndicator(.visible)
         .task { await model.account.refreshProviders() }
     }
 
     private var macsSection: some View {
+        // The sheet's title already says Macs, so the first group goes without a title of its own.
         VStack(alignment: .leading, spacing: 8) {
-            sheetSectionTitle("Macs")
             VStack(spacing: 0) {
                 ForEach(Array(model.hosts.enumerated()), id: \.element.id) { index, host in
                     if index > 0 { hairline }
@@ -945,7 +956,7 @@ struct MacSheet: View {
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(YardletPalette.onSurface)
                             .frame(width: 22)
-                        Text("Add Mac")
+                        Text("Pair a Mac")
                             .font(.body)
                             .foregroundStyle(YardletPalette.onSurface)
                         Spacer(minLength: 8)

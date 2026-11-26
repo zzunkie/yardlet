@@ -17,10 +17,18 @@ enum YardletPalette {
     static let primary = adaptive(light: 0x1C1C1E, dark: 0xECECEE)
     static let onPrimary = adaptive(light: 0xFFFFFF, dark: 0x161618)
     static let onSurface = adaptive(light: 0x1C1C1E, dark: 0xECECEE)
-    static let onSurfaceVariant = adaptive(light: 0x6C6C70, dark: 0x9D9DA3)
+    /// Secondary words: at least 4.5:1 on every surface up to `surfaceContainerHighest` in both appearances.
+    static let onSurfaceVariant = Color(uiColor: onSurfaceVariantUIColor)
+
+    /// The chosen part of a segmented switch: above its track in both appearances (the canvas is darker than the
+    /// track in Dark).
+    static let selectedSegment = adaptive(light: 0xFFFFFF, dark: 0x3A3A3E)
 
     static let outline = adaptive(light: 0xCFCFD2, dark: 0x46464A)
     static let outlineVariant = adaptive(light: 0xE6E6E8, dark: 0x2F2F32)
+
+    /// Links in messages: 4.5:1 or more on the canvas and the message surfaces.
+    static let link = adaptive(light: 0x0062C4, dark: 0x5AA9FF)
 
     static let error = adaptive(light: 0xD70015, dark: 0xFF6961)
     static let errorContainer = adaptive(light: 0xFDECEC, dark: 0x3A1A1A)
@@ -30,15 +38,22 @@ enum YardletPalette {
     static let swipeSecondary = adaptive(light: 0x636366, dark: 0x48484A)
 
     /// Status indicator colors only: approvals, questions, usage limits, unread, failures, running and connection.
+    /// Marks, not words: each keeps 3:1 on the light canvas, with the Mac's light values (`#C75C00`, `#248A3D`) where
+    /// the system's are too pale. Words in a status color use `warningText`, `successText` or `error`.
     enum Status {
-        static let approval = adaptive(light: 0x28A745, dark: 0x30D158)
-        static let question = adaptive(light: 0xFF9500, dark: 0xFF9F0A)
-        static let limit = adaptive(light: 0xFF9500, dark: 0xFF9F0A)
+        static let approval = adaptive(light: 0x248A3D, dark: 0x30D158)
+        static let question = adaptive(light: 0xC75C00, dark: 0xFF9F0A)
+        static let limit = adaptive(light: 0xC75C00, dark: 0xFF9F0A)
         static let unread = adaptive(light: 0x007AFF, dark: 0x0A84FF)
         static let failed = adaptive(light: 0xFF3B30, dark: 0xFF453A)
         static let running = adaptive(light: 0x8E8E93, dark: 0x98989D)
-        static let connected = adaptive(light: 0x34C759, dark: 0x30D158)
+        static let connected = adaptive(light: 0x248A3D, dark: 0x30D158)
     }
+
+    /// Words in a status color, 4.5:1 or more on every surface: a warning, a success, and (as `error`) a failure.
+    static let warningText = adaptive(light: 0xA65300, dark: 0xFF9F0A)
+    static let successText = adaptive(light: 0x177033, dark: 0x30D158)
+    static let dangerText = error
 
     static func uiColor(light: UInt32, dark: UInt32) -> UIColor {
         UIColor { traits in
@@ -53,9 +68,18 @@ enum YardletPalette {
     }
 
     static var onSurfaceUIColor: UIColor { uiColor(light: 0x1C1C1E, dark: 0xECECEE) }
+    static var onSurfaceVariantUIColor: UIColor { uiColor(light: 0x626266, dark: 0x9D9DA3) }
 
     private static func adaptive(light: UInt32, dark: UInt32) -> Color {
         Color(uiColor: uiColor(light: light, dark: dark))
+    }
+}
+
+extension Text {
+    /// An empty field's placeholder in the palette's secondary words: the system's placeholder grey stays under 4.5:1
+    /// on the app's filled fields.
+    static func placeholder(_ key: LocalizedStringKey) -> Text {
+        Text(key).foregroundStyle(YardletPalette.onSurfaceVariant)
     }
 }
 
@@ -331,7 +355,7 @@ struct CompactSegmentedSwitch<Option: Hashable>: View {
                         .background {
                             if isSelected {
                                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .fill(YardletPalette.surface)
+                                    .fill(YardletPalette.selectedSegment)
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 8, style: .continuous)
                                             .strokeBorder(YardletPalette.outlineVariant, lineWidth: 0.5)

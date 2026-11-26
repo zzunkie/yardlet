@@ -73,7 +73,8 @@ struct ComposerView: View {
             HStack(alignment: .bottom, spacing: 8) {
                 if editing == nil && (acceptsImages || acceptsFiles || offersCommands) { attachMenu }
                 HStack(alignment: .bottom, spacing: 6) {
-                    TextField(isRunning ? "Message to the running task" : "Message", text: $draft, axis: .vertical)
+                    TextField(isRunning ? "Message to the running task" : "Message", text: $draft,
+                              prompt: .placeholder(isRunning ? "Message to the running task" : "Message"), axis: .vertical)
                         .lineLimit(1...6)
                         .focused($isFieldFocused)
                         .padding(.leading, 14)
@@ -256,7 +257,7 @@ struct ComposerView: View {
                 HStack(alignment: .firstTextBaseline) {
                     Label("Queue paused because you interrupted", systemImage: "pause.circle")
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(YardletPalette.onSurfaceVariant)
                     Spacer(minLength: 8)
                     Button("Resume") { Task { await session.composerAction(taskID, action: "resume") } }
                         .font(.footnote.weight(.semibold))
@@ -384,7 +385,7 @@ struct ComposerView: View {
                     Image(systemName: "chevron.up.chevron.down").font(.caption2)
                 }
                 .font(.footnote)
-                .foregroundStyle(settings.contains { $0.elevated == true } ? YardletPalette.Status.limit : YardletPalette.onSurfaceVariant)
+                .foregroundStyle(settings.contains { $0.elevated == true } ? YardletPalette.warningText : YardletPalette.onSurfaceVariant)
             }
             .buttonStyle(.plain)
         }
@@ -401,14 +402,14 @@ struct ComposerView: View {
                         HStack(spacing: 6) {
                             switch file.state {
                             case .uploading: ProgressView().controlSize(.mini)
-                            case .ready: Image(systemName: "doc").foregroundStyle(.secondary)
-                            case .failed: Image(systemName: "arrow.clockwise").foregroundStyle(.red)
+                            case .ready: Image(systemName: "doc").foregroundStyle(YardletPalette.onSurfaceVariant)
+                            case .failed: Image(systemName: "arrow.clockwise").foregroundStyle(YardletPalette.error)
                             }
                             Text(file.name).lineLimit(1)
                             Button {
                                 remove(file.id)
                             } label: {
-                                Image(systemName: "xmark").font(.caption2.weight(.bold)).foregroundStyle(.secondary)
+                                Image(systemName: "xmark").font(.caption2.weight(.bold)).foregroundStyle(YardletPalette.onSurfaceVariant)
                             }
                             .accessibilityLabel("Remove File")
                         }

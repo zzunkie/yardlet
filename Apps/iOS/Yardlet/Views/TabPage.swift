@@ -319,7 +319,12 @@ struct TabTypingField: UIViewRepresentable {
         field.editingChanged = editing
         field.isPassword = isPassword
         field.isEnabled = context.environment.isEnabled
-        if field.placeholder != placeholder { field.placeholder = placeholder }
+        if field.placeholder != placeholder {
+            // The placeholder in the palette's secondary words, which keep 4.5:1 where the system's grey does not.
+            field.attributedPlaceholder = NSAttributedString(string: placeholder, attributes: [
+                .foregroundColor: YardletPalette.onSurfaceVariantUIColor
+            ])
+        }
     }
 
     static func dismantleUIView(_ field: TabTypingTextField, coordinator: ()) {

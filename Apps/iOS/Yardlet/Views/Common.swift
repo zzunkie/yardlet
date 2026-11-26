@@ -43,12 +43,15 @@ struct TaskMark: View {
 }
 
 enum Formatting {
-    /// "now", "5m", "3h", "Tue", "Oct 3": how long ago, as a list says it.
+    /// "now", "5m ago", "3h ago", "Tue", "Oct 3": how long ago, as a list says it.
     static func shortAge(_ date: Date, now: Date = Date()) -> String {
         let seconds = max(0, now.timeIntervalSince(date))
         if seconds < 60 { return String(localized: "now") }
-        if seconds < 3600 { return Duration.seconds(seconds).formatted(.units(allowed: [.minutes], width: .narrow)) }
-        if seconds < 86_400 { return Duration.seconds(seconds).formatted(.units(allowed: [.hours], width: .narrow)) }
+        if seconds < 86_400 {
+            let unit: Duration.UnitsFormatStyle.Unit = seconds < 3600 ? .minutes : .hours
+            let age = Duration.seconds(seconds).formatted(.units(allowed: [unit], width: .narrow))
+            return String(localized: "\(age) ago", comment: "How long ago, in a list: 5m ago")
+        }
         if seconds < 7 * 86_400 { return date.formatted(.dateTime.weekday(.abbreviated)) }
         return date.formatted(.dateTime.month(.abbreviated).day())
     }
@@ -66,7 +69,7 @@ struct ConnectionBanner: View {
     let session: HostSession
 
     var body: some View {
-        if let text {
+        if let text = Self.text(session) {
             HStack(spacing: 8) {
                 if case .connecting = session.connection {
                     ProgressView().controlSize(.small)
@@ -94,7 +97,8 @@ struct ConnectionBanner: View {
         }
     }
 
-    private var text: String? {
+    /// What the connection to the Mac is doing, or nil once it is up.
+    static func text(_ session: HostSession) -> String? {
         switch session.connection {
         case .connected: nil
         case .connecting: String(localized: "Connecting to \(session.name)…")
@@ -156,5 +160,67 @@ extension View {
         buttonStyle(.borderedProminent)
             .tint(YardletPalette.primary)
             .foregroundStyle(YardletPalette.onPrimary)
+    }
+}
+
+/// A page of the Mac's that could not be read: why, and Try Again, in place of a loading card that would never end.
+struct ReadFailureCard: View {
+    let message: String
+    let retry: () -> Void
+
+    var body: some View {
+        MonochromeCard(fill: YardletPalette.surfaceContainerLow, padding: 20) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Couldn't load")
+                    .font(.headline)
+                    .foregroundStyle(YardletPalette.onSurface)
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundStyle(YardletPalette.onSurfaceVariant)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Try Again", action: retry)
+                    .prominentButton()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// Views side by side, starting a new line where the next one would not fit.
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let lines = lines(subviews, width: proposal.width ?? .infinity)
+        let width = lines.map { $0.width }.max() ?? 0
+        let height = lines.reduce(0) { $0 + $1.height } + spacing * CGFloat(max(lines.count - 1, 0))
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for line in lines(subviews, width: bounds.width) {
+            var x = bounds.minX
+            for index in line.indices {
+                let size = subviews[index].sizeThatFits(.unspecified)
+                subviews[index].place(at: CGPoint(x: x, y: y + (line.height - size.height) / 2),
+                                      proposal: ProposedViewSize(width: min(size.width, bounds.width), height: nil))
+                x += size.width + spacing
+            }
+            y += line.height + spacing
+        }
+    }
+
+    private func lines(_ subviews: Subviews, width: CGFloat) -> [(indices: [Int], width: CGFloat, height: CGFloat)] {
+        var lines: [(indices: [Int], width: CGFloat, height: CGFloat)] = []
+        for (index, subview) in subviews.enumerated() {
+            let size = subview.sizeThatFits(.unspecified)
+            if let last = lines.last, last.width + spacing + size.width <= width {
+                lines[lines.count - 1] = (last.indices + [index], last.width + spacing + size.width, max(last.height, size.height))
+            } else {
+                lines.append(([index], size.width, size.height))
+            }
+        }
+        return lines
     }
 }

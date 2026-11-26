@@ -74,7 +74,7 @@ struct TaskSettingsView: View {
         } else if setting.choices.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
                 LabeledContent(setting.name, value: setting.title ?? setting.value)
-                if let note = setting.note { Text(note).font(.footnote).foregroundStyle(.secondary) }
+                if let note = setting.note { Text(note).font(.footnote).foregroundStyle(YardletPalette.onSurfaceVariant) }
             }
         } else {
             Picker(selection: Binding(get: { setting.value }, set: { value in
@@ -90,7 +90,7 @@ struct TaskSettingsView: View {
                 }
             } label: {
                 Text(setting.name)
-                    .foregroundStyle(setting.elevated == true ? Color.orange : Color.primary)
+                    .foregroundStyle(setting.elevated == true ? YardletPalette.warningText : YardletPalette.onSurface)
             }
             .disabled(setting.prepare == true)
         }

@@ -24,13 +24,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Allow"
+            "value": "Allow once"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "허용"
+            "value": "이번만 허용"
           }
         }
       }

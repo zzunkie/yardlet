@@ -26,7 +26,7 @@ struct RequestCard: View {
             if item.moreOnMac == true, let note = macNote {
                 Label(note, systemImage: "desktopcomputer")
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(YardletPalette.onSurfaceVariant)
             }
         }
         .padding(16)
@@ -109,11 +109,11 @@ private struct ApprovalAnswer: View {
                 if item.truncated == true {
                     Text("This command is too long to reach the phone whole. Allow it on your Mac.")
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(YardletPalette.onSurfaceVariant)
                 }
             }
             if let detail = item.detail, !detail.isEmpty {
-                Text(detail).font(.subheadline).foregroundStyle(.secondary).textSelection(.enabled)
+                Text(detail).font(.subheadline).foregroundStyle(YardletPalette.onSurfaceVariant).textSelection(.enabled)
             }
             if let message = item.message, !message.isEmpty {
                 Text(message).font(.subheadline).textSelection(.enabled)
@@ -132,7 +132,9 @@ private struct ApprovalAnswer: View {
                             note = ""
                             isAskingNote = true
                         }
-                        .font(.footnote)
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(YardletPalette.link)
+                        .padding(.top, 2)
                     }
                 } else {
                     legacyButtons
@@ -185,14 +187,38 @@ private struct ApprovalAnswer: View {
         }
     }
 
+    /// An answer's button. A title that ends in a parenthesized note, such as where a rule is saved, keeps the answer
+    /// on the button and the note under it, so the button reads as one short line.
     private func button(_ title: String, role: String, locked: Bool = false, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .frame(maxWidth: .infinity)
-                .multilineTextAlignment(.center)
+        let parts = Self.split(title)
+        return VStack(spacing: 4) {
+            Button(action: action) {
+                Text(verbatim: parts.answer)
+                    .frame(maxWidth: .infinity)
+                    .multilineTextAlignment(.center)
+            }
+            .buttonStyle(CardButtonStyle(role: role))
+            .disabled(locked)
+            if let note = parts.note {
+                Text(verbatim: note)
+                    .font(.caption)
+                    .foregroundStyle(YardletPalette.onSurfaceVariant)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+            }
         }
-        .buttonStyle(CardButtonStyle(role: role))
-        .disabled(locked)
+    }
+
+    /// "Always allow in this project (saved to .claude/settings.local.json)" as the answer and its note.
+    static func split(_ title: String) -> (answer: String, note: String?) {
+        let trimmed = title.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasSuffix(")"), let open = trimmed.range(of: " (", options: .backwards) else {
+            return (title, nil)
+        }
+        let answer = trimmed[..<open.lowerBound].trimmingCharacters(in: .whitespaces)
+        let note = trimmed[open.upperBound..<trimmed.index(before: trimmed.endIndex)].trimmingCharacters(in: .whitespaces)
+        guard !answer.isEmpty, !note.isEmpty else { return (title, nil) }
+        return (answer, note)
     }
 
     private func choose(_ choice: RemoteChoice, note: String?) {
@@ -276,11 +302,13 @@ struct CardButtonStyle: ButtonStyle {
             .foregroundStyle(foreground)
             .background(background.opacity(configuration.isPressed ? 0.7 : 1),
                         in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .opacity(isEnabled ? 1 : 0.5)
     }
 
+    /// A button not offered now reads as one in the palette's secondary words, which stay legible, rather than at
+    /// half opacity.
     private var foreground: Color {
-        switch role {
+        guard isEnabled else { return YardletPalette.onSurfaceVariant }
+        return switch role {
         case "primary": YardletPalette.onPrimary
         case "destructive": YardletPalette.error
         default: YardletPalette.onSurface
@@ -288,7 +316,8 @@ struct CardButtonStyle: ButtonStyle {
     }
 
     private var background: Color {
-        switch role {
+        guard isEnabled else { return YardletPalette.surfaceContainerHigh }
+        return switch role {
         case "primary": YardletPalette.primary
         case "destructive": YardletPalette.errorContainer
         default: YardletPalette.surfaceContainerHighest
@@ -313,7 +342,7 @@ private struct QuestionForm: View {
             ForEach(steps, id: \.id) { step in
                 VStack(alignment: .leading, spacing: 8) {
                     if let header = step.header, !header.isEmpty {
-                        Text(header).font(.caption.weight(.semibold)).foregroundStyle(.secondary).textCase(.uppercase)
+                        Text(header).font(.caption.weight(.semibold)).foregroundStyle(YardletPalette.onSurfaceVariant).textCase(.uppercase)
                     }
                     if let text = step.text, !text.isEmpty {
                         ConversationText(text).font(.body).textSelection(.enabled)
@@ -327,6 +356,7 @@ private struct QuestionForm: View {
                                 SecureField("Answer", text: binding(step.id))
                             } else {
                                 TextField(step.options.isEmpty ? "Answer" : "Other answer", text: binding(step.id),
+                                          prompt: .placeholder(step.options.isEmpty ? "Answer" : "Other answer"),
                                           axis: .vertical)
                             }
                         }
@@ -378,7 +408,7 @@ private struct QuestionForm: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(option.label).foregroundStyle(.primary)
                     if let description = option.description, !description.isEmpty {
-                        Text(description).font(.footnote).foregroundStyle(.secondary)
+                        Text(description).font(.footnote).foregroundStyle(YardletPalette.onSurfaceVariant)
                     }
                 }
                 Spacer(minLength: 0)
@@ -474,9 +504,9 @@ private struct PlanReview: View {
 
 // MARK: - Browser tab
 
-/// A browser tab the agent handed to the person (§15.18): the site, the agent's reason, Decline and I'm Done, and where
+/// A browser tab the agent handed to the person (§15.18): the site, the agent's reason, Decline and Hand Back, and where
 /// the Mac shows its tabs to the phone (§15.25), Open Tab to finish the step there. Without it the tab is only on the
-/// Mac, which a line says, so I'm Done is not read as "show me the tab".
+/// Mac, which a line says, so Hand Back is not read as "show me the tab".
 private struct HandoffAnswer: View {
     let item: RemoteItem
     let context: ItemContext
@@ -489,7 +519,7 @@ private struct HandoffAnswer: View {
                 Text(site).font(.body.weight(.medium))
             }
             if let reason = item.detail, !reason.isEmpty {
-                Text(reason).font(.subheadline).foregroundStyle(.secondary)
+                Text(reason).font(.subheadline).foregroundStyle(YardletPalette.onSurfaceVariant)
             }
             if let openTab {
                 Button {
@@ -499,9 +529,9 @@ private struct HandoffAnswer: View {
                 }
                 .buttonStyle(CardButtonStyle(role: "secondary"))
             } else {
-                Text("The tab is open on your Mac. Choose I'm Done once you finished the step there or elsewhere.")
+                Text("The tab is open on your Mac. Choose Hand Back once you finished the step there or elsewhere.")
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(YardletPalette.onSurfaceVariant)
             }
             HStack(spacing: 10) {
                 Button {
@@ -513,7 +543,7 @@ private struct HandoffAnswer: View {
                 Button {
                     answer(.done)
                 } label: {
-                    Text("I'm Done").frame(maxWidth: .infinity)
+                    Text("Hand Back").frame(maxWidth: .infinity)
                 }
                 .buttonStyle(CardButtonStyle(role: "primary"))
             }
@@ -544,7 +574,7 @@ private struct FieldsForm: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             if let detail = item.detail, !detail.isEmpty {
-                Text(detail).font(.subheadline).foregroundStyle(.secondary)
+                Text(detail).font(.subheadline).foregroundStyle(YardletPalette.onSurfaceVariant)
             }
             ForEach(fields, id: \.id) { field in
                 fieldView(field)
@@ -576,7 +606,7 @@ private struct FieldsForm: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(field.required == true ? "\(field.label) *" : field.label).font(.subheadline.weight(.medium))
             if let description = field.description, !description.isEmpty {
-                Text(description).font(.footnote).foregroundStyle(.secondary)
+                Text(description).font(.footnote).foregroundStyle(YardletPalette.onSurfaceVariant)
             }
             switch field.type {
             case "boolean":

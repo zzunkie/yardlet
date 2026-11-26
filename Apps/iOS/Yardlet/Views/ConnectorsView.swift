@@ -60,7 +60,11 @@ struct ConnectorsView: View {
                 } else if !session.capabilities.hostAccounts {
                     unsupportedCard
                 } else if accounts == nil {
-                    loadingCard
+                    if let failure = session.hostAccountsFailure, !isRefreshing {
+                        ReadFailureCard(message: failure) { Task { await refresh() } }
+                    } else {
+                        loadingCard
+                    }
                 } else {
                     if !isEditable {
                         readOnlyBanner
@@ -895,7 +899,7 @@ private struct AddConnectorSheet: View {
                         TextField("Connector name", text: $customName)
                     }
                     inputField("Server URL") {
-                        TextField("https://example.com/mcp", text: $customURL)
+                        TextField("https://example.com/mcp" as String, text: $customURL)
                             .keyboardType(.URL)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()

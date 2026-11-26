@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 @preconcurrency import WebKit
 import YardletAgentTools
+import YardletRemote
 
 /// One drawn MCP App view (docs/CONNECTORS.md, "MCP Apps"): its web view, the documents it is served from and its
 /// bridge. The view is someone else's page, so it gets nothing of Yardlet's:
