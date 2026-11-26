@@ -188,10 +188,17 @@ struct AccountList: View {
                     AutomaticAccountRow(selected: store.startsNewTasksAutomatically(for: harness),
                                         onSelect: onChooseAutomatic)
                 }
-                ForEach(groups) { group in
-                    AccountListSection(group: group, mode: mode, store: store,
-                        showsHarness: mode == .manage, canChooseAccounts: canChooseAccounts, onChoose: onChoose,
-                        onConnect: onConnect, onShare: onShare, onRemove: onRemove, onSignOut: onSignOut)
+                if mode == .manage {
+                    if !groups.isEmpty {
+                        SettingsGroup {
+                            ForEach(groups) { group in
+                                if group.id != groups.first?.id { Divider().padding(.leading, 62) }
+                                section(group)
+                            }
+                        }
+                    }
+                } else {
+                    ForEach(groups) { group in section(group) }
                 }
                 if let onAddFound, !found.isEmpty {
                     DiscoveredAccountsSection(homes: found, onAdd: onAddFound)
@@ -200,6 +207,12 @@ struct AccountList: View {
             .padding(.bottom, mode == .manage ? 16 : 0)
         }
         .frame(maxHeight: maxListHeight)
+    }
+
+    private func section(_ group: AccountGroup) -> some View {
+        AccountListSection(group: group, mode: mode, store: store,
+            showsHarness: mode == .manage, canChooseAccounts: canChooseAccounts, onChoose: onChoose,
+            onConnect: onConnect, onShare: onShare, onRemove: onRemove, onSignOut: onSignOut)
     }
 
     /// Folders with a login that are not saved accounts, for the harnesses and search the list shows.
@@ -300,17 +313,21 @@ struct AccountListSection: View {
     var onSignOut: ((HarnessKind, DefaultLoginAction) -> Void)? = nil
 
     var body: some View {
-        if group.choices.count == 1, let choice = group.choices.first {
-            row(choice, style: .account)
-                .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 10))
-        } else {
-            VStack(alignment: .leading, spacing: 2) {
-                AccountGroupHeader(group: group, freshness: freshness, summarizesLimits: mode == .manage)
-                ForEach(group.choices) { choice in row(choice, style: .member) }
+        Group {
+            if group.choices.count == 1, let choice = group.choices.first {
+                row(choice, style: .account)
+            } else {
+                VStack(alignment: .leading, spacing: mode == .manage ? 0 : 2) {
+                    AccountGroupHeader(group: group, freshness: freshness, summarizesLimits: mode == .manage)
+                    ForEach(group.choices) { choice in
+                        if mode == .manage { Divider().padding(.leading, 62) }
+                        row(choice, style: .member)
+                    }
+                }
+                .padding(.bottom, 6)
             }
-            .padding(.bottom, 6)
-            .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 10))
         }
+        .background(mode == .manage ? Color.clear : ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 10))
     }
 
     private var freshness: AccountFreshness {
@@ -325,7 +342,7 @@ struct AccountListSection: View {
         return AccountRow(choice: choice, style: style, memberTitle: group.memberTitle(choice),
             selected: AccountListProjection.isSelected(choice, mode: mode, store: store),
             canChoose: canChoose,
-            summarizesLimits: mode == .manage,
+            isManaged: mode == .manage,
             selectedValue: mode.session == nil ? L10n.string("Selected for new tasks") : L10n.string("Current account"),
             showsHarness: showsHarness,
             freshness: style == .account ? freshness : nil,
@@ -382,8 +399,8 @@ struct AccountRow: View {
     var accountLine: String? = nil
     let selected: Bool
     var canChoose = true
-    /// Settings › Harness Accounts: the limits on one line (`AccountUsageBlockView.isSummary`).
-    var summarizesLimits = false
+    /// Settings puts this row in a bordered group and summarizes limits on one line.
+    var isManaged = false
     /// What the selected mark means to VoiceOver.
     var selectedValue = L10n.string("Selected for new tasks")
     var showsHarness = false
@@ -405,30 +422,26 @@ struct AccountRow: View {
     var onSignOut: [DefaultLoginAction: () -> Void] = [:]
 
     var body: some View {
-        AccountRowColumns {
+        AccountRowColumns(spacing: isManaged ? 8 : 12) {
             identityButton
-            // The row's menu is also on a button, as Settings' other account rows offer theirs. It sits
-            // under the limits or status, so it takes no width from the account's name.
-            VStack(alignment: .trailing, spacing: 4) {
-                trailing
-                if hasMenu {
-                    Menu { menuItems } label: {
-                        Label(L10n.format("More for %@", title), systemImage: "ellipsis").labelStyle(.iconOnly)
-                    }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                    .fixedSize()
-                }
-            }
+            trailing
             if let onConnect {
                 Button(L10n.string(choice.needsProvider ? "Choose provider"
                     : AccountConnectionPresentation.usesProviderLanguage(choice.harness) ? "Connect" : "Sign in"), action: onConnect)
                     .controlSize(.small)
             }
+            if hasMenu {
+                Menu { menuItems } label: {
+                    Label(L10n.format("More for %@", title), systemImage: "ellipsis").labelStyle(.iconOnly)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+            }
         }
-        .padding(.horizontal, 12).padding(.vertical, 12)
-        .frame(minHeight: 68)
-        .background(selected ? ParityTheme.selectedFill : Color.clear, in: RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, isManaged ? 0 : 12).padding(.vertical, isManaged ? 5 : 12)
+        .frame(minHeight: isManaged ? 56 : 68)
+        .background(selected && !isManaged ? ParityTheme.selectedFill : Color.clear, in: RoundedRectangle(cornerRadius: 10))
         .contextMenu { menuItems }
     }
 
@@ -484,7 +497,7 @@ struct AccountRow: View {
                 }
                 VStack(alignment: .leading, spacing: 3) {
                     AccountTitleLine(title: title, organization: organization, weight: .medium)
-                    Text(subtitle).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                    Text(subtitle).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(isManaged ? 2 : 1)
                         .accountDetailLine()
                     if let freshness { AccountFreshnessLine(freshness: freshness).accountDetailLine() }
                     if isExcludedFromAutomaticAssignment {
@@ -517,7 +530,7 @@ struct AccountRow: View {
             VStack(alignment: .trailing, spacing: 8) {
                 ForEach(usage.usageBlocks) { block in
                     AccountUsageBlockView(title: choice.title, block: block, resetChoice: usage.resetChoice(for: block),
-                                          isSummary: summarizesLimits)
+                                          isSummary: isManaged)
                 }
             }
         } else {
@@ -525,7 +538,7 @@ struct AccountRow: View {
             // A login named by its state says it once, in its title.
             Text(status == title ? "" : status)
                 .font(.system(size: 11)).foregroundStyle(.secondary)
-                .frame(width: 190, alignment: .trailing)
+                .frame(width: isManaged ? nil : 190, alignment: .trailing)
                 .help(choice.snapshot?.detail ?? choice.status)
         }
     }
@@ -562,7 +575,7 @@ private struct AccountGroupHeader: View {
                 }
             }
         }
-        .padding(.horizontal, 12).padding(.top, 12).padding(.bottom, 4)
+        .padding(.horizontal, summarizesLimits ? 0 : 12).padding(.top, 12).padding(.bottom, summarizesLimits ? 12 : 4)
     }
 }
 
@@ -655,12 +668,9 @@ struct DiscoveredAccountsSection: View {
     let onAdd: (DiscoveredAccountHome) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(L10n.string("Accounts You Can Add"))
-                .font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
-                .padding(.horizontal, 12).padding(.top, 14).padding(.bottom, 4)
-                .accessibilityAddTraits(.isHeader)
+        SettingsGroup(title: L10n.string("Accounts You Can Add")) {
             ForEach(homes) { home in
+                if home.id != homes.first?.id { Divider().padding(.leading, 36) }
                 HStack(spacing: 12) {
                     if let descriptor = HarnessCatalog.descriptor(for: home.harness) {
                         HarnessLogoView(descriptor: descriptor, size: 24)
@@ -681,7 +691,7 @@ struct DiscoveredAccountsSection: View {
                     Button(L10n.string("Add")) { onAdd(home) }.controlSize(.small)
                         .accessibilityLabel(L10n.format("Add %@", home.title))
                 }
-                .padding(.horizontal, 12).padding(.vertical, 9)
+                .padding(.vertical, 9)
                 .help(home.path)
             }
         }
