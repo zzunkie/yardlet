@@ -698,7 +698,7 @@ private struct MarkdownTableView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: Alignment(horizontal: alignment, vertical: .top))
-            .background(row == 0 ? YardletPalette.surfaceContainer : Color.clear)
+            .background(row == 0 ? YardletPalette.surfaceContainer : Color.clear, in: .rect)
             .overlay(alignment: .leading) {
                 if column > 0 { Rectangle().fill(YardletPalette.outlineVariant).frame(width: 0.5) }
             }
