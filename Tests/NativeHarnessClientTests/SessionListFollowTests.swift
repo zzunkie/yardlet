@@ -342,8 +342,11 @@ final class SessionListFollowTests: XCTestCase {
 
     /// Tasks already in Yardlet follow their source: the last activity forward, a provider title,
     /// the archive. A task the person is in, has a draft in, continued in Yardlet, or pinned
-    /// stays listed with its draft. The archive is Yardlet's only: Codex is not asked to archive,
-    /// and no provider ID, scope, account, project, reading state or pin changes.
+    /// stays listed with its draft. Following writes nothing to the source: Codex is not asked to
+    /// archive, and no provider ID, scope, account, project, reading state or pin changes. The row
+    /// records that the source has the task archived, so restoring it follows each harness's own
+    /// archive: a Codex thread is unarchived as after Yardlet's own archive, and a Claude session,
+    /// whose archive is only the Claude app's list, is restored in Yardlet alone.
     func testAPassFollowsActivityTitlesAndArchivesWithoutLosingADraft() async throws {
         let fixture = try makeFixture()
         let model = fixture.model
@@ -412,12 +415,22 @@ final class SessionListFollowTests: XCTestCase {
         await model.loadArchivedTasks()
         let archived = try XCTUnwrap(model.store.archivedSessions)
         XCTAssertEqual(Set(archived.map(\.id)), [idle.id, codexIdle.id])
-        XCTAssertTrue(archived.allSatisfy { !$0.isProviderArchived }, "Archived in Yardlet only")
+        XCTAssertTrue(archived.allSatisfy(\.isProviderArchived), "Archived in the source")
         XCTAssertEqual(archived.first { $0.id == idle.id }?.session.providerSessionID, Self.ids[2])
         let methods = await fixture.codex.requestMethods
         XCTAssertEqual(methods, ["initialize", "thread/list", "thread/list"], "No thread/archive, no write to Codex")
+
+        await fixture.codex.enqueue(method: "thread/unarchive",
+                                    result: .object(["thread": .object(["id": .string("t-idle")])]))
+        for record in archived { await model.unarchive(record) }
+        XCTAssertNil(model.archivedTaskError)
+        XCTAssertNotNil(current(idle))
+        XCTAssertNotNil(current(codexIdle))
+        let restoreRequests = await fixture.codex.requests.dropFirst(methods.count)
+        XCTAssertEqual(restoreRequests.map { "\($0.method) \($0.params["threadId"]?.stringValue ?? "")" },
+                       ["thread/unarchive t-idle"], "The Codex thread comes back open too")
         let claudeCalls = await fixture.claude.calls
-        XCTAssertEqual(claudeCalls, [])
+        XCTAssertEqual(claudeCalls, [], "Nothing is written for the Claude session")
     }
 
     /// A Claude session Yardlet made (a child task, under an account that shares the history or

@@ -488,10 +488,13 @@ harness, opens one's conversation read-only, and restores them with **Unarchive*
     thread id" for a thread already archived (in the Codex app, say) or gone, and `thread/unarchive` answers "no
     archived rollout found for thread id" for one unarchived elsewhere or gone (0.172.0). A task with no thread yet,
     or whose account folder is gone, is archived and restored in Yardlet alone (`provider_archived = 0`).
-  - **Existing rows:** tasks archived while detached before archiving reached the thread, and rows from before the
-    column existed, have `provider_archived = 0`. They stay as they are: restoring them leaves the thread alone, and
-    nothing moves them to Codex's archive. Tasks archived by following the Codex app's list also have
-    `provider_archived = 0` ("Following the session list").
+  - **Following the source's archive:** a task archived because the Codex app or the Claude app archived it records
+    `provider_archived = 1` as well, since the source has it archived ("Following the session list"). Restoring a
+    Codex one unarchives its thread as above. A Claude one is restored in Yardlet alone: its adapter keeps no sessions
+    of its own, and the Claude app's list is not written.
+  - **Existing rows:** tasks archived while detached before archiving reached the thread, tasks archived by following
+    the source before it was recorded, and rows from before the column existed have `provider_archived = 0`. They stay
+    as they are: restoring them leaves the thread alone, and nothing moves them to Codex's archive.
   - Native-side archive, unarchive, delete and rename go only to adapters that implement
     `HarnessSessionLifecycleProviding` (Codex and its YHP wrapper, whose `yardlet.codex.thread.archive` and
     `yardlet.codex.thread.unarchive` name the thread by `providerSessionID`). Delete and rename reach the thread only
@@ -1167,8 +1170,9 @@ the person chose, once; following adds and updates the rest, read-only (`Session
     first request of an unnamed thread).
   - The provider session ID, storage scope, account binding, project, additional roots, draft, read state, pin and
     parent link do not change.
-- **Archive:** a task the source archived that is listed in Yardlet is archived in Yardlet only (`archived = 1`,
-  `provider_archived = 0`). It is skipped (and looked at again the next round) in these cases: running or waiting for
+- **Archive:** a task the source archived that is listed in Yardlet is archived in Yardlet's index (`archived = 1`,
+  `provider_archived = 1`, since the source has it archived; restoring a Codex task unarchives its thread, "Archive and
+  unarchive" above). It is skipped (and looked at again the next round) in these cases: running or waiting for
   approval, attached to a runtime, running a shell command, a non-empty draft (text, attachments, an edit, diff
   comments), queued messages, visible (selected, split view), being moved, switching accounts or being unarchived,
   pinned, Yardlet's last activity later than the source's (the person continued in Yardlet) and unarchived by the person
@@ -1180,15 +1184,16 @@ the person chose, once; following adds and updates the rest, read-only (`Session
     through `archiveTask`, so it sends no `thread/archive` (Codex has the thread archived already) and does not clean
     up Yardlet worktrees either. Attached tasks are not archived here.
   - Claude and Codex tasks unarchived in Yardlet stay in the preference `Yardlet.sessionListFollow.keptListed` (a list
-    of task IDs) and are not archived again while the source still has them archived. When the source shows that
-    conversation as open again, the task leaves this list, and later archiving in the source is followed again. IDs of
-    tasks no longer in the list are removed every round.
+    of task IDs) and are not archived again while the source still has them archived (a Claude app list, or a Codex
+    list read before the thread was unarchived). When the source shows that conversation as open again, the task
+    leaves this list, and later archiving in the source is followed again. IDs of tasks no longer in the list are
+    removed every round.
   - A task archived in Yardlet is not unarchived even if it is open in the source (the person chose that in Yardlet).
 - **What it does not touch:** it does not write to Claude app files, Claude Code history, Codex rollouts or threads (no
   `thread/archive`, `thread/unarchive`, `thread/name/set`, `thread/resume`, `thread/read` or `turn/start`, only
   `thread/list`). There is no model turn, runtime attach, credential copy or account change. What changes is Yardlet's
-  index rows (new rows, `updated_at`, provider titles, `archived`), the projects that import creates, and the one
-  preference above.
+  index rows (new rows, `updated_at`, provider titles, `archived` and `provider_archived`), the projects that import
+  creates, and the one preference above.
 
 ## Cloud tasks
 

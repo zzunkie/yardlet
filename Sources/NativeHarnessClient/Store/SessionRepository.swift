@@ -60,9 +60,10 @@ struct ArchivedSessionRecord: Identifiable, Hashable, Sendable {
     let session: SessionRecord
     /// When Yardlet archived it. Tasks archived before this was recorded have none.
     let archivedAt: Date?
-    /// Whether archiving also archived the provider's thread (Codex `thread/archive`). Tasks
-    /// archived before this was recorded read as false, so restoring them never calls the
-    /// provider.
+    /// Whether the provider had the session archived too: Yardlet archived it there (Codex
+    /// `thread/archive`), or Yardlet followed the provider's own archive. Restoring unarchives it
+    /// there only through an adapter that keeps its own sessions. Tasks archived before this was
+    /// recorded read as false, so restoring them never calls the provider.
     let isProviderArchived: Bool
 
     var id: UUID { session.id }
