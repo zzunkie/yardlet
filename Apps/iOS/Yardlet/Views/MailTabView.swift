@@ -7,8 +7,12 @@ struct MailTabView: View {
     let store: MailCalendarStore
     let isActive: Bool
     var onOpenConnectors: () -> Void = {}
+    /// The search field took or left the keyboard: the home screen hides its bars above the keyboard meanwhile, as
+    /// the task search does.
+    var onSearchFocusChange: (Bool) -> Void = { _ in }
 
     @State private var searchInput = ""
+    @FocusState private var isSearchFocused: Bool
     @State private var activeSheet: ActiveSheet?
     @State private var isRefreshingState = false
 
@@ -83,7 +87,9 @@ struct MailTabView: View {
                 Image(systemName: "magnifyingglass")
                     .font(.subheadline)
                     .foregroundStyle(YardletPalette.onSurfaceVariant)
-                TextField("Search mail", text: $searchInput)
+                TextField("Search mail", text: $searchInput, prompt: .placeholder("Search mail"))
+                    .focused($isSearchFocused)
+                    .onChange(of: isSearchFocused) { _, focused in onSearchFocusChange(focused) }
                     .font(.subheadline)
                     .foregroundStyle(YardletPalette.onSurface)
                     .textInputAutocapitalization(.never)
@@ -280,6 +286,8 @@ struct MailTabView: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+        // Room under the last row, so the list's end clears the bars below it instead of meeting them.
+        .contentMargins(.bottom, 24, for: .scrollContent)
         .background(YardletPalette.background)
         .refreshable {
             await store.refreshMail()
@@ -924,7 +932,7 @@ private struct MailThreadDetailSheet: View {
             }
 
             HStack(alignment: .bottom, spacing: 8) {
-                TextField("Write a reply…", text: $replyBody, axis: .vertical)
+                TextField("Write a reply…", text: $replyBody, prompt: .placeholder("Write a reply…"), axis: .vertical)
                     .font(.subheadline)
                     .foregroundStyle(YardletPalette.onSurface)
                     .lineLimit(1...5)

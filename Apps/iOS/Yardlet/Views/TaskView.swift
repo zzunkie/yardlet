@@ -180,7 +180,8 @@ struct TaskView: View {
 
     private var subtitle: String {
         guard let task else { return "" }
-        return [task.harnessName, session.project(task.projectId)?.name].compactMap { $0 }.joined(separator: " · ")
+        // Project first, as the task list's rows say it.
+        return [session.project(task.projectId)?.name, task.harnessName].compactMap { $0 }.joined(separator: " · ")
     }
 
     private func content(_ conversation: ConversationState) -> some View {
@@ -206,7 +207,7 @@ struct TaskView: View {
                         ContentUnavailableView("This task is gone", systemImage: "tray",
                                                description: Text("\(session.name) no longer lists it."))
                     } else if conversation.isLoaded && conversation.turns.isEmpty {
-                        Text("No messages yet.").font(.callout).foregroundStyle(.secondary)
+                        Text("No messages yet.").font(.callout).foregroundStyle(YardletPalette.onSurfaceVariant)
                             .frame(maxWidth: .infinity).padding(.top, 40)
                     }
                     ForEach(conversation.turns) { turn in
@@ -236,14 +237,17 @@ struct TaskView: View {
                         withAnimation { proxy.scrollTo(Self.latestID, anchor: .bottom) }
                     } label: {
                         Image(systemName: "arrow.down")
-                            .font(.body.weight(.semibold))
-                            .frame(width: 40, height: 40)
+                            .font(.subheadline.weight(.semibold))
+                            .frame(width: 34, height: 34)
                             .background(YardletPalette.surfaceContainerHigh, in: Circle())
                             .overlay(Circle().strokeBorder(YardletPalette.outline, lineWidth: 0.75))
+                            .contentShape(Circle().inset(by: -5))
                     }
                     .foregroundStyle(YardletPalette.onSurface)
                     .accessibilityLabel("Jump to Latest")
-                    .padding(16)
+                    // In the corner, over the conversation's margin as far as it goes, so it covers little of a card.
+                    .padding(.trailing, 6)
+                    .padding(.bottom, 10)
                     .transition(.opacity)
                 }
             }
@@ -252,7 +256,9 @@ struct TaskView: View {
             .environment(\.openPreview, OpenPreviewAction { openedPreview = $0 })
             .environment(\.markdownImageLoader, imageLoader)
             .overlay {
-                if !conversation.isLoaded { ProgressView() }
+                if !conversation.isLoaded {
+                    OpeningTaskPlaceholder(session: session, title: title) { dismiss() }
+                }
             }
             .environment(\.openBrowserTab, session.browser.isOffered ? OpenBrowserTab { openBrowser($0) } : nil)
             .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -364,9 +370,48 @@ struct TaskView: View {
                 }
             }
         } label: {
-            Image(systemName: "ellipsis.circle")
+            Image(systemName: "ellipsis")
         }
         .accessibilityLabel("More")
+    }
+}
+
+/// A conversation not read yet, opened from a notification before the Mac is reached: the task it is, what the
+/// connection is doing, and a way back, rather than a blank screen.
+private struct OpeningTaskPlaceholder: View {
+    let session: HostSession
+    let title: String
+    let back: () -> Void
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Text(title.isEmpty ? String(localized: "Opening task") : title)
+                .font(.headline)
+                .foregroundStyle(YardletPalette.onSurface)
+                .multilineTextAlignment(.center)
+                .lineLimit(3)
+            HStack(spacing: 8) {
+                if spins { ProgressView().controlSize(.small) }
+                Text(ConnectionBanner.text(session) ?? String(localized: "Loading the conversation…"))
+                    .font(.subheadline)
+                    .foregroundStyle(YardletPalette.onSurfaceVariant)
+                    .multilineTextAlignment(.center)
+            }
+            Button("Back to Tasks", action: back)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(YardletPalette.onSurface)
+                .padding(.top, 6)
+        }
+        .padding(.horizontal, 32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(YardletPalette.background)
+    }
+
+    private var spins: Bool {
+        switch session.connection {
+        case .connected, .connecting: true
+        default: false
+        }
     }
 }
 
@@ -478,7 +523,7 @@ struct StretchFoldView: View {
                 Image(systemName: isOpen ? "chevron.down" : "chevron.right").font(.caption2.weight(.semibold))
             }
             .font(.subheadline)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(YardletPalette.onSurfaceVariant)
         }
         .buttonStyle(.plain)
     }
@@ -499,7 +544,8 @@ struct ItemView: View {
         switch item.kind {
         case .turn:
             TurnHeaderView(item: item, isWorkOpen: isWorkOpen, toggleWork: toggleWork,
-                           context: offer.flatMap { $0.messageID == nil && $0.canFork ? context : nil })
+                           context: offer.flatMap { $0.messageID == nil && $0.canFork ? context : nil },
+                           waitingOn: context.task?.attention == .waiting ? context.task?.pendingRequest : nil)
         case .user:
             switch item.sender?.kind {
             case "task"?: MessageFromTask(item: item, session: context.session)
@@ -539,6 +585,8 @@ struct TurnHeaderView: View {
     let toggleWork: () -> Void
     /// Set when the header holds the turn's fork.
     var context: ItemContext?
+    /// What the running turn waits on the person for: it is not thinking then, so no spinner turns.
+    var waitingOn: RemotePendingRequest?
     @State private var isForking = false
 
     var body: some View {
@@ -562,10 +610,16 @@ struct TurnHeaderView: View {
 
     @ViewBuilder
     private var header: some View {
-        if item.status == "running" {
+        if item.status == "running", let waitingOn {
+            Label(waitingOn == .approval ? String(localized: "Waiting for approval")
+                                         : String(localized: "Waiting for your answer"),
+                  systemImage: "hand.raised")
+                .font(.subheadline)
+                .foregroundStyle(YardletPalette.onSurfaceVariant)
+        } else if item.status == "running" {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text(progress).font(.subheadline).foregroundStyle(.secondary)
+                Text(progress).font(.subheadline).foregroundStyle(YardletPalette.onSurfaceVariant)
             }
         } else if item.foldsWork == true || item.durationMs != nil {
             Button(action: toggleWork) {
@@ -576,7 +630,7 @@ struct TurnHeaderView: View {
                     }
                 }
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(YardletPalette.onSurfaceVariant)
             }
             .buttonStyle(.plain)
             .disabled(item.foldsWork != true)
@@ -683,10 +737,10 @@ struct UserMessageView: View {
                 ConversationText(text)
             }
             if uncounted > 0 {
-                Label("\(uncounted) images", systemImage: "photo").font(.caption).foregroundStyle(.secondary)
+                Label("\(uncounted) images", systemImage: "photo").font(.caption).foregroundStyle(YardletPalette.onSurfaceVariant)
             }
             if item.scheduled == true {
-                Label("Sent on schedule", systemImage: "clock").font(.caption).foregroundStyle(.secondary)
+                Label("Sent on schedule", systemImage: "clock").font(.caption).foregroundStyle(YardletPalette.onSurfaceVariant)
             }
         }
         .padding(.horizontal, 14)
@@ -759,8 +813,12 @@ struct ActivityLine: View {
             if opens { openDetail?(item) }
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                icon
-                    .font(.footnote)
+                // Set on a line of the words' height, so the icon and a running line's spinner (which has no
+                // baseline of its own) sit on the first line of a title that wraps.
+                Text(verbatim: "M")
+                    .font(.subheadline)
+                    .hidden()
+                    .overlay { icon.font(.footnote) }
                     .frame(width: 16)
                     .foregroundStyle(item.status == "failed" ? YardletPalette.Status.failed : YardletPalette.onSurfaceVariant)
                 VStack(alignment: .leading, spacing: 2) {
@@ -775,17 +833,17 @@ struct ActivityLine: View {
                 Spacer(minLength: 0)
                 if let additions = item.additions, let deletions = item.deletions {
                     HStack(spacing: 4) {
-                        Text("+\(additions)").foregroundStyle(YardletPalette.Status.approval)
-                        Text("−\(deletions)").foregroundStyle(YardletPalette.Status.failed)
+                        Text("+\(additions)").foregroundStyle(YardletPalette.successText)
+                        Text("−\(deletions)").foregroundStyle(YardletPalette.dangerText)
                     }
                     .font(.footnote.monospacedDigit())
                 }
                 // A subagent on another harness or model than its task says which (§15.24).
                 if let runsOn = item.subagent?.harnessLabel ?? item.subagent?.model {
-                    Text(verbatim: runsOn).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                    Text(verbatim: runsOn).font(.footnote).foregroundStyle(YardletPalette.onSurfaceVariant).lineLimit(1)
                 }
                 if opens {
-                    Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
+                    Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(YardletPalette.onSurfaceVariant)
                 }
             }
             .contentShape(Rectangle())
@@ -803,7 +861,7 @@ struct ActivityLine: View {
         for (index, entry) in words.enumerated() {
             if index > 0 { text = text + Text(verbatim: ", ") }
             if let leading = entry.leading { text = text + Text(verbatim: leading + " ") }
-            text = text + Text(verbatim: entry.verb).foregroundColor(.secondary)
+            text = text + Text(verbatim: entry.verb).foregroundColor(YardletPalette.onSurfaceVariant)
             if let trailing = entry.trailing { text = text + Text(verbatim: " " + trailing) }
         }
         return text
@@ -838,8 +896,8 @@ struct AnsweredRequestLine: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: icon).font(.footnote).frame(width: 16).foregroundStyle(.secondary)
-            Text(line).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
+            Image(systemName: icon).font(.footnote).frame(width: 16).foregroundStyle(YardletPalette.onSurfaceVariant)
+            Text(line).font(.subheadline).foregroundStyle(YardletPalette.onSurfaceVariant).lineLimit(2)
         }
     }
 
@@ -870,18 +928,18 @@ struct PlanStepsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let explanation = item.explanation, !explanation.isEmpty {
-                Text(explanation).font(.subheadline).foregroundStyle(.secondary)
+                Text(explanation).font(.subheadline).foregroundStyle(YardletPalette.onSurfaceVariant)
             }
             ForEach(Array((item.steps ?? []).enumerated()), id: \.offset) { _, step in
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Image(systemName: step.status == "completed" ? "checkmark.circle.fill"
                           : step.status == "inProgress" ? "circle.inset.filled" : "circle")
                         .font(.footnote)
-                        .foregroundStyle(step.status == "completed" ? Color.secondary : Color.primary)
+                        .foregroundStyle(step.status == "completed" ? YardletPalette.onSurfaceVariant : YardletPalette.onSurface)
                     Text(step.text)
                         .font(.subheadline)
-                        .strikethrough(step.status == "completed", color: .secondary)
-                        .foregroundStyle(step.status == "completed" ? .secondary : .primary)
+                        .strikethrough(step.status == "completed", color: YardletPalette.onSurfaceVariant)
+                        .foregroundStyle(step.status == "completed" ? YardletPalette.onSurfaceVariant : YardletPalette.onSurface)
                 }
             }
         }
@@ -902,7 +960,7 @@ private struct TaskSubtitle: ViewModifier {
                 ToolbarItem(placement: .principal) {
                     VStack(spacing: 1) {
                         Text(title).font(.subheadline.weight(.semibold)).lineLimit(1)
-                        Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        Text(subtitle).font(.caption).foregroundStyle(YardletPalette.onSurfaceVariant).lineLimit(1)
                     }
                 }
             }

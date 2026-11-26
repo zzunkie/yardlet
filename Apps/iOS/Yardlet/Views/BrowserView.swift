@@ -120,7 +120,7 @@ struct BrowserView: View {
             }
         } else {
             ToolbarItem(placement: .topBarLeading) {
-                Button("Done") { dismiss() }
+                Button("Close") { dismiss() }
             }
             ToolbarItem(placement: .principal) {
                 // Tapped, the address field where the Mac takes addresses (§15.30).
@@ -154,7 +154,7 @@ struct BrowserView: View {
         VStack(spacing: 1) {
             Text(title).font(.subheadline.weight(.semibold)).lineLimit(1)
             if let site = tab.flatMap(Self.site) {
-                Text(site).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(site).font(.caption).foregroundStyle(YardletPalette.onSurfaceVariant).lineLimit(1)
             }
         }
         .frame(maxWidth: 260)
@@ -192,20 +192,20 @@ struct BrowserView: View {
             Bar {
                 Label(line, systemImage: "desktopcomputer")
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(YardletPalette.onSurfaceVariant)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         if let refusal = browser.refusal {
             Bar {
                 HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
+                    Image(systemName: "exclamationmark.circle.fill").foregroundStyle(YardletPalette.Status.question)
                     Text(words(for: refusal)).font(.subheadline)
                     Spacer(minLength: 0)
                     Button {
                         browser.refusal = nil
                     } label: {
-                        Image(systemName: "xmark").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                        Image(systemName: "xmark").font(.footnote.weight(.semibold)).foregroundStyle(YardletPalette.onSurfaceVariant)
                     }
                     .accessibilityLabel("Dismiss")
                 }
@@ -213,7 +213,7 @@ struct BrowserView: View {
         }
     }
 
-    /// §15.18: the agent handed this tab to the person; its reason, Decline and I'm Done.
+    /// §15.18: the agent handed this tab to the person; its reason, Decline and Hand Back.
     private func handoffBar(_ tab: RemoteBrowserTab) -> some View {
         Bar {
             WordsAndButtons(isWide: isWide) {
@@ -221,13 +221,13 @@ struct BrowserView: View {
                     Label("The agent handed this tab to you", systemImage: "hand.point.up.left")
                         .font(.subheadline.weight(.semibold))
                     if let reason = tab.reason, !reason.isEmpty {
-                        Text(reason).font(.subheadline).foregroundStyle(.secondary).lineLimit(4)
+                        Text(reason).font(.subheadline).foregroundStyle(YardletPalette.onSurfaceVariant).lineLimit(4)
                     }
                 }
             } buttons: {
                 Button("Decline") { answerHandoff(tab, .decline) }
                     .buttonStyle(.bordered)
-                Button("I'm Done") { answerHandoff(tab, .done) }
+                Button("Hand Back") { answerHandoff(tab, .done) }
                     .prominentButton()
             }
             .controlSize(.small)
@@ -250,13 +250,13 @@ struct BrowserView: View {
         Bar {
             WordsAndButtons(isWide: isWide) {
                 HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "hand.raised").foregroundStyle(.secondary)
+                    Image(systemName: "hand.raised").foregroundStyle(YardletPalette.onSurfaceVariant)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(PermissionWords.sentence(permission, host: session.name)).font(.subheadline)
                         if let devices = PermissionWords.devices(permission.permissions) {
                             Text("Allowing it uses \(session.name)'s \(devices), not this phone's.")
                                 .font(.footnote)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(YardletPalette.onSurfaceVariant)
                         }
                     }
                     Spacer(minLength: 0)
@@ -278,7 +278,7 @@ struct BrowserView: View {
         Button {
             browser.answerPermission(.dismiss)
         } label: {
-            Image(systemName: "xmark").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+            Image(systemName: "xmark").font(.footnote.weight(.semibold)).foregroundStyle(YardletPalette.onSurfaceVariant)
         }
         .accessibilityLabel("Close")
     }
@@ -504,8 +504,8 @@ private struct BrowserTabsSheet: View {
         let current = tab.tabId == browser.tabID
         return HStack(spacing: 12) {
             Circle()
-                .fill(tab.requestId != nil || tab.waiting == "handoff" ? Color.orange
-                      : tab.waiting != nil ? Color.green : Color.clear)
+                .fill(tab.requestId != nil || tab.waiting == "handoff" ? YardletPalette.Status.question
+                      : tab.waiting != nil ? YardletPalette.Status.approval : Color.clear)
                 .frame(width: 8, height: 8)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
@@ -513,7 +513,7 @@ private struct BrowserTabsSheet: View {
                     .font(.body.weight(current ? .semibold : .regular))
                     .lineLimit(1)
                 if let site = BrowserView.site(tab) {
-                    Text(site).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                    Text(site).font(.footnote).foregroundStyle(YardletPalette.onSurfaceVariant).lineLimit(1)
                 }
             }
             Spacer(minLength: 0)

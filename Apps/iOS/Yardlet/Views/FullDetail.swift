@@ -177,7 +177,7 @@ struct LiveOutputTail: View {
                 }
             }
             .font(.system(.caption2, design: .monospaced))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(YardletPalette.onSurfaceVariant)
             .accessibilityElement(children: .combine)
         }
     }
@@ -272,7 +272,7 @@ struct LineBodyView: View, @MainActor Equatable {
             }
             if let error = shown(body.error) {
                 section("Error") {
-                    Text(verbatim: error).font(.subheadline).foregroundStyle(.red).textSelection(.enabled)
+                    Text(verbatim: error).font(.subheadline).foregroundStyle(YardletPalette.error).textSelection(.enabled)
                 }
             }
         }
@@ -288,10 +288,10 @@ struct LineBodyView: View, @MainActor Equatable {
                          @ViewBuilder content: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             if let title {
-                Text(title).font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                Text(title).font(.footnote.weight(.semibold)).foregroundStyle(YardletPalette.onSurfaceVariant)
             }
             if let note {
-                Text(note).font(.caption).foregroundStyle(.tertiary)
+                Text(note).font(.caption).foregroundStyle(YardletPalette.onSurfaceVariant)
             }
             content()
         }
@@ -308,7 +308,7 @@ private struct McpBlockView: View {
         } else if block.kind == "resource_link" {
             VStack(alignment: .leading, spacing: 2) {
                 if let name = block.title ?? block.name { Text(verbatim: name).font(.subheadline.weight(.medium)) }
-                if let uri = block.uri { Text(verbatim: uri).font(.footnote).foregroundStyle(.secondary) }
+                if let uri = block.uri { Text(verbatim: uri).font(.footnote).foregroundStyle(YardletPalette.onSurfaceVariant) }
                 if let text = block.text { Text(verbatim: text).font(.footnote) }
             }
             .textSelection(.enabled)
@@ -344,17 +344,17 @@ struct SubagentSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     if let about = about(live, subagent) {
-                        Text(about).font(.subheadline).foregroundStyle(.secondary)
+                        Text(about).font(.subheadline).foregroundStyle(YardletPalette.onSurfaceVariant)
                     }
                     actions(live, subagent)
                     if let refusal {
-                        Text(refusal).font(.footnote).foregroundStyle(.red)
+                        Text(refusal).font(.footnote).foregroundStyle(YardletPalette.error)
                     }
                     SubagentWords(input: subagent.input, output: subagent.output).equatable()
                     if isReading {
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)
-                            Text("Loading…").font(.subheadline).foregroundStyle(.secondary)
+                            Text("Loading…").font(.subheadline).foregroundStyle(YardletPalette.onSurfaceVariant)
                         }
                     }
                     if let transcript { conversation(transcript) }
@@ -436,14 +436,14 @@ struct SubagentSheet: View {
 
     private func conversation(_ transcript: RemoteSubtaskTranscript) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Conversation").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+            Text("Conversation").font(.footnote.weight(.semibold)).foregroundStyle(YardletPalette.onSurfaceVariant)
             if transcript.truncated {
                 Text("Only the latest turns show here. The rest is on \(session.name).")
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(YardletPalette.onSurfaceVariant)
             }
             if transcript.items.isEmpty {
-                Text("No messages yet.").font(.subheadline).foregroundStyle(.secondary)
+                Text("No messages yet.").font(.subheadline).foregroundStyle(YardletPalette.onSurfaceVariant)
             } else {
                 SubtaskConversation(items: transcript.items)
             }
@@ -466,7 +466,7 @@ private struct SubagentWords: View, @MainActor Equatable {
 
     private func section(_ title: LocalizedStringKey, _ text: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+            Text(title).font(.footnote.weight(.semibold)).foregroundStyle(YardletPalette.onSurfaceVariant)
             MarkdownView(text: text, font: .subheadline)
         }
     }
@@ -503,9 +503,9 @@ private struct ErrorLine: View {
         VStack(alignment: .leading, spacing: 4) {
             Label(item.title ?? String(localized: "Something went wrong"), systemImage: "exclamationmark.triangle.fill")
                 .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.red)
+                .foregroundStyle(YardletPalette.error)
             if let message = item.message, !message.isEmpty {
-                Text(verbatim: message).font(.subheadline).foregroundStyle(.secondary).textSelection(.enabled)
+                Text(verbatim: message).font(.subheadline).foregroundStyle(YardletPalette.onSurfaceVariant).textSelection(.enabled)
             }
         }
     }
@@ -522,15 +522,15 @@ struct NoticeView: View {
         let words = self.words
         VStack(spacing: 2) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Image(systemName: words.symbol).foregroundStyle(words.warns ? Color.orange : Color.secondary)
+                Image(systemName: words.symbol).foregroundStyle(words.warns ? YardletPalette.warningText : YardletPalette.onSurfaceVariant)
                 Text(verbatim: words.line)
             }
             .font(.footnote)
             if let more = words.more {
-                Text(verbatim: more).font(.caption).foregroundStyle(.tertiary)
+                Text(verbatim: more).font(.caption).foregroundStyle(YardletPalette.onSurfaceVariant)
             }
         }
-        .foregroundStyle(.secondary)
+        .foregroundStyle(YardletPalette.onSurfaceVariant)
         .multilineTextAlignment(.center)
         .frame(maxWidth: .infinity, alignment: .center)
         .accessibilityElement(children: .combine)
@@ -591,7 +591,7 @@ struct LimitWindowLines: View {
             }
         }
         .font(.footnote)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(YardletPalette.onSurfaceVariant)
     }
 
     private func line(_ window: RemoteLimit.Window) -> String {

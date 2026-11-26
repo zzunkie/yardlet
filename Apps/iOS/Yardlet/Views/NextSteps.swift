@@ -63,7 +63,7 @@ private struct CodexQuestionsDock: View {
                                       : String(localized: "Question"),
                   systemImage: "questionmark.bubble")
                 .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(YardletPalette.onSurfaceVariant)
             Text(question.title)
                 .font(.body.weight(.medium))
                 .fixedSize(horizontal: false, vertical: true)
@@ -81,7 +81,7 @@ private struct CodexQuestionsDock: View {
                     written[question.itemID] = clipped
                     if !clipped.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { picked[question.itemID] = nil }
                     skipped.remove(question.itemID)
-                }), axis: .vertical)
+                }), prompt: .placeholder(question.options.isEmpty ? "Answer" : "Other answer"), axis: .vertical)
                 .lineLimit(1...4)
                 .padding(10)
                 .background(YardletPalette.surfaceContainerLow, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -96,7 +96,7 @@ private struct CodexQuestionsDock: View {
                 }
                 Button("Skip") { skip() }
                     .buttonStyle(.borderless)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(YardletPalette.onSurfaceVariant)
                 Spacer(minLength: 8)
                 Button {
                     if isLast { submit() } else { index += 1 }
@@ -126,7 +126,7 @@ private struct CodexQuestionsDock: View {
                 } label: {
                     HStack(alignment: .firstTextBaseline, spacing: 10) {
                         Image(systemName: isPicked ? "largecircle.fill.circle" : "circle")
-                            .foregroundStyle(isPicked ? Color.accentColor : Color.secondary)
+                            .foregroundStyle(isPicked ? Color.accentColor : YardletPalette.onSurfaceVariant)
                         Text(option).foregroundStyle(.primary).multilineTextAlignment(.leading)
                         Spacer(minLength: 0)
                     }
@@ -182,7 +182,7 @@ private struct ImplementPlanDock: View {
         VStack(alignment: .leading, spacing: 10) {
             Label("Plan", systemImage: "list.bullet.clipboard")
                 .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(YardletPalette.onSurfaceVariant)
             Text("Implement this plan?").font(.body.weight(.medium))
             Button {
                 isSending = true

@@ -78,7 +78,11 @@ struct HostSettingsView: View {
                     } else if !session.capabilities.hostSettings && !session.capabilities.hostAccounts {
                         unsupportedCard
                     } else if settings == nil && accounts == nil {
-                        loadingCard
+                        if let failure = session.hostSettingsFailure ?? session.hostAccountsFailure, !isRefreshing {
+                            ReadFailureCard(message: failure) { Task { await refreshAll() } }
+                        } else {
+                            loadingCard
+                        }
                     } else {
                         if !isWritable {
                             readOnlyBanner
@@ -822,7 +826,7 @@ struct HostSettingsView: View {
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: notice.isWarning ? "exclamationmark.triangle.fill" : "info.circle")
                             .font(.footnote)
-                            .foregroundStyle(notice.isWarning ? YardletPalette.Status.limit : YardletPalette.onSurfaceVariant)
+                            .foregroundStyle(notice.isWarning ? YardletPalette.warningText : YardletPalette.onSurfaceVariant)
                             .padding(.top, 2)
                         Text(verbatim: notice.text)
                             .font(.footnote)
@@ -884,7 +888,7 @@ struct HostSettingsView: View {
                 if let status = row.status, !status.isEmpty {
                     Text(verbatim: status)
                         .font(.caption)
-                        .foregroundStyle(row.isWarning ? YardletPalette.Status.limit : YardletPalette.onSurfaceVariant)
+                        .foregroundStyle(row.isWarning ? YardletPalette.warningText : YardletPalette.onSurfaceVariant)
                 }
                 if let newerText = row.newerText, !newerText.isEmpty {
                     Text(verbatim: newerText)

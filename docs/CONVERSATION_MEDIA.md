@@ -151,7 +151,7 @@ search, so it adds little to a turn's prompt.
   view is (`ConversationWidget`). The view is drawn from the call's arguments, which the harness keeps in its own
   history, so it is drawn again when the conversation is reopened; Yardlet keeps nothing. Full-detail remote desktop
   subscriptions carry the widget in `RemoteConversationBody.widget` (up to `RemoteText.fullTextLimit`) so remote Mac
-  windows draw the same sandboxed view.
+  windows draw the same sandboxed view; the iPhone app draws it in its own sandboxed web view with the same theme.
 - **The page.** The fragment with Yardlet's small bridge (no kit), in the same sandbox, policy, pool, size, expanding
   and failure card as a Codex visualization (`MCPAppViewController.startWidget`). Its `prefers-color-scheme` is the
   app's appearance. In place of the kit it gets Yardlet's theme (`YardletWidgetTheme`), inline and loading nothing:

@@ -103,7 +103,7 @@ struct AccountMacsView: View {
                     }
                 }
                 if let error = model.account.error {
-                    Text(error).foregroundStyle(.red)
+                    Text(error).foregroundStyle(YardletPalette.error)
                     if model.account.account != nil {
                         Button("Try Again") { Task { await model.account.loadMacs() } }
                     }
@@ -141,18 +141,18 @@ struct AccountMacsView: View {
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: "desktopcomputer")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(YardletPalette.onSurfaceVariant)
                     .frame(width: 28)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(mac.name).foregroundStyle(.primary)
                     if model.pairedHost(mac) != nil {
-                        Text("Paired with this phone").font(.footnote).foregroundStyle(.secondary)
+                        Text("Paired with this phone").font(.footnote).foregroundStyle(YardletPalette.onSurfaceVariant)
                     }
                 }
                 Spacer()
                 Image(systemName: "chevron.right")
                     .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(YardletPalette.onSurfaceVariant)
             }
         }
     }
@@ -190,7 +190,7 @@ private struct LinkCodeView: View {
             case let .asking(mac):
                 ProgressView()
                 Text("Asking \(mac)…")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(YardletPalette.onSurfaceVariant)
                     .padding(.top, 12)
             case let .waiting(mac, code):
                 Text("Check Your Mac")
@@ -201,7 +201,7 @@ private struct LinkCodeView: View {
                     .accessibilityLabel(Text(verbatim: code.map(String.init).joined(separator: " ")))
                 Text("Check that \(mac) shows the same number, then choose Allow there.")
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(YardletPalette.onSurfaceVariant)
                     .multilineTextAlignment(.center)
                     .padding(.top, 20)
                 HStack(spacing: 8) {
@@ -209,12 +209,12 @@ private struct LinkCodeView: View {
                     Text("Waiting for your Mac…")
                 }
                 .font(.footnote)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(YardletPalette.onSurfaceVariant)
                 .padding(.top, 28)
             case let .failed(_, message):
                 Image(systemName: "exclamationmark.triangle")
                     .font(.system(size: 36))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(YardletPalette.onSurfaceVariant)
                     .accessibilityHidden(true)
                 Text(message)
                     .multilineTextAlignment(.center)

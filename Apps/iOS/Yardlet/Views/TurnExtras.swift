@@ -16,16 +16,16 @@ struct ErrorView: View {
             Label(item.title ?? (isLimit ? String(localized: "Usage limit reached") : String(localized: "Something went wrong")),
                   systemImage: isLimit ? "gauge.with.dots.needle.100percent" : "exclamationmark.triangle.fill")
                 .font(.subheadline.weight(.semibold))
-                .foregroundStyle(isLimit ? YardletPalette.Status.limit : YardletPalette.error)
+                .foregroundStyle(isLimit ? YardletPalette.warningText : YardletPalette.error)
             if let message = item.message, !message.isEmpty {
-                Text(message).font(.subheadline).foregroundStyle(.secondary).textSelection(.enabled)
+                Text(message).font(.subheadline).foregroundStyle(YardletPalette.onSurfaceVariant).textSelection(.enabled)
             }
             if let windows = item.limit?.windows, !windows.isEmpty {
                 LimitWindowLines(windows: windows, session: context.session)
             } else if let resetsAt = item.resetsAt {
                 Text("Resets \(context.session.date(resetsAt).formatted(.relative(presentation: .named)))")
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(YardletPalette.onSurfaceVariant)
             }
             if let retryTurnID {
                 Button("Try Again") {
@@ -96,11 +96,11 @@ private struct AccountChooser: View {
                         }
                     }
                     if refusal == nil, !accounts.contains(where: { $0.current != true }) {
-                        Text("No other account can continue this task.").font(.footnote).foregroundStyle(.secondary)
+                        Text("No other account can continue this task.").font(.footnote).foregroundStyle(YardletPalette.onSurfaceVariant)
                     }
                     if let refusal {
                         Section {
-                            Text(refusal).font(.footnote).foregroundStyle(.red)
+                            Text(refusal).font(.footnote).foregroundStyle(YardletPalette.error)
                         }
                     }
                 } else {
@@ -129,12 +129,12 @@ private struct AccountChooser: View {
                 Text(account.name).foregroundStyle(.primary)
                 Spacer(minLength: 8)
                 if account.current == true {
-                    Text("Current").font(.caption).foregroundStyle(.secondary)
+                    Text("Current").font(.caption).foregroundStyle(YardletPalette.onSurfaceVariant)
                 } else if account.available != true {
-                    Text("Unavailable").font(.caption).foregroundStyle(.secondary)
+                    Text("Unavailable").font(.caption).foregroundStyle(YardletPalette.onSurfaceVariant)
                 }
             }
-            if let detail = account.detail { Text(detail).font(.footnote).foregroundStyle(.secondary) }
+            if let detail = account.detail { Text(detail).font(.footnote).foregroundStyle(YardletPalette.onSurfaceVariant) }
             ForEach(account.usage, id: \.label) { usage in
                 UsageLine(usage: usage, session: context.session)
             }
@@ -167,12 +167,12 @@ private struct UsageLine: View {
         HStack(spacing: 8) {
             if let percent {
                 ProgressView(value: Double(percent), total: 100)
-                    .tint(percent >= 90 ? .orange : .secondary)
+                    .tint(percent >= 90 ? YardletPalette.warningText : YardletPalette.onSurfaceVariant)
                     .frame(width: 36)
             }
             Text(text(percent))
                 .font(.footnote)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(YardletPalette.onSurfaceVariant)
                 .lineLimit(1)
         }
     }
@@ -211,24 +211,25 @@ struct SuggestionView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label(item.title ?? "", systemImage: "lightbulb").font(.subheadline.weight(.medium))
+                .padding(.top, 6)
             if let detail = item.detail, !detail.isEmpty {
-                Text(detail).font(.footnote).foregroundStyle(.secondary)
+                Text(detail).font(.footnote).foregroundStyle(YardletPalette.onSurfaceVariant)
             }
             if item.suggestionState == "failed", let failure = item.suggestionFailure, !failure.isEmpty {
-                Text(failure).font(.footnote).foregroundStyle(.red).textSelection(.enabled)
+                Text(failure).font(.footnote).foregroundStyle(YardletPalette.error).textSelection(.enabled)
             }
             if !actions.isEmpty {
                 HStack(spacing: 8) {
                     if actions.contains(RemoteSuggestionAction.start.rawValue) {
-                        Button("Start") { act(.start) }.prominentButton()
+                        Button("Start as New Task") { act(.start) }.prominentButton()
                     }
                     if actions.contains(RemoteSuggestionAction.here.rawValue) {
-                        Button("Do It Here") { act(.here) }.buttonStyle(.bordered)
+                        Button("Run in This Conversation") { act(.here) }.buttonStyle(.bordered)
                     }
                     if offersOptions {
                         Button("Options") { isShowingOptions = true }
-                            .buttonStyle(.borderless)
-                            .foregroundStyle(.secondary)
+                            .buttonStyle(.bordered)
+                            .foregroundStyle(YardletPalette.onSurface)
                             .accessibilityHint(item.title ?? "")
                     }
                     Spacer()
@@ -245,7 +246,7 @@ struct SuggestionView: View {
                 .controlSize(.small)
                 .disabled(!context.session.isConnected)
             } else if let outcome {
-                Text(outcome).font(.footnote).foregroundStyle(.secondary)
+                Text(outcome).font(.footnote).foregroundStyle(YardletPalette.onSurfaceVariant)
             }
         }
         .sheet(isPresented: $isShowingOptions) {
@@ -336,18 +337,18 @@ struct LineDetailView: View {
                             Text(diff.path).font(.footnote.weight(.semibold)).lineLimit(2)
                             Spacer()
                             if let additions = diff.additions, let deletions = diff.deletions {
-                                Text("+\(additions)").foregroundStyle(.green).font(.footnote.monospacedDigit())
-                                Text("−\(deletions)").foregroundStyle(.red).font(.footnote.monospacedDigit())
+                                Text("+\(additions)").foregroundStyle(YardletPalette.successText).font(.footnote.monospacedDigit())
+                                Text("−\(deletions)").foregroundStyle(YardletPalette.error).font(.footnote.monospacedDigit())
                             }
                         }
                         DiffView(patch: diff.patch)
                         if diff.truncated == true {
-                            Text("The rest of this change is on your Mac.").font(.footnote).foregroundStyle(.secondary)
+                            Text("The rest of this change is on your Mac.").font(.footnote).foregroundStyle(YardletPalette.onSurfaceVariant)
                         }
                     }
                 }
                 if detail.output?.isEmpty != false && detail.diffs.isEmpty {
-                    Text("Nothing more to show.").font(.callout).foregroundStyle(.secondary)
+                    Text("Nothing more to show.").font(.callout).foregroundStyle(YardletPalette.onSurfaceVariant)
                 }
             } else {
                 ProgressView().frame(maxWidth: .infinity).padding(.top, 40)
@@ -359,7 +360,7 @@ struct LineDetailView: View {
     private func code(_ text: String, truncated: Bool) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             if truncated {
-                Text("Showing the end of the output.").font(.footnote).foregroundStyle(.secondary)
+                Text("Showing the end of the output.").font(.footnote).foregroundStyle(YardletPalette.onSurfaceVariant)
             }
             CodeBlock(text: text)
         }
@@ -393,13 +394,13 @@ struct DiffView: View {
     }
 
     private func color(_ line: String) -> Color {
-        if line.hasPrefix("@@") { return .secondary }
-        return .primary
+        if line.hasPrefix("@@") { return YardletPalette.onSurfaceVariant }
+        return YardletPalette.onSurface
     }
 
     private func background(_ line: String) -> Color {
-        if line.hasPrefix("+") && !line.hasPrefix("+++") { return .green.opacity(0.15) }
-        if line.hasPrefix("-") && !line.hasPrefix("---") { return .red.opacity(0.15) }
+        if line.hasPrefix("+") && !line.hasPrefix("+++") { return YardletPalette.Status.approval.opacity(0.15) }
+        if line.hasPrefix("-") && !line.hasPrefix("---") { return YardletPalette.Status.failed.opacity(0.15) }
         return .clear
     }
 }

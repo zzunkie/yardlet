@@ -20,9 +20,12 @@ struct YardletApp: App {
     }
 }
 
-/// Push registration, opened notifications, and background pushes that withdraw a notification. The notification
-/// center calls its delegate on the main thread, and UIKit wants a response's completion called there too.
-final class AppDelegate: NSObject, UIApplicationDelegate, @preconcurrency UNUserNotificationCenterDelegate {
+/// Push registration, opened notifications, and background pushes that withdraw a notification.
+/// The notification center's delegate methods are `nonisolated`: the center is documented to call them on the main
+/// thread, but a cold launch from a tapped notification must not depend on it, since Swift 6 stops the app on a main
+/// actor method entered from another thread. They read the notification where they are called and do the app's part
+/// on the main actor, calling the completion handler once that is done.
+final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         let center = UNUserNotificationCenter.current()
@@ -58,25 +61,64 @@ final class AppDelegate: NSObject, UIApplicationDelegate, @preconcurrency UNUser
         return .newData
     }
 
-    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
-                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                            withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         completionHandler([.banner, .list, .sound, .badge])
     }
 
     /// A notification opened, or its Allow Once chosen (`PushNotice.allowOnceAction`).
-    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
-                                withCompletionHandler completionHandler: @escaping () -> Void) {
-        let info = response.notification.request.content.userInfo
-        let taskID = info[PushNotice.taskKey] as? String
-        let hostID = info[PushNotice.hostKey] as? String
-        if response.actionIdentifier == PushNotice.allowOnceAction, let taskID, let hostID,
-           let requestID = info[PushNotice.requestKey] as? String {
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                            withCompletionHandler completionHandler: @escaping () -> Void) {
+        let opened = OpenedNotification(response)
+        let done = UncheckedSendable(completionHandler)
+        Self.onMain {
+            opened.open()
+            done.value()
+        }
+    }
+
+    /// Runs `work` on the main actor: right away when already on the main thread, so a cold launch sets the task to
+    /// open before the first frame, and otherwise as soon as the main queue runs.
+    private nonisolated static func onMain(_ work: @escaping @MainActor @Sendable () -> Void) {
+        if Thread.isMainThread {
+            MainActor.assumeIsolated(work)
+        } else {
+            DispatchQueue.main.async(execute: work)
+        }
+    }
+}
+
+/// What the app needs of an opened notification, read where the notification center hands it over.
+private struct OpenedNotification: Sendable {
+    let taskID: String?
+    let hostID: String?
+    let requestID: String?
+    let allowOnce: Bool
+    let browser: Bool
+
+    init(_ response: UNNotificationResponse) {
+        let content = response.notification.request.content
+        let info = content.userInfo
+        taskID = info[PushNotice.taskKey] as? String
+        hostID = info[PushNotice.hostKey] as? String
+        requestID = info[PushNotice.requestKey] as? String
+        allowOnce = response.actionIdentifier == PushNotice.allowOnceAction
+        // A tab handed to the person opens over its task (§15.18).
+        browser = content.categoryIdentifier == PushNotice.Kind.browser.rawValue
+    }
+
+    @MainActor func open() {
+        if allowOnce, let taskID, let hostID, let requestID {
             PhoneModel.shared.allowOnceFromNotification(taskID: taskID, hostID: hostID, requestID: requestID)
         } else {
-            // A tab handed to the person opens over its task (§15.18).
-            let browser = response.notification.request.content.categoryIdentifier == PushNotice.Kind.browser.rawValue
             PhoneModel.shared.openNotification(taskID: taskID, hostID: hostID, browser: browser)
         }
-        completionHandler()
     }
+}
+
+/// A completion handler the notification center hands over without marking it `Sendable`; it is called once, on the
+/// main actor.
+private struct UncheckedSendable<Value>: @unchecked Sendable {
+    let value: Value
+    init(_ value: Value) { self.value = value }
 }

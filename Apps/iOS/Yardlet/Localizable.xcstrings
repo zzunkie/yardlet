@@ -37,6 +37,17 @@
         }
       }
     },
+    "%@ ago": {
+      "comment": "How long ago, in a list: 5m ago",
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 전"
+          }
+        }
+      }
+    },
     "%@ asks for a passkey": {
       "localizations": {
         "ko": {
@@ -143,6 +154,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@에서 지금 그 선택지를 쓸 수 없습니다. 다시 고르세요."
+          }
+        }
+      }
+    },
+    "%@ doesn't support this yet. Update Yardlet on %@.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@에서는 아직 이 기능을 지원하지 않습니다. %2$@의 Yardlet을 업데이트하세요."
           }
         }
       }
@@ -283,16 +304,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@에서 이 휴대폰을 지웠습니다. 다시 연결하려면 새로 짝지으세요."
-          }
-        }
-      }
-    },
-    "%@ supports remote settings and connectors. Controls for iOS are coming soon.": {
-      "localizations": {
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@에서 원격 설정과 커넥터를 지원합니다. iOS 제어 화면은 곧 추가될 예정입니다."
           }
         }
       }
@@ -713,16 +724,6 @@
         }
       }
     },
-    "Add Mac": {
-      "localizations": {
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mac 추가"
-          }
-        }
-      }
-    },
     "Add Photos": {
       "localizations": {
         "ko": {
@@ -844,7 +845,7 @@
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "하루 종일"
+            "value": "종일"
           }
         }
       }
@@ -960,7 +961,7 @@
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "한 번만 허용"
+            "value": "이번만 허용"
           }
         }
       }
@@ -990,7 +991,7 @@
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "%@에도 같은 숫자가 보이면 허용하세요. 모르는 기기면 거절하세요."
+            "value": "%@에도 같은 숫자가 보이면 허용하세요. 모르는 기기면 거부하세요."
           }
         }
       }
@@ -1271,16 +1272,6 @@
         }
       }
     },
-    "Available on %@": {
-      "localizations": {
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@에서 사용 가능"
-          }
-        }
-      }
-    },
     "Available once this turn ends.": {
       "localizations": {
         "ko": {
@@ -1317,6 +1308,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "뒤로"
+          }
+        }
+      }
+    },
+    "Back to Tasks": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "작업 목록으로"
           }
         }
       }
@@ -2555,6 +2556,16 @@
         }
       }
     },
+    "Couldn't load": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "불러오지 못했습니다"
+          }
+        }
+      }
+    },
     "Couldn't load the image.": {
       "localizations": {
         "ko": {
@@ -2648,7 +2659,7 @@
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "거절"
+            "value": "거부"
           }
         }
       }
@@ -2664,7 +2675,7 @@
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "거절됨"
+            "value": "거부함"
           }
         }
       }
@@ -2731,16 +2742,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "닫음"
-          }
-        }
-      }
-    },
-    "Do It Here": {
-      "localizations": {
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "여기서 하기"
           }
         }
       }
@@ -3129,6 +3130,16 @@
         }
       }
     },
+    "Hand Back": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "에이전트에 돌려주기"
+          }
+        }
+      }
+    },
     "Harness Accounts": {
       "localizations": {
         "en": {
@@ -3191,26 +3202,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "호스트 설정"
-          }
-        }
-      }
-    },
-    "Host Settings and Connectors": {
-      "localizations": {
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "호스트 설정 및 커넥터"
-          }
-        }
-      }
-    },
-    "I'm Done": {
-      "localizations": {
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "다 했어요"
           }
         }
       }
@@ -3324,7 +3315,7 @@
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "초대됨"
+            "value": "응답 전"
           }
         }
       }
@@ -3615,6 +3606,16 @@
         }
       }
     },
+    "Loading the conversation…": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "대화를 불러오는 중…"
+          }
+        }
+      }
+    },
     "Loading…": {
       "localizations": {
         "ko": {
@@ -3631,16 +3632,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Mac"
-          }
-        }
-      }
-    },
-    "Macs and Settings": {
-      "localizations": {
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mac과 설정"
           }
         }
       }
@@ -3703,16 +3694,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "연결된 서비스 관리"
-          }
-        }
-      }
-    },
-    "Manage settings and connectors": {
-      "localizations": {
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "설정 및 커넥터 관리"
           }
         }
       }
@@ -4439,12 +4420,12 @@
         }
       }
     },
-    "On your Mac, open Yardlet › Settings… › Remote and choose Pair… beside Pair a device. Then scan the code it shows.": {
+    "On your Mac, open Yardlet › Settings › Remote and choose Pair beside Pair a device. Then scan the code it shows.": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "Mac의 Yardlet에서 설정… › 원격 연결을 열고 기기 연결 옆의 연결…을 누르세요. 그다음 화면에 뜬 코드를 스캔하세요."
+            "value": "Mac의 Yardlet에서 설정 › 원격 연결을 열고 기기 연결 옆의 연결 버튼을 누르세요. 그다음 Mac 화면에 뜬 코드를 스캔하세요."
           }
         }
       }
@@ -4541,6 +4522,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "로그인 화면 여는 중…"
+          }
+        }
+      }
+    },
+    "Opening task": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "작업을 여는 중"
           }
         }
       }
@@ -5192,7 +5183,7 @@
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "거절"
+            "value": "거부"
           }
         }
       }
@@ -5403,6 +5394,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "지금 실행"
+          }
+        }
+      }
+    },
+    "Run in This Conversation": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 대화에서 실행"
           }
         }
       }
@@ -6209,6 +6210,16 @@
         }
       }
     },
+    "Start as New Task": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "새 작업으로 시작"
+          }
+        }
+      }
+    },
     "Start new tasks on the account with the most limit room left.": {
       "localizations": {
         "en": {
@@ -6464,7 +6475,7 @@
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "에이전트가 이 탭을 넘겼습니다"
+            "value": "에이전트가 이 탭을 맡겼습니다"
           }
         }
       }
@@ -6560,7 +6571,7 @@
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "Mac에서 연결 요청을 거절했습니다."
+            "value": "Mac에서 연결 요청을 거부했습니다."
           }
         }
       }
@@ -6595,12 +6606,12 @@
         }
       }
     },
-    "The tab is open on your Mac. Choose I'm Done once you finished the step there or elsewhere.": {
+    "The tab is open on your Mac. Choose Hand Back once you finished the step there or elsewhere.": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "탭은 Mac에 열려 있습니다. 그곳이나 다른 곳에서 단계를 마쳤으면 다 했어요를 누르세요."
+            "value": "탭은 Mac에 열려 있습니다. 그곳이나 다른 곳에서 단계를 마쳤으면 에이전트에 돌려주기를 누르세요."
           }
         }
       }
@@ -6989,12 +7000,12 @@
         }
       }
     },
-    "To pair a Mac, open Yardlet › Settings… › Remote on it and choose Pair… beside Pair a device. Swipe a Mac to remove it; it forgets this phone too.": {
+    "To pair a Mac, open Yardlet › Settings › Remote on it and choose Pair beside Pair a device. Swipe left on a Mac to remove it; that Mac unpairs this phone too.": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "Mac을 연결하려면 그 Mac의 Yardlet에서 설정… › 원격 연결을 열고 기기 연결 옆의 연결…을 누르세요. Mac을 밀어서 지우면 그 Mac도 이 휴대폰을 잊습니다."
+            "value": "Mac을 연결하려면 그 Mac의 Yardlet에서 설정 › 원격 연결을 열고 기기 연결 옆의 연결 버튼을 누르세요. 목록에서 Mac을 왼쪽으로 밀어 삭제하면 그 Mac에서도 이 휴대폰의 연결이 해제됩니다."
           }
         }
       }
@@ -7449,16 +7460,6 @@
         }
       }
     },
-    "Update Yardlet on %@ to manage host settings and connectors from your phone.": {
-      "localizations": {
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "휴대폰에서 호스트 설정과 커넥터를 관리하려면 %@의 Yardlet을 업데이트하세요."
-          }
-        }
-      }
-    },
     "Update Yardlet on %@ to view and manage host settings from your phone.": {
       "localizations": {
         "en": {
@@ -7625,16 +7626,6 @@
         }
       }
     },
-    "View": {
-      "localizations": {
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "보기"
-          }
-        }
-      }
-    },
     "View Conversation": {
       "localizations": {
         "ko": {
@@ -7681,6 +7672,16 @@
         }
       }
     },
+    "Waiting for approval": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "승인 대기 중"
+          }
+        }
+      }
+    },
     "Waiting for confirmation…": {
       "localizations": {
         "en": {
@@ -7719,6 +7720,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Mac의 허용을 기다리는 중…"
+          }
+        }
+      }
+    },
+    "Waiting for your answer": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "답변 대기 중"
           }
         }
       }

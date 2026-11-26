@@ -134,7 +134,8 @@ struct CalendarTabView: View {
                             .foregroundStyle(isSelected ? YardletPalette.onPrimary.opacity(0.85) : YardletPalette.onSurfaceVariant)
                             .lineLimit(1)
 
-                        Text(day.formatted(.dateTime.day()))
+                        // The number alone: a day's format adds "일" in Korean, which the week strip doesn't need.
+                        Text(verbatim: String(cal.component(.day, from: day)))
                             .font(.subheadline.weight(isSelected || isToday ? .semibold : .regular))
                             .monospacedDigit()
                             .foregroundStyle(isSelected ? YardletPalette.onPrimary : YardletPalette.onSurface)

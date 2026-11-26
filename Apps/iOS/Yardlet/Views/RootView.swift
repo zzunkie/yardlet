@@ -88,16 +88,25 @@ final class LockCover {
     static let shared = LockCover()
     private var window: UIWindow?
     private weak var coveredKeyWindow: UIWindow?
+    /// What was last asked for, kept for a scene that connects or activates after it: a cover asked for before the
+    /// app has a window scene goes up as soon as one is there.
+    private var wanted: (covered: Bool, lock: AppLock)?
+    private var sceneObservers: [NSObjectProtocol] = []
 
     func show(_ covered: Bool, lock: AppLock) {
+        wanted = (covered, lock)
         guard covered else {
             guard let window, !window.isHidden else { return }
             window.isHidden = true
-            coveredKeyWindow?.makeKey()
+            (coveredKeyWindow ?? appWindow(in: window.windowScene))?.makeKey()
+            coveredKeyWindow = nil
             return
         }
         if window == nil {
-            guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else { return }
+            guard let scene = Self.scene else {
+                watchForScene()
+                return
+            }
             let window = UIWindow(windowScene: scene)
             window.windowLevel = .alert + 1
             window.rootViewController = UIHostingController(rootView: LockView(lock: lock))
@@ -105,7 +114,36 @@ final class LockCover {
         }
         guard let window, window.isHidden || !window.isKeyWindow else { return }
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-        coveredKeyWindow = window.windowScene?.keyWindow.flatMap { $0 === window ? nil : $0 }
+        coveredKeyWindow = window.windowScene?.keyWindow.flatMap { $0 === window ? nil : $0 } ?? coveredKeyWindow
         window.makeKeyAndVisible()
+    }
+
+    /// The app's window scene, the one in front first.
+    private static var scene: UIWindowScene? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        return scenes.first { $0.activationState == .foregroundActive }
+            ?? scenes.first { $0.activationState == .foregroundInactive } ?? scenes.first
+    }
+
+    /// The app's own window under the cover, for the keyboard's focus once the cover goes when none was key before.
+    private func appWindow(in scene: UIWindowScene?) -> UIWindow? {
+        scene?.windows.first { $0 !== window && !$0.isHidden && $0.windowLevel == .normal }
+    }
+
+    private func watchForScene() {
+        guard sceneObservers.isEmpty else { return }
+        let names = [UIScene.willConnectNotification, UIScene.willEnterForegroundNotification, UIScene.didActivateNotification]
+        sceneObservers = names.map { name in
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { LockCover.shared.sceneAppeared() }
+            }
+        }
+    }
+
+    private func sceneAppeared() {
+        guard Self.scene != nil else { return }
+        sceneObservers.forEach(NotificationCenter.default.removeObserver)
+        sceneObservers = []
+        if let wanted, wanted.covered { show(true, lock: wanted.lock) }
     }
 }

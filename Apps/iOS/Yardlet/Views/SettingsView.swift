@@ -77,15 +77,18 @@ struct SettingsView: View {
                         Label("Pair a Mac", systemImage: "plus")
                     }
                     if model.isDemo {
-                        Button("Leave Demo") {
+                        Button {
                             model.leaveDemo()
                             dismiss()
+                        } label: {
+                            Label("Leave Demo", systemImage: "rectangle.portrait.and.arrow.right")
                         }
                     }
                 } header: {
                     Text("Macs")
                 } footer: {
-                    Text("To pair a Mac, open Yardlet › Settings… › Remote on it and choose Pair… beside Pair a device. Swipe a Mac to remove it; it forgets this phone too.")
+                    Text("To pair a Mac, open Yardlet › Settings › Remote on it and choose Pair beside Pair a device. Swipe left on a Mac to remove it; that Mac unpairs this phone too.")
+                        .foregroundStyle(YardletPalette.onSurfaceVariant)
                 }
                 .listRowBackground(YardletPalette.surfaceContainerLow)
 
@@ -97,6 +100,7 @@ struct SettingsView: View {
                         Text("Yardlet Account")
                     } footer: {
                         Text("Lists the Macs signed in to this account, to pair one without a QR code. Signing out leaves your paired Macs connected.")
+                            .foregroundStyle(YardletPalette.onSurfaceVariant)
                     }
                     .listRowBackground(YardletPalette.surfaceContainerLow)
                 } else if let error = model.account.error, !showsAccountMacs {
@@ -114,6 +118,7 @@ struct SettingsView: View {
                         .disabled(!model.lock.isAvailable)
                 } footer: {
                     Text("Asks for Face ID or your passcode each time you open Yardlet.")
+                        .foregroundStyle(YardletPalette.onSurfaceVariant)
                 }
                 .listRowBackground(YardletPalette.surfaceContainerLow)
 
@@ -122,25 +127,34 @@ struct SettingsView: View {
                     case .authorized, .provisional, .ephemeral:
                         LabeledContent("Notifications", value: String(localized: "On"))
                     case .denied:
-                        Button("Turn On Notifications in Settings") {
+                        Button {
                             if let url = URL(string: UIApplication.openNotificationSettingsURLString) {
                                 UIApplication.shared.open(url)
                             }
+                        } label: {
+                            LinkRow("Turn On Notifications in Settings", symbol: "arrow.up.right")
                         }
                     default:
-                        Button("Turn On Notifications") {
+                        Button {
                             model.requestNotificationPermission()
+                        } label: {
+                            LinkRow("Turn On Notifications", symbol: "chevron.right")
                         }
                     }
                 } footer: {
                     Text("Approvals, questions and finished tasks, sent by your Mac while Yardlet is closed. Their content is encrypted for this phone; Apple and the relay can't read it.")
+                        .foregroundStyle(YardletPalette.onSurfaceVariant)
                 }
                 .listRowBackground(YardletPalette.surfaceContainerLow)
 
                 Section {
                     LabeledContent("Version", value: Self.version)
-                    Link("Source Code", destination: URL(string: "https://github.com/zzunkie/yardlet")!)
-                    Link("Privacy Policy", destination: URL(string: "https://yardlet.app/privacy.html")!)
+                    Link(destination: URL(string: "https://github.com/zzunkie/yardlet")!) {
+                        LinkRow("Source Code", symbol: "arrow.up.right")
+                    }
+                    Link(destination: URL(string: "https://yardlet.app/privacy.html")!) {
+                        LinkRow("Privacy Policy", symbol: "arrow.up.right")
+                    }
                 }
                 .listRowBackground(YardletPalette.surfaceContainerLow)
             }
@@ -205,5 +219,28 @@ struct SettingsView: View {
         let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
         return "\(short) (\(build))"
+    }
+}
+
+/// A settings row that goes somewhere: its title, and a chevron for a step in the app or an arrow for a page that
+/// opens outside it.
+private struct LinkRow: View {
+    let title: LocalizedStringKey
+    let symbol: String
+
+    init(_ title: LocalizedStringKey, symbol: String) {
+        self.title = title
+        self.symbol = symbol
+    }
+
+    var body: some View {
+        HStack {
+            Text(title)
+            Spacer(minLength: 8)
+            Image(systemName: symbol)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(YardletPalette.onSurfaceVariant)
+                .accessibilityHidden(true)
+        }
     }
 }

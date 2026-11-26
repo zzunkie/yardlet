@@ -68,13 +68,16 @@ struct ConversationWidgetCard: View {
                 HStack(spacing: 6) {
                     Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
                         .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(YardletPalette.onSurfaceVariant)
                         .frame(width: 12)
-                    Text(verbatim: title)
-                        .font(.footnote.weight(.medium))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    // The view's own first heading says the same, so the bar leaves it to the view while it shows.
+                    if isCollapsed || !WidgetDocument.opens(widget.code, with: title) {
+                        Text(verbatim: title)
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(YardletPalette.onSurface)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
                     Spacer(minLength: 0)
                 }
                 .contentShape(Rectangle())
@@ -88,7 +91,7 @@ struct ConversationWidgetCard: View {
             } label: {
                 Image(systemName: "arrow.up.left.and.arrow.down.right")
                     .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(YardletPalette.onSurfaceVariant)
                     .padding(6)
                     .contentShape(Rectangle())
             }
@@ -104,7 +107,7 @@ struct ConversationWidgetCard: View {
         HStack(spacing: 12) {
             Text("Couldn't display this widget.")
                 .font(.footnote)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(YardletPalette.onSurfaceVariant)
             Spacer(minLength: 0)
             Button("Reload") {
                 hasFailed = false
@@ -137,7 +140,7 @@ private struct WidgetExpandedSheet: View {
                     VStack(spacing: 12) {
                         Text("Couldn't display this widget.")
                             .font(.callout)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(YardletPalette.onSurfaceVariant)
                         Button("Reload") {
                             hasFailed = false
                             isLoading = true
@@ -203,6 +206,18 @@ enum WidgetDocument {
         "form-action 'none'"
     ].joined(separator: "; ")
 
+    /// Whether the view's first heading reads as its title: compared without tags, spacing or case.
+    static func opens(_ code: String, with title: String) -> Bool {
+        guard let match = code.firstMatch(of: /<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/) else { return false }
+        let heading = String(match.1).replacing(/<[^>]*>/, with: "")
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&nbsp;", with: " ")
+        func plain(_ text: String) -> String {
+            text.split(whereSeparator: \.isWhitespace).joined(separator: " ").lowercased()
+        }
+        return !title.isEmpty && plain(heading) == plain(title)
+    }
+
     static func isFullDocument(_ html: String) -> Bool {
         let start = html.drop { $0.isWhitespace }.prefix(15).lowercased()
         return start.hasPrefix("<!doctype") || start.hasPrefix("<html")
@@ -221,19 +236,10 @@ enum WidgetDocument {
         <meta name="referrer" content="no-referrer">
         <meta http-equiv="Content-Security-Policy" content="\(policy)">
         <style>
-        :root {
-          color-scheme: light dark;
-          font: 14px/1.45 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-        }
-        *, *::before, *::after { box-sizing: border-box; }
-        html, body {
-          margin: 0;
-          padding: 0;
-          background: transparent;
-          overflow-x: auto;
-        }
-        body { padding: 12px; }
-        img, svg, canvas, video { max-width: 100%; height: auto; }
+        \(YardletWidgetTheme.stylesheet)
+        :where(html, body) { overflow-x: auto; }
+        :where(body) { padding: 12px; }
+        :where(img, svg, canvas, video) { max-width: 100%; height: auto; }
         </style>
         </head>
         <body>

@@ -43,12 +43,15 @@ struct TaskMark: View {
 }
 
 enum Formatting {
-    /// "now", "5m", "3h", "Tue", "Oct 3": how long ago, as a list says it.
+    /// "now", "5m ago", "3h ago", "Tue", "Oct 3": how long ago, as a list says it.
     static func shortAge(_ date: Date, now: Date = Date()) -> String {
         let seconds = max(0, now.timeIntervalSince(date))
         if seconds < 60 { return String(localized: "now") }
-        if seconds < 3600 { return Duration.seconds(seconds).formatted(.units(allowed: [.minutes], width: .narrow)) }
-        if seconds < 86_400 { return Duration.seconds(seconds).formatted(.units(allowed: [.hours], width: .narrow)) }
+        if seconds < 86_400 {
+            let unit: Duration.UnitsFormatStyle.Unit = seconds < 3600 ? .minutes : .hours
+            let age = Duration.seconds(seconds).formatted(.units(allowed: [unit], width: .narrow))
+            return String(localized: "\(age) ago", comment: "How long ago, in a list: 5m ago")
+        }
         if seconds < 7 * 86_400 { return date.formatted(.dateTime.weekday(.abbreviated)) }
         return date.formatted(.dateTime.month(.abbreviated).day())
     }
@@ -66,7 +69,7 @@ struct ConnectionBanner: View {
     let session: HostSession
 
     var body: some View {
-        if let text {
+        if let text = Self.text(session) {
             HStack(spacing: 8) {
                 if case .connecting = session.connection {
                     ProgressView().controlSize(.small)
@@ -94,7 +97,8 @@ struct ConnectionBanner: View {
         }
     }
 
-    private var text: String? {
+    /// What the connection to the Mac is doing, or nil once it is up.
+    static func text(_ session: HostSession) -> String? {
         switch session.connection {
         case .connected: nil
         case .connecting: String(localized: "Connecting to \(session.name)…")
@@ -156,5 +160,28 @@ extension View {
         buttonStyle(.borderedProminent)
             .tint(YardletPalette.primary)
             .foregroundStyle(YardletPalette.onPrimary)
+    }
+}
+
+/// A page of the Mac's that could not be read: why, and Try Again, in place of a loading card that would never end.
+struct ReadFailureCard: View {
+    let message: String
+    let retry: () -> Void
+
+    var body: some View {
+        MonochromeCard(fill: YardletPalette.surfaceContainerLow, padding: 20) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Couldn't load")
+                    .font(.headline)
+                    .foregroundStyle(YardletPalette.onSurface)
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundStyle(YardletPalette.onSurfaceVariant)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Try Again", action: retry)
+                    .prominentButton()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }

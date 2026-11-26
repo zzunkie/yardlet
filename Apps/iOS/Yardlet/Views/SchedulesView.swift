@@ -142,12 +142,12 @@ private struct ScheduleRow: View {
                 .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
             VStack(alignment: .leading, spacing: 3) {
                 Text(schedule.name)
-                    .foregroundStyle(schedule.enabled ? .primary : .secondary)
+                    .foregroundStyle(schedule.enabled ? YardletPalette.onSurface : YardletPalette.onSurfaceVariant)
                     .lineLimit(2)
                 Text(verbatim: [schedule.when, isStarting ? String(localized: "Starting a run…") : schedule.status]
                     .compactMap { $0 }.joined(separator: " · "))
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(YardletPalette.onSurfaceVariant)
                     .lineLimit(2)
                 if let run = schedule.lastRun, !run.line.isEmpty {
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
@@ -155,15 +155,15 @@ private struct ScheduleRow: View {
                         if run.outcome == .failed {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .font(.caption2)
-                                .foregroundStyle(.red)
+                                .foregroundStyle(YardletPalette.error)
                                 .accessibilityLabel("Failed")
                         }
-                        Text(run.line).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
+                        Text(run.line).font(.footnote).foregroundStyle(YardletPalette.onSurfaceVariant).lineLimit(2)
                     }
                 }
                 Text(verbatim: [schedule.harnessName, schedule.projectName].compactMap { $0 }.joined(separator: " · "))
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(YardletPalette.onSurfaceVariant)
                     .lineLimit(1)
             }
             Spacer(minLength: 0)

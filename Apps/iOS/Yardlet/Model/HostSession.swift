@@ -68,6 +68,10 @@ final class HostSession: Identifiable {
     private(set) var hostSettings: RemoteHostSettings?
     /// The Mac's Accounts, Harnesses and Connectors state as last read (§15.37); nil until read.
     private(set) var hostAccounts: RemoteAccountsState?
+    /// Why the last read of the Mac's Settings page, or of its Accounts, failed; nil once one is read. The screens
+    /// that wait for a first read show it with Try Again instead of loading for ever.
+    private(set) var hostSettingsFailure: String?
+    private(set) var hostAccountsFailure: String?
     /// Counts the Mac's `hostSettingsChanged` notifications (§15.36).
     private(set) var hostSettingsChanges = 0
     /// Counts the Mac's `hostAccountsChanged` notifications (§15.37).
@@ -537,8 +541,10 @@ final class HostSession: Identifiable {
             guard capabilities.hostSettings else { return nil }
             if answer.ok, let page = answer.settingsPage {
                 if hostSettings != page { hostSettings = page }
+                hostSettingsFailure = nil
             } else if !answer.ok {
-                commandError = Self.message(for: answer.error, host: name)
+                hostSettingsFailure = readFailure(answer.error)
+                if hostSettings != nil { commandError = hostSettingsFailure }
             }
         } while dirtyHostSettings && isConnected
         return hostSettings
@@ -615,12 +621,23 @@ final class HostSession: Identifiable {
         let answer = await response(to: .hostAccounts(watching: watching, refreshHarnesses: refreshHarnesses))
         if answer.ok, let state = answer.hostAccountsState {
             if hostAccounts != state { hostAccounts = state }
+            hostAccountsFailure = nil
             return state
         }
         if !answer.ok {
-            commandError = Self.message(for: answer.error, host: name)
+            hostAccountsFailure = readFailure(answer.error)
+            if hostAccounts != nil { commandError = hostAccountsFailure }
         }
         return nil
+    }
+
+    /// Why reading one of the Mac's pages failed. The Mac answers `unavailable` without a reason when it does not
+    /// offer the page, which is not the connection failing: only a request the connection ended reads as unreachable.
+    private func readFailure(_ error: RemoteError?) -> String {
+        if isConnected, error?.code == .unavailable, error?.reason == nil {
+            return String(localized: "\(name) doesn't support this yet. Update Yardlet on \(name).")
+        }
+        return Self.message(for: error, host: name)
     }
 
     @discardableResult
