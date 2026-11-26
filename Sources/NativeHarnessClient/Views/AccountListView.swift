@@ -182,7 +182,7 @@ struct AccountList: View {
     @ViewBuilder private func list(choices: [AccountChoice]) -> some View {
         let groups = AccountListProjection.groups(choices)
         ScrollView {
-            LazyVStack(spacing: 8) {
+            LazyVStack(spacing: mode == .manage ? SettingsMetrics.groupSpacing : 8) {
                 if case let .newTask(harness) = mode, let onChooseAutomatic,
                    store.offersAutomaticNewTaskAccount(for: harness) {
                     AutomaticAccountRow(selected: store.startsNewTasksAutomatically(for: harness),
@@ -191,9 +191,12 @@ struct AccountList: View {
                 if mode == .manage {
                     if !groups.isEmpty {
                         SettingsGroup {
-                            ForEach(groups) { group in
-                                if group.id != groups.first?.id { Divider().padding(.leading, 62) }
-                                section(group)
+                            ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
+                                if index > 0 {
+                                    let bordersSharedAccount = group.choices.count > 1 || groups[index - 1].choices.count > 1
+                                    Divider().padding(.leading, bordersSharedAccount ? 0 : 62)
+                                }
+                                section(group).lineSpacing(1)
                             }
                         }
                     }
@@ -204,6 +207,8 @@ struct AccountList: View {
                     DiscoveredAccountsSection(homes: found, onAdd: onAddFound)
                 }
             }
+            // The card stroke extends just outside its bounds. Keep it inside the scroll viewport.
+            .padding([.horizontal, .top], mode == .manage ? 1 : 0)
             .padding(.bottom, mode == .manage ? 16 : 0)
         }
         .frame(maxHeight: maxListHeight)
@@ -318,13 +323,13 @@ struct AccountListSection: View {
                 row(choice, style: .account)
             } else {
                 VStack(alignment: .leading, spacing: mode == .manage ? 0 : 2) {
-                    AccountGroupHeader(group: group, freshness: freshness, summarizesLimits: mode == .manage)
+                    AccountGroupHeader(group: group, freshness: freshness, isManaged: mode == .manage)
                     ForEach(group.choices) { choice in
                         if mode == .manage { Divider().padding(.leading, 62) }
                         row(choice, style: .member)
                     }
                 }
-                .padding(.bottom, 6)
+                .padding(.bottom, mode == .manage ? 0 : 6)
             }
         }
         .background(mode == .manage ? Color.clear : ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 10))
@@ -439,7 +444,7 @@ struct AccountRow: View {
                 .fixedSize()
             }
         }
-        .padding(.horizontal, isManaged ? 0 : 12).padding(.vertical, isManaged ? 5 : 12)
+        .padding(.horizontal, isManaged ? 0 : 12).padding(.vertical, isManaged ? 8 : 12)
         .frame(minHeight: isManaged ? 54 : 68)
         .background(selected && !isManaged ? ParityTheme.selectedFill : Color.clear, in: RoundedRectangle(cornerRadius: 10))
         .contextMenu { menuItems }
@@ -495,7 +500,7 @@ struct AccountRow: View {
                 if showsHarness, let descriptor = HarnessCatalog.descriptor(for: choice.harness) {
                     HarnessLogoView(descriptor: descriptor, size: 24)
                 }
-                VStack(alignment: .leading, spacing: isManaged ? 1 : 3) {
+                VStack(alignment: .leading, spacing: isManaged ? 2 : 3) {
                     AccountTitleLine(title: title, organization: organization, weight: .medium)
                     Text(subtitle).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(isManaged ? 2 : 1)
                         .accountDetailLine()
@@ -538,6 +543,7 @@ struct AccountRow: View {
             // A login named by its state says it once, in its title.
             Text(status == title ? "" : status)
                 .font(.system(size: 11)).foregroundStyle(.secondary)
+                .multilineTextAlignment(isManaged ? .trailing : .leading)
                 .frame(width: isManaged ? nil : 190, alignment: .trailing)
                 .help(choice.snapshot?.detail ?? choice.status)
         }
@@ -548,15 +554,15 @@ struct AccountRow: View {
 private struct AccountGroupHeader: View {
     let group: AccountGroup
     let freshness: AccountFreshness
-    var summarizesLimits = false
+    var isManaged = false
     private var organization: String? { group.choices.lazy.compactMap(\.organizationTitle).first }
 
     var body: some View {
-        AccountRowColumns(alignsTop: true) {
-            VStack(alignment: .leading, spacing: 3) {
+        AccountRowColumns(alignsTop: !isManaged, spacing: isManaged ? 8 : 12) {
+            VStack(alignment: .leading, spacing: isManaged ? 2 : 3) {
                 AccountTitleLine(title: group.identity.displayLabel, organization: organization, weight: .semibold)
                 Text(AccountListProjection.groupLine(group)).font(.system(size: 11)).foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .lineLimit(isManaged ? 2 : 1)
                     .accountDetailLine()
                 AccountFreshnessLine(freshness: freshness).accountDetailLine()
             }.frame(maxWidth: .infinity, alignment: .leading)
@@ -565,17 +571,18 @@ private struct AccountGroupHeader: View {
                     + AccountListProjection.groupLine(group))
             if group.usageBlocks.isEmpty {
                 Text(group.usageUnavailableText).font(.system(size: 11)).foregroundStyle(.secondary)
-                    .frame(width: 190, alignment: .trailing)
+                    .multilineTextAlignment(isManaged ? .trailing : .leading)
+                    .frame(width: isManaged ? nil : 190, alignment: .trailing)
             } else {
                 VStack(alignment: .trailing, spacing: 8) {
                     ForEach(group.usageBlocks) { block in
                         AccountUsageBlockView(title: group.identity.displayLabel, block: block,
-                                              resetChoice: group.resetChoice(for: block), isSummary: summarizesLimits)
+                                              resetChoice: group.resetChoice(for: block), isSummary: isManaged)
                     }
                 }
             }
         }
-        .padding(.horizontal, summarizesLimits ? 0 : 12).padding(.top, 12).padding(.bottom, summarizesLimits ? 12 : 4)
+        .padding(.horizontal, isManaged ? 0 : 12).padding(.top, isManaged ? 8 : 12).padding(.bottom, isManaged ? 8 : 4)
     }
 }
 
@@ -612,7 +619,7 @@ private struct AccountRowColumns: Layout {
         let address = account.sizeThatFits(.unspecified).width
         let width = proposed ?? address + gaps + own.reduce(0, +)
         let room = width - gaps - own.reduce(0, +)
-        let accountWidth = max(room, min(address, width - gaps - least.reduce(0, +)))
+        let accountWidth = max(0, room, min(address, width - gaps - least.reduce(0, +)))
         var widths = [accountWidth] + own
         if widths.count > 1 { widths[1] = max(least[0], own[0] - (accountWidth - room)) }
         let heights = zip(subviews, widths).map { $0.sizeThatFits(ProposedViewSize(width: $1, height: nil)).height }
