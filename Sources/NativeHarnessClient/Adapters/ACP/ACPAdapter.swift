@@ -44,7 +44,7 @@ actor ACPAdapter:
     private var openingLaneByLocalSessionID: [UUID: ACPProcessLane] = [:]
     /// For an agent that gives a session's MCP servers to every session in its folder
     /// (`ACPProtocol.sharesMCPServersInFolder`), the task that opened a session in each folder on each
-    /// process, by `ACPProtocol.cwd`. The agent keeps a closed session's servers while its process
+    /// process, by `ACPProtocol.folderKey`. The agent keeps a closed session's servers while its process
     /// runs, so the folder stays that task's until the process ends.
     private var folderTasksByLane: [ACPProcessLane: [String: UUID]] = [:]
     /// A session's move to another lane in progress (`moveToItsLane`), which its next prompt and
@@ -698,7 +698,7 @@ actor ACPAdapter:
         }
         guard ACPProtocol.sharesMCPServersInFolder(kind) else { return .standard }
         if let open = laneByLocalSessionID[localSessionID] { return open }
-        let folder = ACPProtocol.cwd(workspaceURL)
+        let folder = ACPProtocol.folderKey(workspaceURL)
         var lane = ACPProcessLane.standard
         while let task = folderTasksByLane[lane]?[folder], task != localSessionID {
             lane = lane.nextStandard
@@ -712,7 +712,7 @@ actor ACPAdapter:
         let lane = lane(for: localSessionID, in: workspaceURL)
         openingLaneByLocalSessionID[localSessionID] = lane
         if ACPProtocol.sharesMCPServersInFolder(kind) {
-            folderTasksByLane[lane, default: [:]][ACPProtocol.cwd(workspaceURL)] = localSessionID
+            folderTasksByLane[lane, default: [:]][ACPProtocol.folderKey(workspaceURL)] = localSessionID
         }
         return lane
     }

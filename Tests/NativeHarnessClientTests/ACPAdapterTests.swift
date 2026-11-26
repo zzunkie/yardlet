@@ -253,6 +253,54 @@ final class ACPAdapterTests: XCTestCase {
         }
     }
 
+    /// OpenCode's folder holds the MCP servers its sessions bring (`ACPProtocol.sharesMCPServersInFolder`),
+    /// so another task in the folder opens on a process of its own even while the first task's session
+    /// is still opening, and under any spelling of the folder: a link to it, or another case on a volume
+    /// that ignores case, since OpenCode registers a loaded session's servers under the spelling it saved
+    /// the session with. A task in another folder still shares the first process.
+    func testAnotherOpenCodeTaskInAFolderOpensOnItsOwnProcessWhileOpeningAndUnderAnySpelling() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "acp-folder-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appending(path: "Project")
+        let link = root.appending(path: "link")
+        let otherFolder = root.appending(path: "Other")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: otherFolder, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: folder)
+        let otherCase = root.appending(path: "project")
+        let spellings = FileManager.default.fileExists(atPath: otherCase.path(percentEncoded: false)) ? [link, otherCase] : [link]
+        let first = FakeACPTransport()
+        let second = FakeACPTransport()
+        let byLink = FakeACPTransport()
+        let byCase = FakeACPTransport()
+        let adapter = ACPAdapter(kind: .openCode, executableURL: URL(filePath: "/tmp/fake-opencode"),
+                                 transportFactory: transportSequence(first, second, byLink, byCase))
+
+        await first.setHoldsSessionOpens(true)
+        let opening = Task {
+            try await adapter.createSession(
+                CreateHarnessSessionRequest(localSessionID: UUID(), workspaceURL: folder, initialPrompt: nil))
+        }
+        try await waitUntil { await first.pendingSessionOpenCount == 1 }
+        _ = try await adapter.resumeSession(providerSessionID: "neighbor", localSessionID: UUID(), workspaceURL: folder)
+        await first.answerSessionOpens()
+        _ = try await opening.value
+        for (index, spelling) in spellings.enumerated() {
+            _ = try await adapter.resumeSession(
+                providerSessionID: "spelling-\(index)", localSessionID: UUID(), workspaceURL: spelling)
+        }
+        _ = try await adapter.resumeSession(providerSessionID: "elsewhere", localSessionID: UUID(), workspaceURL: otherFolder)
+
+        let firstWritten = await first.writtenMethods
+        let secondWritten = await second.writtenMethods
+        let byLinkWritten = await byLink.writtenMethods
+        let byCaseWritten = await byCase.writtenMethods
+        XCTAssertEqual(firstWritten, ["initialize", "session/new", "session/load"])
+        XCTAssertEqual(secondWritten, ["initialize", "session/load"])
+        XCTAssertEqual(byLinkWritten, ["initialize", "session/load"])
+        XCTAssertEqual(byCaseWritten, spellings.count > 1 ? ["initialize", "session/load"] : [])
+    }
+
     /// A task being opened on a process uses it before the agent has answered: when another task on
     /// that process closes meanwhile, as a scheduled run's new task can meet a finished one being
     /// archived, the process goes on and the new task opens on it. A process whose only task was
