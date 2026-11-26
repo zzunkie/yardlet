@@ -281,7 +281,6 @@
 "Active flags: %@" = "활성 플래그: %@";
 "Search tasks" = "작업 검색";
 "Select runtime" = "런타임 선택";
-"Steer" = "조정";
 "Codex steer requires an active turn" = "Codex 조정에는 활성 턴이 필요합니다";
 "Codex steer is unavailable for this runtime" = "이 런타임에서는 Codex 조정을 사용할 수 없습니다";
 "Send" = "보내기";
@@ -959,6 +958,7 @@
 "Last checked: %@" = "마지막 확인: %@";
 "The task could not start. Your draft is still here." = "작업을 시작하지 못했습니다. 작성한 내용은 유지됩니다.";
 "Add a harness to start a task." = "작업을 시작하려면 하네스를 추가하세요.";
+"Connect a harness, such as Claude Code or Codex, to start a task." = "작업을 시작하려면 Claude Code나 Codex 같은 하네스를 연결하세요.";
 "Project" = "프로젝트";
 "No available harnesses" = "사용 가능한 하네스 없음";
 "Choose harness" = "하네스 선택";
@@ -1508,7 +1508,9 @@
 "Return" = "Return";
 "⌘Return for multiline" = "여러 줄이면 ⌘Return";
 "Always ⌘Return" = "항상 ⌘Return";
-"Follow-up behavior" = "후속 메시지 처리 방식";
+"Messages sent while a task works" = "작업 중에 보낸 메시지";
+"Send now reaches the running turn without stopping it. After the turn waits until it ends." = "‘지금 보내기’는 진행 중인 턴을 멈추지 않고 메시지를 전달합니다. ‘턴이 끝난 뒤’는 턴이 끝날 때까지 기다렸다가 보냅니다.";
+"After the turn" = "턴이 끝난 뒤";
 "Send or clear the current draft before editing a queued message." = "대기열 메시지를 편집하려면 지금 입력 중인 내용을 먼저 보내거나 지우세요.";
 "Session limit reached" = "세션 한도에 도달했습니다";
 "Weekly limit reached" = "주간 한도에 도달했습니다";
@@ -1553,7 +1555,7 @@
 "Remove from queue" = "대기열에서 빼기";
 "Add to the running task" = "진행 중인 작업에 추가";
 "Deliver at the next step" = "다음 단계에서 전달";
-"Send when this turn ends" = "작업이 끝나면 보냄";
+"Send when this turn ends" = "이번 턴이 끝나면 보냄";
 "Stop and send" = "중지하고 보내기";
 "%@ · %@" = "%@ · %@";
 "Send now" = "지금 보내기";
@@ -1567,8 +1569,8 @@
 "Antigravity did not take this message." = "Antigravity가 이 메시지를 받지 않았습니다.";
 "Delivered · Antigravity reads it at its next step" = "전달됨 · Antigravity가 다음 단계에서 읽음";
 "Send now: Antigravity reads it at its next step without stopping" = "지금 보내기: 멈추지 않고 Antigravity가 다음 단계에서 읽습니다";
-"Steer Antigravity turns (experimental)" = "Antigravity 턴 조정(실험)";
-"A message sent while an Antigravity task works reaches it at its next step, as with Claude Code, instead of after the turn. Adds a small Antigravity plugin to ~/.gemini/config/plugins, which Antigravity outside Yardlet also runs and which does nothing there. Turning this off removes it." = "Antigravity 작업이 진행되는 동안 보낸 메시지가 턴이 끝난 뒤가 아니라 Claude Code처럼 다음 단계에서 전달됩니다. ~/.gemini/config/plugins에 작은 Antigravity 플러그인을 추가합니다. Yardlet 밖의 Antigravity도 이 플러그인을 실행하지만 그곳에서는 아무 일도 하지 않습니다. 끄면 플러그인을 지웁니다.";
+"Send now in Antigravity tasks (experimental)" = "Antigravity 작업에서 지금 보내기(실험)";
+"Antigravity reads a message sent while it works at its next step, as Claude Code does, rather than after the turn. Adds a small plugin to ~/.gemini/config/plugins that does nothing outside Yardlet; turning this off removes it." = "작업 중에 보낸 메시지를 Antigravity가 턴이 끝난 뒤가 아니라 Claude Code처럼 다음 단계에서 읽습니다. ~/.gemini/config/plugins에 작은 플러그인을 추가하며, 이 플러그인은 Yardlet 밖에서는 아무 일도 하지 않습니다. 끄면 플러그인을 지웁니다.";
 "Claude Code cannot send this message now." = "Claude Code가 이 메시지를 지금 보낼 수 없습니다.";
 "Copy message" = "메시지 복사";
 "Work locally" = "로컬로 작업";
@@ -1742,7 +1744,8 @@
 "Searched files" = "파일 검색함";
 "Used a tool" = "도구 사용함";
 "Used %lld tools" = "도구 %lld개 사용함";
-"Awaiting approval" = "승인 대기 중";
+"Awaiting approval" = "승인을 기다리는 중";
+"%lld more waiting" = "외 %lld건 대기 중";
 "Needs input" = "입력 필요";
 "Task encountered a system error" = "작업에 시스템 오류가 발생했습니다";
 "Working" = "작업 중";
@@ -3101,7 +3104,7 @@
 "Users and Access → Integrations → App Store Connect API. An Account Holder or Admin makes a team key and picks its role: Admin covers every tool here, App Manager all but answering reviews. An individual key, made in your profile, has your own access." = "사용자 및 액세스 → 통합 → App Store Connect API에서 만듭니다. 팀 키는 Account Holder나 Admin이 만들고 역할을 고릅니다: Admin이면 여기 있는 도구가 모두 되고, App Manager는 리뷰 답글만 안 됩니다. 개인 키는 내 프로필에서 만들고, 내 계정의 권한만큼 쓸 수 있습니다.";
 "Xcode didn't answer: %@" = "Xcode가 응답하지 않았습니다: %@";
 "This build of Yardlet can't sign App Store Connect tokens." = "이 Yardlet 빌드는 App Store Connect 토큰에 서명할 수 없습니다.";
-"Show servers tasks start" = "작업이 띄운 서버 보이기";
+"Show servers that tasks start" = "작업이 띄운 서버 보이기";
 "Shows the server's localhost address beside the task's title." = "서버의 localhost 주소를 작업 제목 옆에 보여 줍니다.";
 "Open %@ in this task's browser" = "이 작업의 브라우저에서 %@ 열기";
 "and %lld more" = "외 %lld개";
@@ -3832,7 +3835,7 @@
 "Show view again" = "화면 다시 보기";
 "Connector view" = "커넥터 화면";
 "Waiting on you (home)" = "나를 기다리는 것";
-"Running (home)" = "돌고 있는 것";
+"Running (home)" = "실행 중";
 "Just finished" = "방금 끝남";
 "Unread mail" = "읽지 않은 메일";
 "Nothing is waiting on you" = "기다리는 일이 없습니다";
@@ -3847,7 +3850,7 @@
 "Checks failed" = "PR 검사 실패";
 "Pull request #%lld: checks failed" = "PR #%lld의 검사가 실패했습니다.";
 "Subtask" = "하위 작업";
-"%lld running in the family" = "실행 %lld";
+"%lld running in the family" = "실행 중 %lld";
 "%lld to approve" = "승인 %lld";
 "%lld to answer" = "질문 %lld";
 "%lld in the browser" = "브라우저 %lld";
