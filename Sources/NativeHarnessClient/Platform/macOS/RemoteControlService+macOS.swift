@@ -52,6 +52,7 @@ extension RemoteControlService {
             audit: RemoteAuditLog(fileURL: folder.appending(path: "audit.log")),
             identityStore: KeychainRemoteIdentityStore.live(),
             accountToken: KeychainRemoteSecret.accountToken(),
-            webSignIn: { url, scheme in try await RemoteAccountSignIn().signIn(at: url, callbackScheme: scheme) })
+            webSignIn: { url, scheme in try await RemoteAccountSignIn().signIn(at: url, callbackScheme: scheme) },
+            openInBrowser: OutsideBrowser.open)
     }
 }

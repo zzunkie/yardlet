@@ -937,7 +937,7 @@ them with the token.
 | request | | answer |
 |---|---|---|
 | `GET /v1/auth/providers` | | `{"providers": ["github", "google"]}`: the ones the relay is configured for. Empty (or no answer): apps show no sign-in at all, and the relay still carries connections |
-| `GET /v1/auth/<provider>/start?redirect_uri=yardlet-remote://auth&code_challenge=<S256>&state=<client state>` | opened in the system's browser sign-in sheet | `302` to the provider |
+| `GET /v1/auth/<provider>/start?redirect_uri=yardlet-remote://auth&code_challenge=<S256>&state=<client state>` | opened in the system's browser sign-in sheet, or in the default browser when the sheet can't be shown | `302` to the provider |
 | `GET /v1/auth/<provider>/callback?code=…&state=…` | the provider returns here | `302` to `yardlet-remote://auth?code=<one-time code>&state=<client state>`, or `?error=<reason>&state=…` |
 | `POST /v1/auth/token` `{"code", "codeVerifier", "deviceName"}` | the app, once | `{"token": "<account>.<secret>", "account": {"id", "provider", "name"}}` |
 | `GET /v1/account` | `Authorization: Bearer <token>` | `{"id", "provider", "name", "macs": [{"room", "macKey", "relayKey", "name", "updatedAt"}]}` |
@@ -962,8 +962,12 @@ them with the token.
   account without a table of all accounts), lasts 2 minutes and is spent by the first exchange, right or wrong.
 - **Callback failures:** a provider `state` that is forged or expired gets `400` and no redirect (the app's
   `state` inside it cannot be trusted); a provider that fails or refuses redirects with
-  `?error=providerFailed` or the provider's own error (`access_denied`). Names (`name`, `deviceName`) are cut to
-  64 characters.
+  `?error=providerFailed` or the provider's own error (`access_denied`). A Mac's `name` or a `deviceName` longer than
+  64 UTF-16 code units gets `400`, so apps cut them before sending.
+- **Returning to the app:** the sheet hands `yardlet-remote://auth` back to the app. When the sheet can't be
+  shown (another default browser fails to take it over), the Mac opens the start address in the default browser
+  and takes the `yardlet-remote://auth` link the system opens with it, only while that sign-in waits (10 minutes)
+  and only with its `state`.
 - **Storage:** one Durable Object per account, named by the account id. Nothing else about accounts is kept.
 - Errors are JSON `{"error": "…"}`: `unauthorized` (401), `badRequest` (400), `notConfigured` (501: no such
   provider), `invalidSignature` (403), `tooMany` (409), `providerFailed` (502).

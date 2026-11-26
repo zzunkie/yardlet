@@ -278,6 +278,12 @@ final class NativeHarnessClientAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func openPendingLinks() {
+        // The default browser's return from a Yardlet account sign-in goes to the sign-in waiting for it
+        // (Settings › Yardlet Account); one nothing waits for is dropped, never shown as a connection link.
+        for link in pendingLinks where RemoteAccountClient.isSignInCallback(link) {
+            model?.remoteControl?.receiveSignInCallback(link)
+        }
+        pendingLinks.removeAll(where: RemoteAccountClient.isSignInCallback)
         // A connection link for another Mac goes to File › Connect to Mac…, where the person chooses to pair.
         if let remoteHosts {
             for link in pendingLinks where link.scheme?.lowercased() == RemoteProtocol.pairingScheme { remoteHosts.receive(link: link) }

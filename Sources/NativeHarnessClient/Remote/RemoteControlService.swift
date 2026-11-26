@@ -77,6 +77,10 @@ final class RemoteControlService {
     private(set) var accountProvidersRead: Bool?
     private(set) var isSigningIn = false
     private(set) var accountError: String?
+    /// What failed, for a problem report: the step and the error's code, never a token or a name.
+    private(set) var accountErrorCode: String?
+    /// The sign-in goes on in the default browser, which returns to `yardlet-remote://auth`.
+    private(set) var awaitsBrowserSignIn = false
 
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let environment: [String: String]
@@ -97,6 +101,9 @@ final class RemoteControlService {
     @ObservationIgnored private var accountGeneration = UUID()
     @ObservationIgnored private let accountToken: any RemoteSecretStoring
     @ObservationIgnored private let webSignIn: @MainActor (URL, String) async throws -> URL
+    @ObservationIgnored private let openInBrowser: @MainActor (URL) -> Void
+    /// The sign-in the default browser finishes, matched by its state when the app gets the return address.
+    @ObservationIgnored private var browserSignIn: BrowserSignIn?
     @ObservationIgnored private var stopWatchingNetwork: (() -> Void)?
     @ObservationIgnored private var started = false
     @ObservationIgnored private var startup: Task<Void, Never>?
@@ -117,6 +124,7 @@ final class RemoteControlService {
         identityStore: any RemoteIdentityStoring = RemoteMemoryIdentityStore(),
         accountToken: any RemoteSecretStoring = RemoteMemorySecret(),
         webSignIn: @escaping @MainActor (URL, String) async throws -> URL = { _, _ in throw CancellationError() },
+        openInBrowser: @escaping @MainActor (URL) -> Void = { _ in },
         defaults: UserDefaults = .yardlet,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         platform: RemoteHostPlatform = .current,
@@ -139,6 +147,7 @@ final class RemoteControlService {
         self.identityStore = RemoteIdentityLoader(store: identityStore)
         self.accountToken = accountToken
         self.webSignIn = webSignIn
+        self.openInBrowser = openInBrowser
         self.listens = listens
         self.isOnPower = isOnPower ?? platform.isOnPower
         isEnabled = defaults.bool(forKey: Self.enabledKey)
@@ -185,7 +194,7 @@ final class RemoteControlService {
             keep(account: nil)
             await server.setAcceptsLinks(false)
         } catch {
-            accountError = error.localizedDescription
+            failAccount(error, step: "refresh")
         }
     }
 
@@ -193,6 +202,10 @@ final class RemoteControlService {
     /// `refreshAccount` reads it; with them off, only the sign-in providers, so the person can sign in
     /// before turning them on, and whether a token is still kept. Nothing reads them on a schedule.
     func refreshAccountPage() async {
+        if let pending = browserSignIn, Date() >= pending.expires {
+            browserSignIn = nil
+            awaitsBrowserSignIn = false
+        }
         if isEnabled { return await refreshAccount() }
         guard let client = accountClient else { return }
         await readAccountProviders(client)
@@ -263,33 +276,127 @@ final class RemoteControlService {
     }
 
     /// Signs in with a provider in the browser sheet and puts this Mac on the account. It works with remote
-    /// connections off; the account finds this Mac once they are on.
+    /// connections off; the account finds this Mac once they are on. When the sheet can't be shown, the
+    /// sign-in opens in the default browser and finishes when its return address reaches the app
+    /// (`receiveSignInCallback`); signing in again starts over.
     func signIn(with provider: String) async {
         guard let client = accountClient, !isSigningIn else { return }
         accountGeneration = UUID()
+        browserSignIn = nil
+        awaitsBrowserSignIn = false
         isSigningIn = true
         accountError = nil
+        accountErrorCode = nil
         defer { isSigningIn = false }
         guard let identity = await ensureIdentity() else { return }
         let pkce = RemoteAccountClient.PKCE()
         let state = RemoteEncoding.base64url(Data(RemoteRandom.bytes(16)))
+        guard let url = client.startURL(provider: provider, pkce: pkce, state: state) else { return }
+        let callback: URL
         do {
-            guard let url = client.startURL(provider: provider, pkce: pkce, state: state) else { return }
-            let callback = try await webSignIn(url, RemoteAccountClient.callbackScheme)
-            guard let code = RemoteAccountClient.code(from: callback, state: state) else {
-                accountError = L10n.string("The sign-in did not finish.")
-                return
-            }
+            callback = try await webSignIn(url, RemoteAccountClient.callbackScheme)
+        } catch is CancellationError {
+            return
+        } catch is RemoteWebSignInUnavailable {
+            browserSignIn = BrowserSignIn(state: state, pkce: pkce, identity: identity, client: client,
+                                          generation: accountGeneration, expires: Date().addingTimeInterval(Self.browserSignInLifetime))
+            awaitsBrowserSignIn = true
+            openInBrowser(url)
+            return
+        } catch {
+            return failAccount(error, step: "sheet")
+        }
+        await finishSignIn(callback: callback, state: state, pkce: pkce, identity: identity, client: client)
+    }
+
+    /// How long a sign-in opened in the default browser waits for its return address.
+    static let browserSignInLifetime: TimeInterval = 10 * 60
+
+    /// A `yardlet-remote://auth` link opened with the app: the default browser's return from the sign-in it
+    /// was given. Only the return for the sign-in in progress, with its state, is taken; the relay checks the
+    /// code against that sign-in's PKCE verifier.
+    @discardableResult
+    func receiveSignInCallback(_ callback: URL) -> Bool {
+        guard RemoteAccountClient.isSignInCallback(callback), let pending = browserSignIn,
+              pending.generation == accountGeneration, !isSigningIn else { return false }
+        guard Date() < pending.expires else {
+            browserSignIn = nil
+            awaitsBrowserSignIn = false
+            return false
+        }
+        guard URLComponents(url: callback, resolvingAgainstBaseURL: false)?.queryItems?
+            .first(where: { $0.name == "state" })?.value == pending.state else { return false }
+        browserSignIn = nil
+        awaitsBrowserSignIn = false
+        // A new generation, so an account refresh already under way can't undo this sign-in when it returns.
+        accountGeneration = UUID()
+        accountError = nil
+        accountErrorCode = nil
+        isSigningIn = true
+        Task {
+            defer { isSigningIn = false }
+            await finishSignIn(callback: callback, state: pending.state, pkce: pending.pkce, identity: pending.identity,
+                               client: pending.client, step: "browser")
+        }
+        return true
+    }
+
+    private func finishSignIn(callback: URL, state: String, pkce: RemoteAccountClient.PKCE, identity: RemoteIdentity,
+                              client: RemoteAccountClient, step: String = "sheet") async {
+        let generation = accountGeneration
+        guard let code = RemoteAccountClient.code(from: callback, state: state) else {
+            accountError = L10n.string("The sign-in did not finish.")
+            let relayError = RemoteAccountClient.callbackError(from: callback)
+            accountErrorCode = Self.safeCode(relayError.map { "relay_\($0)" } ?? "\(step)_noCode")
+            return
+        }
+        do {
             let (token, signedIn) = try await client.exchange(code: code, pkce: pkce, deviceName: macName)
+            guard generation == accountGeneration else { return }
             await withAccountToken { $0.save(token) }
             try await client.registerMac(token: token, identity: identity, name: macName, accountID: signedIn.id)
+            guard generation == accountGeneration else { return }
             keep(account: signedIn)
             await acceptAccountLinks(for: signedIn.id)
         } catch is CancellationError {
             return
         } catch {
-            accountError = error.localizedDescription
+            guard generation == accountGeneration else { return }
+            failAccount(error, step: step)
         }
+    }
+
+    private func failAccount(_ error: any Error, step: String) {
+        accountError = error.localizedDescription
+        accountErrorCode = Self.failureCode(error).map { "\(step)_\($0)" }
+    }
+
+    /// An error's kind and code, as a problem report carries it: the relay's HTTP status and error name, or
+    /// the system's error domain (shortened) and number. Nothing the person typed or a token can be in it.
+    nonisolated static func failureCode(_ error: any Error) -> String? {
+        let code: String
+        switch error {
+        case let failure as RemoteAccountClient.Failure:
+            code = "http_\(failure.status)_\(failure.code)"
+        case let unavailable as RemoteWebSignInUnavailable:
+            code = unavailable.code
+        case is DecodingError:
+            code = "decode"
+        default:
+            let error = error as NSError
+            switch error.domain {
+            case "NSURLErrorDomain": code = "url_\(error.code)"
+            case NSCocoaErrorDomain where (4097...4099).contains(error.code): code = "xpc_\(error.code)"
+            case NSCocoaErrorDomain: code = "cocoa_\(error.code)"
+            case "com.apple.AuthenticationServices.WebAuthenticationSession": code = "asweb_\(error.code)"
+            default: code = "error_\(error.code)"
+            }
+        }
+        return safeCode(code)
+    }
+
+    private nonisolated static func safeCode(_ code: String) -> String? {
+        code.range(of: #"^[A-Za-z0-9_.\-]{1,48}$"#, options: .regularExpression) != nil ? code : nil
     }
 
     /// Takes this Mac off the account and forgets the token; link requests stop.
@@ -298,6 +405,8 @@ final class RemoteControlService {
         isSigningIn = true
         defer { isSigningIn = false }
         accountGeneration = UUID()
+        browserSignIn = nil
+        awaitsBrowserSignIn = false
         keep(account: nil)
         await server.setAcceptsLinks(false)
         if let client = accountClient, let token = await withAccountToken({ $0.load() }) {
@@ -806,4 +915,32 @@ final class RemoteMemorySecret: RemoteSecretStoring, @unchecked Sendable {
     func load() -> String? { lock.withLock { value } }
     func save(_ value: String) { lock.withLock { self.value = value } }
     func delete() { lock.withLock { value = nil } }
+}
+
+/// The sign-in sheet could not be shown; the sign-in goes on in the default browser. `code` says why, for a
+/// problem report (`asweb_2`, `start_failed`).
+struct RemoteWebSignInUnavailable: Error, Equatable {
+    var code: String
+}
+
+/// A sign-in opened in the default browser, waiting for its return address.
+private struct BrowserSignIn {
+    var state: String
+    var pkce: RemoteAccountClient.PKCE
+    var identity: RemoteIdentity
+    /// The relay the sign-in started on, which the code is exchanged with.
+    var client: RemoteAccountClient
+    var generation: UUID
+    var expires: Date
+}
+
+extension RemoteAccountClient.Failure: LocalizedError {
+    public var errorDescription: String? {
+        switch status {
+        case 0: L10n.string("Can't reach the Yardlet server")
+        case 401: L10n.string("Your Yardlet sign-in has expired. Sign in again.")
+        case 500...: L10n.string("The Yardlet server couldn't finish the request. Try again later.")
+        default: L10n.string("The Yardlet server couldn't finish the request. Try again.")
+        }
+    }
 }

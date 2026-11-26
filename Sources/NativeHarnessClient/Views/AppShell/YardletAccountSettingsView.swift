@@ -20,7 +20,7 @@ struct YardletAccountSettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 if let error = service.accountError {
                     SendProblemReportLink(surface: .settings, failure: .init(
-                        kind: "yardletSignIn", code: PrivateFeedbackContext.errorCode(in: error)))
+                        kind: "yardletSignIn", code: service.accountErrorCode ?? PrivateFeedbackContext.errorCode(in: error)))
                 }
                 if service.account != nil, service.isEnabled {
                     Text(L10n.string("Macs signed in to this account can connect to this Mac."))
@@ -67,6 +67,7 @@ struct YardletAccountSettingsView: View {
     private var detail: String {
         if let error = service.accountError { return error }
         if let account = service.account { return Self.name(of: account) }
+        if service.awaitsBrowserSignIn { return L10n.string("Finish signing in in your browser.") }
         switch service.accountProvidersRead {
         case false?: return L10n.string("Can't reach the Yardlet server")
         case true? where service.accountProviders.isEmpty:

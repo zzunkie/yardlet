@@ -51,6 +51,29 @@ public struct RemoteAccountClient: Sendable {
 
     public static let redirectURI = "yardlet-remote://auth"
     public static let callbackScheme = "yardlet-remote"
+    /// The longest device or Mac name the relay keeps, in UTF-16 code units as it counts them.
+    public static let maxNameLength = 64
+
+    /// A name as the relay takes it: trimmed, and cut to `maxNameLength` without splitting a character.
+    public static func relayName(_ name: String) -> String {
+        var result = ""
+        for character in name.trimmingCharacters(in: .whitespacesAndNewlines) {
+            guard result.utf16.count + character.utf16.count <= maxNameLength else { break }
+            result.append(character)
+        }
+        return result
+    }
+
+    /// Whether a link opened with the app is the browser's return from a sign-in (`redirectURI`).
+    public static func isSignInCallback(_ url: URL) -> Bool {
+        url.scheme?.lowercased() == callbackScheme && url.host?.lowercased() == "auth"
+    }
+
+    /// The error the relay returned to the app instead of a code (`providerFailed`, or the provider's own).
+    public static func callbackError(from callback: URL) -> String? {
+        let error = URLComponents(url: callback, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "error" }?.value
+        return error?.isEmpty == false ? error : nil
+    }
 
     public let baseURL: URL
     private let session: URLSession
@@ -89,7 +112,7 @@ public struct RemoteAccountClient: Sendable {
     public func exchange(code: String, pkce: PKCE, deviceName: String) async throws -> (token: String, account: Account) {
         struct Answer: Decodable { var token: String; var account: Account }
         let answer = try await request("v1/auth/token", method: "POST",
-                                       body: ["code": code, "codeVerifier": pkce.verifier, "deviceName": deviceName],
+                                       body: ["code": code, "codeVerifier": pkce.verifier, "deviceName": Self.relayName(deviceName)],
                                        as: Answer.self)
         return (answer.token, answer.account)
     }
@@ -100,6 +123,7 @@ public struct RemoteAccountClient: Sendable {
 
     /// Puts this Mac on the account, proving it holds the room's key.
     public func registerMac(token: String, identity: RemoteIdentity, name: String, accountID: String) async throws {
+        let name = Self.relayName(name)
         let macKey = RemoteEncoding.base64url(identity.noise.publicKey)
         let message = Data("yardlet-account-mac/1\n\(accountID)\n\(identity.room)\n\(macKey)\n\(name)".utf8)
         let signature = try Curve25519.Signing.PrivateKey(rawRepresentation: identity.relayPrivateKey).signature(for: message)
