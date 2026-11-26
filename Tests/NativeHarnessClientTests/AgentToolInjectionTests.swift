@@ -885,6 +885,10 @@ final class AgentToolInjectionTests: XCTestCase {
                           "Antigravity full tools/list payload (\(fullPayloadBytes) B) must stay below 44,000 B")
         XCTAssertLessThan(agyDeclarationBytes, 38_000,
                           "Antigravity declaration payload (\(agyDeclarationBytes) B) must stay well below agy's ~54 KB eager cap")
+        // agy also drops the largest tools without notice once a session declares more than 60 up front
+        // (reported for agy 1.5.9 to 1.5.11), so the count stays at 60 or fewer as well as the bytes.
+        XCTAssertLessThanOrEqual(agyList.tools.count, 60,
+                                 "Antigravity gets \(agyList.tools.count) tools; agy drops the largest past 60")
 
         // In Auto, the default, Code Mode takes the connector gateway's place and fits the same budget.
         broker.codeModeSetting = { .auto }
@@ -897,6 +901,8 @@ final class AgentToolInjectionTests: XCTestCase {
         let autoPayloadBytes = try encoder.encode(ToolJSON.object(["tools": .array(autoList.tools)])).count
         XCTAssertLessThan(autoPayloadBytes, 44_000,
                           "Antigravity tools/list payload in Auto (\(autoPayloadBytes) B) must stay below 44,000 B")
+        XCTAssertLessThanOrEqual(autoList.tools.count, 60,
+                                 "Antigravity gets \(autoList.tools.count) tools in Auto; agy drops the largest past 60")
     }
 
     private static func stripSchemaDescriptions(_ value: ToolJSON) -> ToolJSON {
