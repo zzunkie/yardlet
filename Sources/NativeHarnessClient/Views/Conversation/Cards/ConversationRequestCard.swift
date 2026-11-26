@@ -18,6 +18,9 @@ struct ConversationRequestCard: View {
     /// Whether the composer's keys answer this request: only the oldest of the ones waiting, so the
     /// keys show on that one card.
     var answeredByComposerKeys = true
+    /// How many requests wait behind this one in the dock, which its band counts so the edges stacked
+    /// above it read as requests (`ConversationRequestDock`).
+    var waitingBehind = 0
 
     @State private var input: ConversationRequestFormInput
     /// Which keys allow a request from the composer (`ComposerApprovalKey`).
@@ -31,10 +34,11 @@ struct ConversationRequestCard: View {
     ///     starts on its first option, as both apps start it.
     ///   - questionIndex: the question a form of several starts on (renders only).
     init(request: ConversationRequest, actions: ConversationActions, answeredByComposerKeys: Bool = true,
-         input: ConversationRequestFormInput = .init(), questionIndex: Int = 0) {
+         waitingBehind: Int = 0, input: ConversationRequestFormInput = .init(), questionIndex: Int = 0) {
         self.request = request
         self.actions = actions
         self.answeredByComposerKeys = answeredByComposerKeys
+        self.waitingBehind = waitingBehind
         var start = input
         if request.state == .pending, let form = request.form { start.preselect(form.questionSteps) }
         _input = State(initialValue: start)
@@ -179,16 +183,21 @@ struct ConversationRequestCard: View {
     @ViewBuilder
     private var header: some View {
         if let steps = request.form?.questionSteps, !steps.isEmpty {
-            ConversationQuestionBand(title: request.title, steps: steps, index: $questionIndex)
+            ConversationQuestionBand(title: request.title, steps: steps, index: $questionIndex,
+                                     waitingBehind: waitingBehind)
                 .help(request.method ?? "")
         } else {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                ConversationRequestBandTitle(symbol: waitingSymbol, title: request.title)
+            HStack(alignment: .firstTextBaseline, spacing: ParitySpace.s8) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    ConversationRequestBandTitle(symbol: waitingSymbol, title: request.title)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 0)
+                ConversationRequestsBehindLabel(count: waitingBehind)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .help(request.method ?? "")
-            .accessibilityElement(children: .combine)
-            .accessibilityAddTraits(.isHeader)
         }
     }
 
@@ -401,7 +410,7 @@ struct ConversationRequestCard: View {
         }
         if response.role == .primary {
             Button(role: role, action: send) { label }
-                .parityProminentButton()
+                .parityPrimaryActionButton()
                 .parityPointer()
                 .disabled(route == nil)
                 .accessibilityLabel(response.title)
@@ -476,6 +485,23 @@ struct ConversationRequestPanel: View {
         shape.fill(ParityTheme.elevated)
             .overlay { shape.fill(ParityTheme.requestPanelFill) }
             .overlay { shape.strokeBorder(ParityTheme.strongSeparator) }
+    }
+}
+
+/// How many more requests wait behind the one in front of the dock, at the end of its band; nothing when
+/// it waits alone.
+struct ConversationRequestsBehindLabel: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
+    let count: Int
+
+    var body: some View {
+        if count > 0 {
+            Text(L10n.format("%lld more waiting", Int64(count)))
+                .font(.parity(.caption, scale: interfaceScale).monospacedDigit())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .fixedSize()
+        }
     }
 }
 

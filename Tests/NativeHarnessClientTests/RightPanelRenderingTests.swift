@@ -66,6 +66,25 @@ final class RightPanelRenderingTests: XCTestCase {
         }
     }
 
+    /// A side panel below the area's header leaves its toggle to the header's, right above it; beside the
+    /// conversation, and for the terminal or a panel no header toggles, it keeps its own close button.
+    func testAPanelBelowTheAreaHeaderLeavesItsToggleToTheHeader() {
+        func buttons(_ kind: WorkSurfacePanelKind?, belowHeader: Bool) -> [String] {
+            let host = WindowlessRender.Host(
+                WorkSurfacePanelControls(kind: kind, onClose: {})
+                    .environment(\.workSurfaceBelowAreaHeader, belowHeader),
+                size: NSSize(width: 200, height: 40))
+            defer { host.close() }
+            host.settle(passes: 2)
+            return host.accessibilityElements().filter { $0.role == "AXButton" }.map(\.label)
+        }
+        XCTAssertEqual(buttons(.taskSidePanel, belowHeader: true), [])
+        XCTAssertEqual(buttons(.taskSidePanel, belowHeader: false), [WorkSurfacePanelKind.taskSidePanel.title])
+        XCTAssertEqual(buttons(.terminal, belowHeader: true), [WorkSurfacePanelKind.terminal.title])
+        XCTAssertEqual(buttons(.sidePanel, belowHeader: true), [WorkSurfacePanelKind.sidePanel.title])
+        XCTAssertEqual(buttons(nil, belowHeader: true), [L10n.string("Close panel")])
+    }
+
     private func session(_ harness: HarnessKind, title: String) -> SessionRecord {
         SessionRecord(harness: harness, workspaceURL: root, runtimeExecutableURL: URL(filePath: "/usr/bin/false"),
                       title: title)

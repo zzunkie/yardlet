@@ -115,7 +115,11 @@ struct FilesPane: View {
                                     Image(systemName: "doc.text").foregroundStyle(.secondary)
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(URL(filePath: path).lastPathComponent).foregroundStyle(.primary)
-                                        Text(path).font(.caption).foregroundStyle(.secondary)
+                                        // The folder it is in tells files of one name apart; a file at the
+                                        // top of the folder has none, and its name stays on one line.
+                                        if let folder = Self.folder(of: path) {
+                                            Text(folder).font(.caption).foregroundStyle(.secondary)
+                                        }
                                     }.lineLimit(1).truncationMode(.middle)
                                     Spacer(minLength: 0)
                                 }
@@ -139,6 +143,12 @@ struct FilesPane: View {
     /// A path the panel holds: relative to the task's folder, or absolute for a file outside it.
     private func fileURL(_ path: String) -> URL {
         WorkspaceFileLocation.url(for: path, in: workspaceURL)
+    }
+
+    /// The folder a listed file is in, relative to the workspace; nil for a file at its top.
+    static func folder(of path: String) -> String? {
+        guard let slash = path.lastIndex(of: "/"), slash != path.startIndex else { return nil }
+        return String(path[..<slash])
     }
 
     private func open(_ path: String) {

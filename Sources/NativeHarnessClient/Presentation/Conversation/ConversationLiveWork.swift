@@ -135,14 +135,10 @@ struct ConversationLiveWork: Equatable {
     private static func activity(
         _ turn: ConversationTurn, liveItems: [ConversationItem], harness: HarnessKind, workspaceURL: URL?
     ) -> Activity {
-        if !turn.requests.isEmpty {
-            let asksForAnswer = turn.requests.contains { request in
-                switch request.form {
-                case .choices, .freeText, .planReview, .mcpForm: true
-                case nil: false
-                }
-            }
-            return asksForAnswer ? .waitingForAnswer : .waitingForApproval
+        // The oldest request waiting is the one the person answers first, in front of the dock
+        // (`ConversationRequestDock`): the line names what it asks for, an approval or an answer.
+        if let oldest = turn.requests.first {
+            return oldest.form == nil ? .waitingForApproval : .waitingForAnswer
         }
         if case let .reconnecting(status) = turn.progress { return .reconnecting(status) }
         if let running = liveItems.last(where: { $0.phase == .running }),

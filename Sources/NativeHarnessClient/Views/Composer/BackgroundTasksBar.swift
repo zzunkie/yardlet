@@ -23,7 +23,7 @@ struct BackgroundTasksBar: View {
         var tray = self
         tray.tuck = CodexStatusPanel.composerTuck
         return tray
-            .padding(.horizontal, 13)
+            .padding(.horizontal, ParitySpace.s12)
             .conversationColumn()
             .padding(.top, 6)
             .padding(.bottom, -CodexStatusPanel.composerTuck)

@@ -116,6 +116,19 @@ final class RunningTurnRenderingTests: XCTestCase {
         XCTAssertEqual(ConversationLiveWork.make(turn, harness: .codex, workspaceURL: nil)?.activity, .working)
         XCTAssertEqual(ConversationLiveWork.listedRuns(turn).count, 2)
 
+        // The line names what the oldest request waits for, the one in front of the dock.
+        let source = ConversationRequestSource.transcript(TranscriptEntry(content: .plan("")))
+        let approval = ConversationRequest(id: "approval", title: "Bash", state: .pending, source: source)
+        let question = ConversationRequest(
+            id: "question", title: "Ask",
+            form: .choices([PermissionQuestion(question: "Which?", options: [PermissionQuestionOption(label: "A")])]),
+            state: .pending, source: source)
+        turn.requests = [approval, question]
+        XCTAssertEqual(ConversationLiveWork.make(turn, harness: .claudeCode, workspaceURL: nil)?.activity, .waitingForApproval)
+        turn.requests = [question, approval]
+        XCTAssertEqual(ConversationLiveWork.make(turn, harness: .claudeCode, workspaceURL: nil)?.activity, .waitingForAnswer)
+        turn.requests = []
+
         turn.status = .completed
         XCTAssertNil(ConversationLiveWork.make(turn, harness: .codex, workspaceURL: nil), "No live line after the turn")
         XCTAssertEqual(ConversationLiveWork.detail(steps: 1, elapsed: "12s"), L10n.string("1 step") + " · 12s")

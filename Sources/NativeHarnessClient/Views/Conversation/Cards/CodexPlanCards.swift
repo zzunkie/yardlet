@@ -165,7 +165,7 @@ struct CodexQuestionOptions: View {
                     submit: send
                 ) {
                     Button(L10n.string("Send")) { send() }
-                        .parityProminentButton()
+                        .parityPrimaryActionButton()
                         .parityPointer()
                         .disabled(!canSend)
                         .help(ConversationQuestionStepper(steps: steps, index: index).blocker(input) ?? "")

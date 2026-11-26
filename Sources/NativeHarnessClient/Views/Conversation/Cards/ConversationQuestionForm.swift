@@ -249,7 +249,7 @@ struct ConversationQuestionStepsView<Finish: View>: View {
                 finish()
             } else {
                 Button(L10n.string("Next")) { goOn(from: step) }
-                    .parityProminentButton()
+                    .parityPrimaryActionButton()
                     .parityPointer()
                     .disabled(!input.isSettled(step))
                     .help(stepper.blocker(input) ?? "")
@@ -332,6 +332,8 @@ struct ConversationQuestionBand: View {
     let title: String
     let steps: [ConversationQuestionStep]
     @Binding var index: Int
+    /// The requests waiting behind this one in the dock (`ConversationRequestsBehindLabel`).
+    var waitingBehind = 0
 
     var body: some View {
         let stepper = ConversationQuestionStepper(steps: steps, index: index)
@@ -349,6 +351,7 @@ struct ConversationQuestionBand: View {
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isHeader)
             Spacer(minLength: 0)
+            ConversationRequestsBehindLabel(count: waitingBehind)
             if stepper.isStepped {
                 HStack(spacing: 2) {
                     pagerButton(systemImage: "chevron.left", label: L10n.string("Previous question"),

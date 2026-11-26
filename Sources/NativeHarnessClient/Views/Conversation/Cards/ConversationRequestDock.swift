@@ -17,7 +17,7 @@ struct ConversationRequestDock: View {
     /// its window (`max-h-[60vh]`).
     static let heightShare: CGFloat = 0.6
     /// How far each edge shows above the one in front of it.
-    static let edgeStep: CGFloat = 6
+    static let edgeStep = ParitySpace.s8
 
     @State private var cardHeight: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -30,7 +30,8 @@ struct ConversationRequestDock: View {
             // (`ComposerApprovalKey`); the front card names them when it is that one.
             let keyed = requests.first { NotificationApprovalProjection.pendingRequest(for: $0) != nil }?.id
             ScrollView {
-                ConversationRequestCard(request: front, actions: actions, answeredByComposerKeys: front.id == keyed)
+                ConversationRequestCard(request: front, actions: actions, answeredByComposerKeys: front.id == keyed,
+                                        waitingBehind: requests.count - 1)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cardHeight = $0 }
             }
             .scrollBounceBehavior(.basedOnSize)

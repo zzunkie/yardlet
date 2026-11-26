@@ -1815,6 +1815,7 @@
 "Used a tool" = "Used a tool";
 "Used %lld tools" = "Used %lld tools";
 "Awaiting approval" = "Awaiting approval";
+"%lld more waiting" = "%lld more waiting";
 "Needs input" = "Needs input";
 "Task encountered a system error" = "Task encountered a system error";
 "Working" = "Working";

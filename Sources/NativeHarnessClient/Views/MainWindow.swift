@@ -928,12 +928,13 @@ struct MainWindow: View {
                 } else {
                     HStack(spacing: 6) {
                         Text(L10n.string("New task"))
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.parity(.caption, weight: .medium, scale: interfaceScale))
                             .lineLimit(1)
-                        // An empty pane is filled from the sidebar, the way a split's empty half is.
+                        // An empty pane is filled from the sidebar, the way a split's empty half is. The hint
+                        // is what the pane says to do, so it reads in secondary text (docs/DESIGN_SYSTEM.md).
                         Text(L10n.string("Or choose a task in the sidebar"))
-                            .font(.system(size: 11))
-                            .foregroundStyle(.tertiary)
+                            .font(.parity(.caption, scale: interfaceScale))
+                            .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
                 }
