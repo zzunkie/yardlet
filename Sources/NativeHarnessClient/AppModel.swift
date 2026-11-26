@@ -1700,7 +1700,9 @@ final class AppModel {
             markFollowUpFailed(itemID, message: message, in: session.id)
             return
         }
-        if await target.delivery.canSendHeldNow() {
+        // Claude Code reads Send now only for a message it counts as the person's; another task's, sent
+        // `isSynthetic`, finds nothing there and goes again with priority `now`, as with an older CLI.
+        if !item.isFromAnotherTask, await target.delivery.canSendHeldNow() {
             if item.state != .sent {
                 await steerFollowUp(itemID, priority: .next, into: target, in: session.id)
             }

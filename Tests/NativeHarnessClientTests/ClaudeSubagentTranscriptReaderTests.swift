@@ -250,7 +250,8 @@ final class ClaudeSubagentTranscriptReaderTests: XCTestCase {
     /// on the conversation's chain. Rereading the saved conversation keeps it in that turn (D13),
     /// with the same identity each time; commands Claude queued itself are not messages. Another
     /// task's message, sent `isSynthetic`, is saved with origin `unclassified` and `isMeta`: it reads
-    /// back as that task's message, never as the person's.
+    /// back as that task's message, never as the person's, whether the running turn read it or it
+    /// started the next turn under the CLI's framing; an earlier request the CLI forwards is not shown again.
     @MainActor
     func testAMessageReadIntoARunningTurnStaysInThatTurnWhenReread() throws {
         let root = try directory()
@@ -258,35 +259,44 @@ final class ClaudeSubagentTranscriptReaderTests: XCTestCase {
         let relayed = TaskMessage(senderID: "9A3E0C55-7B21-4D2F-8E6A-1C4B5D6E7F80", senderName: "Coordinator",
                                   body: "Merge it.").text(in: .yardlet)
         let relayedJSON = String(decoding: try JSONEncoder().encode(relayed), as: UTF8.self)
+        let framedJSON = String(decoding: try JSONEncoder().encode(
+            ClaudeSubagentTranscriptReader.nonUserSourceFraming + relayed), as: UTF8.self)
         try mainLog(root, [
             #"{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-10-12T08:24:01.967Z","message":{"role":"user","content":"Write the file."}}"#,
             #"{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"id":"m1","role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"/tmp/x.txt","content":"ok\n"}}]}}"#,
             #"{"type":"user","uuid":"r1","parentUuid":"a1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"File created"}]}}"#,
             #"{"type":"attachment","uuid":"q1","parentUuid":"r1","timestamp":"2026-10-12T08:24:23.383Z","attachment":{"type":"queued_command","prompt":"Answer in one line.","commandMode":"prompt","origin":{"kind":"human"},"humanTurn":true}}"#,
             #"{"type":"attachment","uuid":"q2","parentUuid":"q1","attachment":{"type":"queued_command","prompt":"<task-notification>done</task-notification>","commandMode":"task-notification","origin":{"kind":"task-notification"}}}"#,
-            #"{"type":"attachment","uuid":"q3","parentUuid":"q2","attachment":{"type":"queued_command","prompt":"Write the file.","commandMode":"prompt","origin":{"kind":"unclassified"},"isMeta":true,"forwardedIntent":{"lineage":"self","source":"owner"}}}"#,
+            #"{"type":"attachment","uuid":"q3","parentUuid":"q2","attachment":{"type":"queued_command","prompt":"#
+                + relayedJSON + #","commandMode":"prompt","origin":{"kind":"unclassified"},"isMeta":true,"forwardedIntent":{"lineage":"self","source":"owner"}}}"#,
             #"{"type":"attachment","uuid":"q4","parentUuid":"q3","timestamp":"2026-10-12T08:24:30.000Z","attachment":{"type":"queued_command","prompt":"#
                 + relayedJSON + #","commandMode":"prompt","origin":{"kind":"unclassified"},"isMeta":true}}"#,
             #"{"type":"attachment","uuid":"o1","parentUuid":"q4","attachment":{"type":"output_style","style":"default"}}"#,
-            #"{"type":"assistant","uuid":"a2","parentUuid":"o1","message":{"id":"m2","role":"assistant","content":[{"type":"text","text":"Created."}]}}"#
+            #"{"type":"assistant","uuid":"a2","parentUuid":"o1","message":{"id":"m2","role":"assistant","content":[{"type":"text","text":"Created."}]}}"#,
+            #"{"type":"user","uuid":"u2","parentUuid":"a2","isMeta":true,"origin":{"kind":"unclassified"},"timestamp":"2026-10-12T08:25:00.000Z","message":{"role":"user","content":"#
+                + framedJSON + #"}}"#,
+            #"{"type":"assistant","uuid":"a3","parentUuid":"u2","message":{"id":"m3","role":"assistant","content":[{"type":"text","text":"Merged."}]}}"#
         ])
         let reader = ClaudeSubagentTranscriptReader(configDirectory: root)
         let snapshot = try XCTUnwrap(reader.readConversation(sessionID: parent))
         let users = snapshot.entries.filter { if case .user = $0.content { true } else { false } }
         XCTAssertEqual(users.map(\.content), [.user(text: "Write the file.", images: nil),
                                               .user(text: "Answer in one line.", images: nil),
+                                              .user(text: relayed, images: nil),
                                               .user(text: relayed, images: nil)])
-        XCTAssertEqual(users.map(\.joinsRunningTurn), [nil, true, true])
+        XCTAssertEqual(users.map(\.joinsRunningTurn), [nil, true, true, nil])
         let turns = TranscriptConversationProjection.presentation(
             from: snapshot.entries, harness: .claudeCode, status: .ready, latestTurnIsComplete: true
         ).turns
-        XCTAssertEqual(turns.flatMap { $0.work }.compactMap(\.taskMessage?.body), ["Merge it."])
+        XCTAssertEqual(turns.count, 2, "the message that waited for the turn's end opens the next turn")
+        XCTAssertEqual(turns[0].work.compactMap(\.taskMessage?.body), ["Merge it."])
+        XCTAssertEqual(turns[1].prompt.compactMap(\.taskMessage?.body), ["Merge it."])
         XCTAssertEqual(AppModel.personMessages(in: turns).map(\.text), ["Answer in one line.", "Write the file."])
         XCTAssertEqual(users[1].createdAt, ClaudeSubagentTranscriptReader.timestamp("2026-10-12T08:24:23.383Z"))
         XCTAssertEqual(try XCTUnwrap(reader.readConversation(sessionID: parent)).entries.map(\.id),
                        snapshot.entries.map(\.id), "A reread names the same entries")
         if case let .assistant(text, _)? = snapshot.entries.last?.content {
-            XCTAssertEqual(text, "Created.")
+            XCTAssertEqual(text, "Merged.")
         } else {
             XCTFail("The answer follows the message read into the turn")
         }
