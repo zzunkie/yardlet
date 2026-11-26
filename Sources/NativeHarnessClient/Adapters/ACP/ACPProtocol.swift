@@ -185,6 +185,15 @@ enum ACPProtocol {
         return capabilities?["stdio"] != .bool(false)
     }
 
+    /// Whether an agent gives the MCP servers a session brings in `mcpServers` to every session in the
+    /// same folder on its process rather than to that session alone. OpenCode (2.4.1) adds them to the
+    /// folder's MCP service under their names: the next session there with a server of the same name
+    /// replaces the earlier one's, and every session in the folder lists the tools of each, until the
+    /// process ends. `ACPAdapter` therefore never opens two tasks' sessions in one folder on one process.
+    static func sharesMCPServersInFolder(_ harness: HarnessKind) -> Bool {
+        harness == .openCode
+    }
+
     /// Whether an agent's `initialize` answer is the one it gives while signed out. Kiro CLI starts its
     /// engine only with a sign-in: until then it answers `initialize` for itself, with no session
     /// loading or listing, and every other request with "Authentication required". A process started

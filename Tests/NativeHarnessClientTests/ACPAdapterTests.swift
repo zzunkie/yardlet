@@ -208,18 +208,26 @@ final class ACPAdapterTests: XCTestCase {
     /// process hears that the task's session closed (`session/close`) when it advertised that, before
     /// anything sent after, without anyone waiting for its answer (the fake never gives one); an agent
     /// that did not advertise it hears nothing. The last task to close ends the process instead.
+    /// OpenCode gives a session's MCP servers, the Yardlet server with its task's token among them, to
+    /// every session in the folder for as long as its process runs (`ACPProtocol.sharesMCPServersInFolder`):
+    /// only tasks in other folders share the process, and another task in the closed task's folder opens on a
+    /// process of its own, while the closed task reopens on the one it left.
     func testClosingOneOfAProcesssSessionsClosesItThereWhenTheAgentAdvertisedClose() async throws {
         for advertisesClose in [true, false] {
             let transport = FakeACPTransport(advertisesClose: advertisesClose)
+            let neighbors = FakeACPTransport(advertisesClose: advertisesClose)
             let adapter = ACPAdapter(kind: .openCode, executableURL: URL(filePath: "/tmp/fake-opencode"),
-                                     transportFactory: transportSequence(transport))
+                                     transportFactory: transportSequence(transport, neighbors))
             let workspace = URL(filePath: "/tmp/acp-workspace")
             let closing = try await adapter.createSession(
                 CreateHarnessSessionRequest(localSessionID: UUID(), workspaceURL: workspace, initialPrompt: nil))
             let staying = try await adapter.resumeSession(
-                providerSessionID: "saved-session", localSessionID: UUID(), workspaceURL: workspace)
+                providerSessionID: "saved-session", localSessionID: UUID(),
+                workspaceURL: URL(filePath: "/tmp/acp-other-workspace"))
 
             await adapter.close(closing)
+            let neighbor = try await adapter.resumeSession(
+                providerSessionID: "neighbor-session", localSessionID: UUID(), workspaceURL: workspace)
             let reopened = try await adapter.resumeSession(
                 providerSessionID: closing.providerSessionID, localSessionID: closing.localSessionID, workspaceURL: workspace)
             let written = await transport.writtenMethods
@@ -229,7 +237,12 @@ final class ACPAdapterTests: XCTestCase {
                 + (advertisesClose ? ["session/close"] : []) + ["session/load"])
             XCTAssertEqual(closes.compactMap { $0["params"]?["sessionId"]?.stringValue }, advertisesClose ? [closing.providerSessionID] : [])
             XCTAssertEqual(stopsWhileOthersRun, 0)
+            let neighborsWritten = await neighbors.writtenMethods
+            XCTAssertEqual(neighborsWritten, ["initialize", "session/load"])
 
+            await adapter.close(neighbor)
+            let neighborsStops = await neighbors.stopCount
+            XCTAssertEqual(neighborsStops, 1)
             await adapter.close(staying)
             await adapter.close(reopened)
             let writtenAtEnd = await transport.writtenMethods
@@ -253,8 +266,8 @@ final class ACPAdapterTests: XCTestCase {
             CreateHarnessSessionRequest(localSessionID: UUID(), workspaceURL: workspace, initialPrompt: nil))
         await transport.setHoldsSessionOpens(true)
         let opening = Task {
-            try await adapter.createSession(
-                CreateHarnessSessionRequest(localSessionID: UUID(), workspaceURL: workspace, initialPrompt: nil))
+            try await adapter.createSession(CreateHarnessSessionRequest(
+                localSessionID: UUID(), workspaceURL: URL(filePath: "/tmp/acp-other-workspace"), initialPrompt: nil))
         }
         try await waitUntil { await transport.pendingSessionOpenCount == 1 }
 
