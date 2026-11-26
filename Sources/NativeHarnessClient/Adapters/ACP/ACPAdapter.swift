@@ -97,7 +97,7 @@ actor ACPAdapter:
     /// the agent did has followed it. A prompt that ends there failed with its words; a step after it
     /// shows it as the words it was.
     private var heldNotices: [UUID: HeldNotice] = [:]
-    /// Antigravity with "Steer Antigravity turns" on: where its hook finds messages for a running turn
+    /// Antigravity with "Send now in Antigravity tasks" on: where its hook finds messages for a running turn
     /// (`AntigravityLiveSteer`), and what each task's running prompt was left; nil for the other agents.
     private let liveSteer: AntigravityLiveSteer?
     private var steerLedgers: [UUID: AntigravitySteerLedger] = [:]

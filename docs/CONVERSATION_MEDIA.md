@@ -142,7 +142,7 @@ teaches; the Codex app reads that into `::codex-inline-vis{path=…}`, and Yardl
 
 Claude Code and the ACP harnesses have no `visualize` skill, so Yardlet gives them its own tool for the same view:
 `show_widget(title, widget_code)`, named and shaped as the Claude app's tool of that name (docs/AGENT_BROWSER_TOOLS.md,
-"Widget tool"). Codex does not get it. Its description is five sentences, and it stays behind Claude Code's tool
+"Widget tool"). Codex does not get it. Its description is six sentences, and it stays behind Claude Code's tool
 search, so it adds little to a turn's prompt.
 
 - **In the conversation.** A completed call that Yardlet answered (its answer has words only Yardlet's has, or an ACP
@@ -152,8 +152,14 @@ search, so it adds little to a turn's prompt.
   history, so it is drawn again when the conversation is reopened; Yardlet keeps nothing. Full-detail remote desktop
   subscriptions carry the widget in `RemoteConversationBody.widget` (up to `RemoteText.fullTextLimit`) so remote Mac
   windows draw the same sandboxed view.
-- **The page.** The fragment in the system's plain styles with Yardlet's small bridge (no kit), in the same sandbox,
-  policy, pool, size, expanding and failure card as a Codex visualization (`MCPAppViewController.startWidget`). Its
-  `prefers-color-scheme` is the app's appearance.
+- **The page.** The fragment with Yardlet's small bridge (no kit), in the same sandbox, policy, pool, size, expanding
+  and failure card as a Codex visualization (`MCPAppViewController.startWidget`). Its `prefers-color-scheme` is the
+  app's appearance. In place of the kit it gets Yardlet's theme (`YardletWidgetTheme`), inline and loading nothing:
+  `--y-*` variables for the default surfaces, text, border, accent and status colors of docs/DESIGN_SYSTEM.md in light
+  and dark (text and status colors keep 4.5:1 on each surface), quiet defaults for plain elements (system font at
+  14 px, tables with tabular figures, buttons, fields, range sliders, code) and the classes `y-card`, `y-grid`,
+  `y-kpi`, `y-badge`, `y-muted` and `y-num`. Every default is inside `:where(…)`, so the widget's own rules win, and
+  the page stays transparent over the conversation. A whole document keeps its own head and gets none of it; a Codex
+  visualization keeps the skill's kit, or the plain fallback without one.
 - **Leaving nothing behind.** There is no setting. Yardlet keeps no view; a harness's history keeps only the call.
 

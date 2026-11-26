@@ -393,6 +393,36 @@ final class CodexVisualizationRenderingTests: XCTestCase {
         XCTAssertFalse(document.contains("--yardlet-test-kit"), "A whole document keeps its own styles")
     }
 
+    /// A `show_widget` fragment gets Yardlet's theme in place of the kit: the `--y-*` variables for both appearances,
+    /// defaults that any rule of the widget's own overrides, and nothing loaded from outside. A Codex visualization
+    /// keeps the plain fallback, a whole document its own styles, and the policy stays the one every view has.
+    func testAWidgetFragmentGetsYardletsThemeUnderItsOwnStyles() {
+        let page = CodexVisualizationPage.page("<p>chart</p>", kit: nil, state: nil, stylesheet: YardletWidgetTheme.stylesheet)
+        for variable in ["--y-bg", "--y-surface", "--y-surface-elevated", "--y-text", "--y-text-secondary", "--y-border",
+                         "--y-accent", "--y-success", "--y-warning", "--y-danger", "--y-radius", "--y-font-sans",
+                         "--y-font-mono"] {
+            XCTAssertTrue(page.contains("\(variable):"), variable)
+        }
+        XCTAssertTrue(page.contains("@media (prefers-color-scheme:dark)"))
+        XCTAssertTrue(page.contains("font-variant-numeric:tabular-nums"))
+        XCTAssertTrue(page.contains("<p>chart</p>"))
+        // Each element default has no specificity, so the widget's own rules win.
+        let rules = YardletWidgetTheme.stylesheet.split(separator: "}").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        for rule in rules where !rule.isEmpty && !rule.hasPrefix(":root") && !rule.hasPrefix("@media") && !rule.hasPrefix("--")
+            && !rule.hasPrefix("::-webkit-scrollbar") && !rule.hasPrefix(":where") {
+            XCTFail("A rule outside :where(…): \(rule.prefix(60))")
+        }
+        XCTAssertFalse(YardletWidgetTheme.stylesheet.contains("url("), "The theme loads nothing")
+        XCTAssertFalse(YardletWidgetTheme.stylesheet.contains("@import"), "The theme loads nothing")
+        XCTAssertFalse(CodexVisualizationPage.page("<p>v</p>", kit: nil, state: nil).contains("--y-text"),
+                       "A Codex visualization without the kit keeps the plain fallback")
+        XCTAssertFalse(CodexVisualizationPage.page("<!doctype html><html><body><p>d</p></body></html>", kit: nil, state: nil,
+                                                   stylesheet: YardletWidgetTheme.stylesheet).contains("--y-text"),
+                       "A whole document keeps its own styles")
+        XCTAssertTrue(CodexVisualizationPage.policy.contains("default-src 'none'"))
+        XCTAssertTrue(CodexVisualizationPage.policy.contains("connect-src blob: data:"))
+    }
+
     /// Only an HTML file in the task's folder or in a Codex home's thread visualizations is read.
     func testOnlyAVisualizationInTheTasksFolderOrACodexHomeIsRead() throws {
         let codex = home.appending(path: ".codex")

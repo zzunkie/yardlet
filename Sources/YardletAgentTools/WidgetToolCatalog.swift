@@ -33,7 +33,10 @@ package enum WidgetToolCatalog {
             tool, when seeing it beats reading it. widget_code is an HTML fragment (no <html>, <head> or <body>) \
             with its styles and scripts inline; scripts, styles and fonts may also come from cdnjs.cloudflare.com, \
             cdn.jsdelivr.net, unpkg.com or esm.sh. Nothing else is fetched. The view follows light and dark mode \
-            through prefers-color-scheme. Prefer Markdown for text and tables.
+            through prefers-color-scheme. Yardlet already styles plain elements to match the app and offers --y-* \
+            CSS variables (--y-text, --y-text-secondary, --y-surface, --y-border, --y-accent, --y-success, \
+            --y-warning, --y-danger) and the classes y-card, y-grid, y-kpi and y-badge. Prefer Markdown for text \
+            and tables.
             """,
         inputSchema: .object([
             "type": .string("object"),

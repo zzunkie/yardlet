@@ -188,7 +188,7 @@ struct TaskServerFinder {
     }
 }
 
-/// Settings › General's "Show servers tasks start": on by default. Off, nothing is read and nothing shows.
+/// Settings › General's "Show servers that tasks start": on by default. Off, nothing is read and nothing shows.
 enum TaskServersPreference {
     static let key = "YardletShowsTaskServers"
 

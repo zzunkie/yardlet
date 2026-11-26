@@ -68,7 +68,7 @@ final class AppModelRemoteBridge: RemoteBridge {
     var watchesHostSettings = false
     var trackingHostSettings = false
     var hostSettingsObservers: [any NSObjectProtocol] = []
-    /// "Steer Antigravity turns" changes whether an Antigravity task steers (`RemoteTask.steers`).
+    /// "Send now in Antigravity tasks" changes whether an Antigravity task steers (`RemoteTask.steers`).
     nonisolated(unsafe) private var antigravitySteerObserver: (any NSObjectProtocol)?
     var answeredHostSettings: RemoteHostSettings?
     var builtHostUsageRows: (inputs: TokenUsageRowsInputs, rows: HostUsageRows)?

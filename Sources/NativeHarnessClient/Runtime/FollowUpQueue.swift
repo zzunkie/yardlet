@@ -30,8 +30,8 @@ enum FollowUpMode: String, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .queue: L10n.string("Queue")
-        case .steer: L10n.string("Steer")
+        case .queue: L10n.string("After the turn")
+        case .steer: L10n.string("Send now")
         }
     }
 
@@ -225,7 +225,7 @@ enum FollowUpPolicy: Equatable, Sendable {
     /// A steered message is written to Claude Code to read at its next step (`next`); Claude Code
     /// holds it until it reads it. Only "Stop and send" asks it to stop the turn for one.
     case claudeCode
-    /// With "Steer Antigravity turns" on (`AntigravityLiveSteer`), a steered message is left for
+    /// With "Send now in Antigravity tasks" on (`AntigravityLiveSteer`), a steered message is left for
     /// Antigravity's hook, which hands it to the running turn before its next model call. Until then
     /// Yardlet can take it back; one the turn ended without reading starts the next turn.
     case antigravity

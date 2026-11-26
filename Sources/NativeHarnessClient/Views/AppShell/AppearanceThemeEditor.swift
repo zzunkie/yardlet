@@ -139,22 +139,29 @@ struct AppearanceThemeEditor: View {
                                 .labelsHidden().frame(width: 54).accessibilityLabel(label)
                         }
                     }
-                    if field != .text { Divider() }
+                    Divider()
                 }
-            }
-            if !model.failures.isEmpty {
-                VStack(alignment: .leading, spacing: ParitySpace.s4) {
-                    ForEach(model.failures, id: \.message) { failure in
-                        Text(failure.message).font(SettingsMetrics.detailFont).fixedSize(horizontal: false, vertical: true)
+                // The group's own end, as its buttons act on every row above them.
+                VStack(alignment: .leading, spacing: ParitySpace.s8) {
+                    if !model.failures.isEmpty {
+                        VStack(alignment: .leading, spacing: ParitySpace.s4) {
+                            ForEach(model.failures, id: \.message) { failure in
+                                Text(failure.message).font(SettingsMetrics.detailFont)
+                                    .foregroundStyle(ParityTheme.warningText)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }.accessibilityElement(children: .combine)
                     }
-                }.accessibilityElement(children: .combine)
+                    HStack {
+                        Button(L10n.string("Reset to defaults")) { model.reset() }
+                            .disabled(model.draft == MacColorTheme() && model.saved == MacColorTheme())
+                        Spacer()
+                        Button(L10n.string("Save")) { model.save() }
+                            .disabled(model.draft == model.saved)
+                    }.controlSize(.small)
+                }
+                .padding(.vertical, SettingsMetrics.rowVerticalPadding)
             }
-            HStack {
-                Button(L10n.string("Reset to defaults")) { model.reset() }
-                    .disabled(model.draft == MacColorTheme() && model.saved == MacColorTheme())
-                Spacer()
-                Button(L10n.string("Save")) { model.save() }.disabled(model.draft == model.saved)
-            }.controlSize(.small)
         }
         .onChange(of: data) { model.refresh() }
         .onChange(of: legacy) { model.refresh() }

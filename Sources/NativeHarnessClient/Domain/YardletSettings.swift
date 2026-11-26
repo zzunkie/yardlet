@@ -425,7 +425,7 @@ extension YardletSetting {
         keywords: "secrets, API key, token, privacy, redact, mask")
 
     static let showTaskServers = YardletSetting(
-        id: "show_task_servers", section: .general, generalGroup: .tasks, symbol: "server.rack", title: L10n.string("Show servers tasks start"),
+        id: "show_task_servers", section: .general, generalGroup: .tasks, symbol: "server.rack", title: L10n.string("Show servers that tasks start"),
         detail: L10n.string("Shows the server's localhost address beside the task's title."),
         values: .onOff, storage: .flag(key: TaskServersPreference.key, defaultValue: true),
         keywords: "localhost, port, dev server")
@@ -495,7 +495,8 @@ extension YardletSetting {
         keywords: "enter, return, send message, newline, multiline")
 
     static let followUpBehavior = YardletSetting(
-        id: "follow_up_behavior", section: .general, generalGroup: .tasks, symbol: "text.append", title: L10n.string("Follow-up behavior"),
+        id: "follow_up_behavior", section: .general, generalGroup: .tasks, symbol: "text.append", title: L10n.string("Messages sent while a task works"),
+        detail: L10n.string("Send now reaches the running turn without stopping it. After the turn waits until it ends."),
         keysHint: { keys in
             guard !keys.sendKeyName.isEmpty, !keys.alternateKeyName.isEmpty else { return "" }
             return L10n.format("While a turn runs, %@ sends this way and %@ the other way", keys.sendKeyName, keys.alternateKeyName)
@@ -545,8 +546,8 @@ extension YardletSetting {
     /// so an agent's change asks the person.
     static let antigravityLiveSteer = YardletSetting(
         id: "antigravity_live_steer", section: .general, generalGroup: .tasks, symbol: "arrow.turn.down.right",
-        title: L10n.string("Steer Antigravity turns (experimental)"),
-        detail: L10n.string("A message sent while an Antigravity task works reaches it at its next step, as with Claude Code, instead of after the turn. Adds a small Antigravity plugin to ~/.gemini/config/plugins, which Antigravity outside Yardlet also runs and which does nothing there. Turning this off removes it."),
+        title: L10n.string("Send now in Antigravity tasks (experimental)"),
+        detail: L10n.string("Antigravity reads a message sent while it works at its next step, as Claude Code does, rather than after the turn. Adds a small plugin to ~/.gemini/config/plugins that does nothing outside Yardlet; turning this off removes it."),
         values: .onOff,
         storage: appSwitch({ AntigravityLiveSteer.isEnabled(in: $0.defaults) },
                            { context, isOn in AntigravityLiveSteer.setEnabled(isOn, in: context.defaults) }),

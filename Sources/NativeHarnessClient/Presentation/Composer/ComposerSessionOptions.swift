@@ -393,7 +393,7 @@ enum ComposerSessionOptionsProjection {
                                              submission: .providerInput)
         // A harness that takes no message while its turn runs keeps what is sent meanwhile for
         // the next turn; Claude Code's own queue replaces this below, and Antigravity's hook takes
-        // a steered message while "Steer Antigravity turns" is on.
+        // a steered message while "Send now in Antigravity tasks" is on.
         let policy = FollowUpPolicy(harness: harness, antigravitySteers: antigravitySteers) ?? .afterTurn
         options.followUp = ComposerFollowUpOptions(policy: policy == .antigravity ? policy : .afterTurn,
                                                    delivery: .providerInput)

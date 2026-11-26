@@ -111,8 +111,10 @@ struct CodexVisualizationPage: Equatable, Sendable {
 
     /// The page: the kit's stylesheet, the widget's saved state, the host bridge, then the kit with the fragment in
     /// it, as `render.py` builds the frame. A whole document keeps its own head and styles and gets the state and
-    /// the bridge at the top of its body.
-    static func page(_ fragment: String, kit: CodexVisualizationKit?, state: String?) -> String {
+    /// the bridge at the top of its body. Without a kit the fragment gets `stylesheet`: the plain fallback for a
+    /// Codex visualization, Yardlet's theme (`YardletWidgetTheme`) for a `show_widget` view.
+    static func page(_ fragment: String, kit: CodexVisualizationKit?, state: String?,
+                     stylesheet: String = CodexVisualizationKit.fallbackStylesheet) -> String {
         let globals = "{\"widgetState\":\(state ?? "null"),\"statePersistence\":\"local\"}"
             .replacingOccurrences(of: "<", with: "\\u003c")
         let bridge = (kit?.bridge ?? CodexVisualizationKit.fallbackBridge).replacingOccurrences(of: "</script", with: "<\\/script")
@@ -134,7 +136,7 @@ struct CodexVisualizationPage: Equatable, Sendable {
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="referrer" content="no-referrer">
-        <style>\(kit?.stylesheet ?? CodexVisualizationKit.fallbackStylesheet)
+        <style>\(kit?.stylesheet ?? stylesheet)
         html>body{padding:0}</style>
         </head>
         <body>

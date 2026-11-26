@@ -281,7 +281,6 @@
 "Active flags: %@" = "Active flags: %@";
 "Search tasks" = "Search tasks";
 "Select runtime" = "Select runtime";
-"Steer" = "Steer";
 "Codex steer requires an active turn" = "Codex steer requires an active turn";
 "Codex steer is unavailable for this runtime" = "Codex steer is unavailable for this runtime";
 "Send" = "Send";
@@ -1573,7 +1572,9 @@
 "Return" = "Return";
 "⌘Return for multiline" = "⌘Return for multiline";
 "Always ⌘Return" = "Always ⌘Return";
-"Follow-up behavior" = "Follow-up behavior";
+"Messages sent while a task works" = "Messages sent while a task works";
+"Send now reaches the running turn without stopping it. After the turn waits until it ends." = "Send now reaches the running turn without stopping it. After the turn waits until it ends.";
+"After the turn" = "After the turn";
 "Send or clear the current draft before editing a queued message." = "Send or clear the current draft before editing a queued message.";
 "Session limit reached" = "Session limit reached";
 "Weekly limit reached" = "Weekly limit reached";
@@ -1632,8 +1633,8 @@
 "Antigravity did not take this message." = "Antigravity did not take this message.";
 "Delivered · Antigravity reads it at its next step" = "Delivered · Antigravity reads it at its next step";
 "Send now: Antigravity reads it at its next step without stopping" = "Send now: Antigravity reads it at its next step without stopping";
-"Steer Antigravity turns (experimental)" = "Steer Antigravity turns (experimental)";
-"A message sent while an Antigravity task works reaches it at its next step, as with Claude Code, instead of after the turn. Adds a small Antigravity plugin to ~/.gemini/config/plugins, which Antigravity outside Yardlet also runs and which does nothing there. Turning this off removes it." = "A message sent while an Antigravity task works reaches it at its next step, as with Claude Code, instead of after the turn. Adds a small Antigravity plugin to ~/.gemini/config/plugins, which Antigravity outside Yardlet also runs and which does nothing there. Turning this off removes it.";
+"Send now in Antigravity tasks (experimental)" = "Send now in Antigravity tasks (experimental)";
+"Antigravity reads a message sent while it works at its next step, as Claude Code does, rather than after the turn. Adds a small plugin to ~/.gemini/config/plugins that does nothing outside Yardlet; turning this off removes it." = "Antigravity reads a message sent while it works at its next step, as Claude Code does, rather than after the turn. Adds a small plugin to ~/.gemini/config/plugins that does nothing outside Yardlet; turning this off removes it.";
 "Claude Code cannot send this message now." = "Claude Code cannot send this message now.";
 "Copy message" = "Copy message";
 "Work locally" = "Work locally";
@@ -3236,7 +3237,7 @@
 "Users and Access → Integrations → App Store Connect API. An Account Holder or Admin makes a team key and picks its role: Admin covers every tool here, App Manager all but answering reviews. An individual key, made in your profile, has your own access." = "Users and Access → Integrations → App Store Connect API. An Account Holder or Admin makes a team key and picks its role: Admin covers every tool here, App Manager all but answering reviews. An individual key, made in your profile, has your own access.";
 "Xcode didn't answer: %@" = "Xcode didn't answer: %@";
 "This build of Yardlet can't sign App Store Connect tokens." = "This build of Yardlet can't sign App Store Connect tokens.";
-"Show servers tasks start" = "Show servers tasks start";
+"Show servers that tasks start" = "Show servers that tasks start";
 "Shows the server's localhost address beside the task's title." = "Shows the server's localhost address beside the task's title.";
 "Open %@ in this task's browser" = "Open %@ in this task's browser";
 "and %lld more" = "and %lld more";

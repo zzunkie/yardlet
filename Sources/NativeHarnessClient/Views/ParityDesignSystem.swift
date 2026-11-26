@@ -355,6 +355,14 @@ enum ParityTheme {
             ? NSColor.white.withAlphaComponent(0.015)
             : NSColor.black.withAlphaComponent(0.018)
     })
+    /// Warning or failure words, such as a command's error, in the status orange. The native orange keeps 2.25:1 on
+    /// the light canvas, so light appearance takes a deeper orange that keeps 4.5:1 on the canvas, sidebar and
+    /// elevated surfaces; dark keeps the native one.
+    static let warningText = Color(nsColor: NSColor(name: "YardletWarningText") { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor.systemOrange
+            : NSColor(srgbRed: 0.651, green: 0.325, blue: 0, alpha: 1) // #A65300
+    })
     static let subtleFill = Color.primary.opacity(0.035)
     static let selectedFill = Color.primary.opacity(0.095)
     static let hoverFill = Color.primary.opacity(0.062)
