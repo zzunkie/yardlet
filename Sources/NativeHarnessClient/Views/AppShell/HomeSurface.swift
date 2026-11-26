@@ -136,7 +136,14 @@ struct NewTaskHome: View {
             }
             // The folder's rows go while the composer answers a task and come back with the new task.
             if new != nil, listed[.folder] != nil { listed[.folder] = nil; relist() }
-            returnToComposer()
+            if new == nil {
+                // The new task's composer comes back with this update and takes the keyboard once it is there:
+                // asked before, the window gives the keyboard to the first control that takes it, the header's view
+                // switch.
+                DispatchQueue.main.async { returnToComposer() }
+            } else {
+                returnToComposer()
+            }
         }
         .onChange(of: answeredTaskID) { _, answered in
             // After the send's own event, so its composer finishes before its task's view goes. The

@@ -165,7 +165,7 @@ final class WindowStructureQATests: XCTestCase {
                     guard visited.insert(ObjectIdentifier(child)).inserted else { continue }
                     if let role = child.accessibilityRole?() ?? nil,
                        !buttonsOnly || [.button, .menuButton, .popUpButton, .checkBox].contains(role) {
-                        let label = (child.accessibilityLabel?() ?? nil) ?? ""
+                        let label = WindowlessRender.name(of: child)
                         let screen = child.accessibilityFrame?() ?? .zero
                         let frame = NSRect(x: screen.minX - windowFrame.minX,
                                            y: windowFrame.maxY - screen.maxY,

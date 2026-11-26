@@ -385,13 +385,20 @@ enum WindowlessRender {
     /// An accessibility string as the object AppKit hands back. A menu button whose label has a font
     /// of its own gives an attributed title where the Swift method promises a `String`, and reading it
     /// through that method crashes.
-    private static func attribute(_ name: String, of element: AnyObject) -> Any? {
+    /// What an assistive app reads `element` as: its label, or with none its title, which is where a SwiftUI menu
+    /// drawn as a button (`.menuStyle(.button)`) gives the name it was given.
+    nonisolated static func name(of element: AnyObject) -> String {
+        let label = text(attribute("accessibilityLabel", of: element))
+        return label.isEmpty ? text(attribute("accessibilityTitle", of: element)) : label
+    }
+
+    private nonisolated static func attribute(_ name: String, of element: AnyObject) -> Any? {
         let selector = NSSelectorFromString(name)
         guard let object = element as? NSObject, object.responds(to: selector) else { return nil }
         return object.perform(selector)?.takeUnretainedValue()
     }
 
-    private static func text(_ value: Any?) -> String {
+    private nonisolated static func text(_ value: Any?) -> String {
         switch value {
         case let string as String: string
         case let attributed as NSAttributedString: attributed.string

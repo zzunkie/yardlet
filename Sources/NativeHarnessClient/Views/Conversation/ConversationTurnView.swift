@@ -350,8 +350,14 @@ struct ConversationTurnView: View, Equatable {
             itemView(message)
         }
         if folds {
-            ConversationWorkStretchFold(title: stretch.foldTitle(harness: context.harness), isOpen: isOpen) {
-                if isOpen { openedStretches.remove(stretch.id) } else { openedStretches.insert(stretch.id) }
+            HStack(alignment: .center, spacing: 2) {
+                ConversationWorkStretchFold(title: stretch.foldTitle(harness: context.harness), isOpen: isOpen) {
+                    if isOpen { openedStretches.remove(stretch.id) } else { openedStretches.insert(stretch.id) }
+                }
+                // Folded, the line shows the images of the calls it hides, as a run's summary line does.
+                if !isOpen {
+                    ConversationToolImageThumbnails(images: stretch.hidden.flatMap(\.toolPreviewImages))
+                }
             }
             // Between two messages the provider wrote, the fold sits close to both, so a line of notes
             // and the calls after it read as one step.

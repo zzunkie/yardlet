@@ -1134,6 +1134,8 @@ final class NewTaskHomeRenderingTests: XCTestCase {
     }
 
     func testAWaitingOrUnreadLineIsAnsweredWhereTheComposerIs() throws {
+        NewTaskHomeView.choose(.projects)
+        defer { NewTaskHomeView.choose(nil) }
         let runtimes = try runtimes()
         let draft = NewTaskDraft()
         draft.text = "New task draft"

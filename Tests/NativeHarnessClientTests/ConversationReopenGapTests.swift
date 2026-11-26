@@ -280,6 +280,10 @@ final class ConversationReopenGapRenderingTests: XCTestCase {
             window.show(index)
             window.host.settle(passes: 20)
             checks.append(try self.check(window, name: "\(name)-\(appearance.suffix)"))
+            // Every way takes over five minutes on CI, longer than a test may go without a line before its batch
+            // is taken for stuck (scripts/xctest-batches.py); each check says it is done, on standard error,
+            // which a pipe does not hold back as it holds standard output.
+            FileHandle.standardError.write(Data("reopen gap: \(name)-\(appearance.suffix) checked\n".utf8))
         }
         window.show(others[0])
         for (index, name) in subjects { try check(index, "\(name)-first") }

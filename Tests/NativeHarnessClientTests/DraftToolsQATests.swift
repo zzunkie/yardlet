@@ -119,8 +119,8 @@ final class DraftToolsQATests: XCTestCase {
 
     @discardableResult
     private func press<Content: View>(_ label: String, in host: WindowlessRender.Host<Content>,
-                                      titleBar: Bool = false) -> Bool {
-        let pool = titleBar ? titleBarControls(in: host) : controls(in: host)
+                                      titleBarOf model: AppModel? = nil) -> Bool {
+        let pool = model.map { titleBarControls(in: host, model: $0) } ?? controls(in: host)
         guard let control = pool.first(where: { $0.label == label }) else { return false }
         let pressed = WindowlessRender.withAccessibilityTree { control.object.accessibilityPerformPress?() ?? false }
         host.settle(passes: 12, interval: 0.03)
@@ -199,10 +199,13 @@ final class DraftToolsQATests: XCTestCase {
         return try XCTUnwrap(result).get()
     }
 
-    /// The buttons in the title bar's band, left to right.
-    private func titleBarControls<Content: View>(in host: WindowlessRender.Host<Content>) -> [Control] {
-        elements(in: host)
-            .filter { $0.frame.midY < ParityTheme.titleBarHeight && $0.frame.height > 0 }
+    /// The buttons in the title bar's band, left to right. With two tabs or more the window's tabs have a bar of
+    /// their own, and the shown screen's buttons are in the header row under it.
+    private func titleBarControls<Content: View>(in host: WindowlessRender.Host<Content>, model: AppModel) -> [Control] {
+        let band = model.splits.tabs.count > 1 ? ParityTheme.windowTabBarHeight + ParityTheme.areaHeaderHeight
+            : ParityTheme.titleBarHeight
+        return elements(in: host)
+            .filter { $0.frame.midY < band && $0.frame.height > 0 }
             .sorted { $0.frame.minX < $1.frame.minX }
     }
 
@@ -259,7 +262,7 @@ final class DraftToolsQATests: XCTestCase {
             let host = WindowlessRender.Host(window(fixture, appearance), size: Self.size, appearance: appearance)
             host.settle(passes: 20, interval: 0.03)
             try draw(host, "home", appearance)
-            let titleBar = titleBarControls(in: host)
+            let titleBar = titleBarControls(in: host, model: model)
             describe("New-task screen (1280×760)", titleBar)
             XCTAssertTrue(titleBar.contains { $0.label == showTerminal }, "\(titleBar.map(\.label))")
             XCTAssertTrue(titleBar.contains { $0.label == showSidePanel })
@@ -267,7 +270,7 @@ final class DraftToolsQATests: XCTestCase {
             orderIn(host)
 
             // The side panel opens to the launcher: what the screen can open, and other tasks.
-            XCTAssertTrue(press(showSidePanel, in: host, titleBar: true))
+            XCTAssertTrue(press(showSidePanel, in: host, titleBarOf: model))
             XCTAssertEqual(draftWorkspace.panels.trailingSurfaceID, TaskSurfaceNavigationProjection.launcherID)
             let launcher = controls(in: host).map(\.label)
             for choice in TaskSidePanelTabs.draftChoices { XCTAssertTrue(launcher.contains(choice.title), "\(launcher)") }
@@ -286,7 +289,7 @@ final class DraftToolsQATests: XCTestCase {
 
             // The terminal, from the title bar. ⌘1 returns to the composer (the terminal hides and its
             // shell goes on, as on a task); ⌘3 and ⌘4 open the terminal and the browser, as on a task.
-            XCTAssertTrue(press(showTerminal, in: host, titleBar: true))
+            XCTAssertTrue(press(showTerminal, in: host, titleBarOf: model))
             XCTAssertTrue(draftWorkspace.panels.isTerminalPresented)
             let one = commandKey("1", in: host)
             let afterOne = draftWorkspace.panels
@@ -359,7 +362,7 @@ final class DraftToolsQATests: XCTestCase {
             XCTAssertTrue(waitFor("TASK-draft-", in: host), "the shell kept its variables: \(terminalText(in: host))")
             XCTAssertTrue(terminalText(in: host).contains("DRAFT-draft-"), "and its scrollback")
             XCTAssertEqual(draftWorkspace.panels, .init(), "the new-task screen starts over")
-            let taskTitleBar = titleBarControls(in: host)
+            let taskTitleBar = titleBarControls(in: host, model: model)
             try draw(host, "task-after-handoff", appearance)
             describe("After the task is created (the same tab becomes the task)", taskTitleBar, notes: [
                 "Panels \(task.panels == panelsBefore ? "same" : "different"), shell pid \(shellPID) → \(taskShell.map(String.init) ?? "none"), variables and scrollback carried over",
@@ -371,7 +374,7 @@ final class DraftToolsQATests: XCTestCase {
             model.splits.newTab()
             host.settle(passes: 20, interval: 0.03)
             XCTAssertFalse(terminalText(in: host).contains("DRAFT-draft-"), "a new draft has no terminal")
-            XCTAssertTrue(press(showTerminal, in: host, titleBar: true))
+            XCTAssertTrue(press(showTerminal, in: host, titleBarOf: model))
             run("printf 'NEXT-%s\\n' \"${DRAFT_MARK:-none}\"", in: host)
             XCTAssertTrue(waitFor("NEXT-none", in: host), terminalText(in: host))
             let nextPID = try XCTUnwrap(terminalView(in: host.hosting)?.process.shellPid)

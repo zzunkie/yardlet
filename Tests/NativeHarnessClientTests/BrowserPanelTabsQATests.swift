@@ -978,10 +978,13 @@ final class BrowserPanelTabsQATests: XCTestCase {
             workspace.setPanels(Navigation.showing(Navigation.browserTabID(key), in: workspace.panels))
             host.settle(passes: 10, interval: 0.03)
             let shownStrip = strip(in: host)
-            // The shown tab's close button names its tab.
-            let close = shownStrip.map { L10n.format("Close tab %@", $0.label) }
-                .first { label in shownStrip.contains { $0.label == label } }
-            XCTAssertTrue(press(close ?? "", in: host, among: shownStrip), "the shown tab's close")
+            // The shown tab's close button names its tab; the shown tab's title is not a button of its own.
+            // Found, or the test stops: a press on an unnamed control of the strip opens its menu, which waits.
+            let around = L10n.format("Close tab %@", "\u{1}").components(separatedBy: "\u{1}")
+            let close = try XCTUnwrap(shownStrip.first {
+                $0.label.count > around.joined().count && $0.label.hasPrefix(around[0]) && $0.label.hasSuffix(around[1])
+            }, "the shown tab's close: \(shownStrip.map(\.label))")
+            XCTAssertTrue(press(close.label, in: host, among: shownStrip), "the shown tab's close")
         }
         XCTAssertEqual(workspace.panels.trailingTabs, ["diff"])
         XCTAssertEqual(workspace.panels.trailingSurfaceID, "diff", "the panel stays with Review")
@@ -1012,13 +1015,16 @@ final class BrowserPanelTabsQATests: XCTestCase {
     /// Pages' long titles share the strip as Chrome's and the Claude app's tabs do: while the panel has room every
     /// tab shows its title, evenly shortened, and only a narrow panel takes the tabs not shown down to their icons,
     /// all within the panel. Drawn at the panel's widest, a third of the way and its narrowest (`long-titles-*`);
-    /// until 2026-10-27 the tabs not shown were icons at every width.
+    /// until 2026-10-27 the tabs not shown were icons at every width. The window is 1440 pt wide: the conversation
+    /// keeps 560 pt beside the panel (`SidePanelWidth.maximum`), so in a 1280 pt window even the panel's widest
+    /// leaves its strip room for the tabs not shown as icons only.
     func testLongTitlesShareTheStrip() throws {
         let fixture = try makeFixture()
         let model = fixture.model, task = fixture.task, client = fixture.client
         let workspace = model.taskWorkspaces.state(for: task.id)
         model.splits.activate(.session(task.id))
-        let host = WindowlessRender.Host(window(fixture, .light), size: Self.size, appearance: .light)
+        let size = NSSize(width: 1_440, height: Self.size.height)
+        let host = WindowlessRender.Host(window(fixture, .light, size: size), size: size, appearance: .light)
         orderIn(host)
         defer { host.close() }
 
@@ -1047,9 +1053,9 @@ final class BrowserPanelTabsQATests: XCTestCase {
             let shown = strip(in: host).filter { titles.contains($0.label) }
             widths[name] = shown.map(\.frame.width)
             describe("Four long-titled tabs, panel \(name)", shown, notes: [
-                "Other tab widths \(shown.map { Int($0.frame.width) }), all inside the panel \(shown.allSatisfy { $0.frame.maxX <= Self.size.width })"
+                "Other tab widths \(shown.map { Int($0.frame.width) }), all inside the panel \(shown.allSatisfy { $0.frame.maxX <= size.width })"
             ])
-            XCTAssertTrue(shown.allSatisfy { $0.frame.maxX <= Self.size.width }, "\(name): \(shown.map(\.frame))")
+            XCTAssertTrue(shown.allSatisfy { $0.frame.maxX <= size.width }, "\(name): \(shown.map(\.frame))")
         }
         // The three tabs not shown, with room: their titles, at one width.
         let wide = widths["wide"] ?? []
@@ -1067,14 +1073,14 @@ final class BrowserPanelTabsQATests: XCTestCase {
     /// on a shown tab's own content moved the window every time (`TabDragHandle`). The window's moves are counted, not
     /// made. The window server moves the main window by any press dragged in its title bar's height, the key window's
     /// too, before the press reaches the app, so while the pointer is on a tab, shown or not, the window is not movable
-    /// (`WindowMoveExclusion`), and it is again on the room between them and once the pointer has left.
+    /// (`WindowMoveExclusion`), and it is again on the room between them and once the pointer has left. With one tab
+    /// the side panel's strip is in the title bar's row; with two the window's tabs have a bar of their own at the
+    /// window's top, in the title bar's height, and the panel's strip moves down to the header row under it.
     func testATabDragsFromTheTitleBarWithoutMovingTheWindow() throws {
         let fixture = try makeFixture()
         let model = fixture.model, task = fixture.task, client = fixture.client
         let workspace = model.taskWorkspaces.state(for: task.id)
         model.splits.activate(.session(task.id))
-        model.splits.openInNewTab(.session(fixture.legacy.id))
-        model.splits.selectTab(.session(task.id))
         let host = WindowlessRender.Host(window(fixture, .light).ignoresSafeArea(.container, edges: .top),
                                          size: Self.size, appearance: .light, titled: true)
         orderIn(host)
@@ -1118,24 +1124,20 @@ final class BrowserPanelTabsQATests: XCTestCase {
             }
             host.settle(passes: 8, interval: 0.03)
         }
+        func titleBarHeight() -> CGFloat { host.window.frame.height - host.window.contentLayoutRect.height }
         let titleBar = controls(in: host).filter { $0.frame.maxY <= ParityTheme.titleBarHeight }
         let close = try XCTUnwrap(titleBar.first { control in
             ["Docs", "Status"].contains { L10n.format("Close tab %@", $0) == control.label }
         }, "the shown browser tab's close")
         let statusTab = try XCTUnwrap(titleBar.first { $0.label == "Status" })
-        let otherWindowTab = try XCTUnwrap(titleBar.first { $0.label == fixture.legacy.title })
         let y: CGFloat = 16
-        XCTAssertLessThan(y, host.window.frame.height - host.window.contentLayoutRect.height, "in the title bar's height")
+        XCTAssertLessThan(y, titleBarHeight(), "in the title bar's height")
 
         func isMovable(at point: CGPoint) throws -> Bool { try host.isMovable(withPointerAt: point) }
-        let shownWindowTabFrame = otherWindowTab.frame.offsetBy(dx: -otherWindowTab.frame.width - WindowTabMetrics.spacing,
-                                                                dy: 0)
         XCTAssertFalse(try isMovable(at: CGPoint(x: close.frame.midX - 21, y: y)), "on the shown browser tab")
         XCTAssertFalse(try isMovable(at: CGPoint(x: statusTab.frame.midX, y: y)), "on the browser tab not shown")
         XCTAssertTrue(try isMovable(at: CGPoint(x: statusTab.frame.minX - PanelTabMetrics.spacing / 2, y: y)),
                       "on the room between two tabs")
-        XCTAssertFalse(try isMovable(at: CGPoint(x: shownWindowTabFrame.minX + 17, y: y)), "on the window's shown tab")
-        XCTAssertFalse(try isMovable(at: CGPoint(x: otherWindowTab.frame.midX, y: y)), "on the window's tab not shown")
         XCTAssertTrue(try isMovable(at: CGPoint(x: statusTab.frame.maxX + 60, y: y)), "on the room after the tabs")
 
         try drag(from: CGPoint(x: statusTab.frame.minX - PanelTabMetrics.spacing / 2, y: y), by: 40)
@@ -1146,6 +1148,18 @@ final class BrowserPanelTabsQATests: XCTestCase {
         try drag(from: shownStart, by: statusTab.frame.midX + 10 - shownStart.x)
         XCTAssertEqual(moves, 1, "the shown browser tab moved the window")
         XCTAssertEqual(Navigation.browserKeys(in: workspace.panels), [status.key, docs.key], "the shown browser tab moved")
+
+        // A second tab: the window's tabs in the tab bar, in the title bar's height.
+        model.splits.openInNewTab(.session(fixture.legacy.id))
+        model.splits.selectTab(.session(task.id))
+        host.settle(passes: 12, interval: 0.03)
+        let tabBar = controls(in: host).filter { $0.frame.maxY <= ParityTheme.windowTabBarHeight }
+        let otherWindowTab = try XCTUnwrap(tabBar.first { $0.label == fixture.legacy.title })
+        let shownWindowTabFrame = otherWindowTab.frame.offsetBy(dx: -otherWindowTab.frame.width - WindowTabMetrics.spacing,
+                                                                dy: 0)
+        XCTAssertLessThan(y, titleBarHeight(), "the tab bar in the title bar's height")
+        XCTAssertFalse(try isMovable(at: CGPoint(x: shownWindowTabFrame.minX + 17, y: y)), "on the window's shown tab")
+        XCTAssertFalse(try isMovable(at: CGPoint(x: otherWindowTab.frame.midX, y: y)), "on the window's tab not shown")
 
         // The window's shown tab, by its mark (the window's two tabs are as wide), past the middle of the other.
         let markStart = CGPoint(x: shownWindowTabFrame.minX + 17, y: y)

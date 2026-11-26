@@ -58,10 +58,13 @@ struct DeskHeader<Trailing: View>: View {
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text(date, format: .dateTime.month(.wide).day().weekday(.wide))
-                    .font(.system(size: 18 * interfaceScale, weight: .semibold))
-                    .fixedSize()
-                    .accessibilityAddTraits(.isHeader)
+                // Shorter where the home is narrow, as a split pane makes it, so the header stays inside it.
+                ViewThatFits(in: .horizontal) {
+                    dateText(.dateTime.month(.wide).day().weekday(.wide))
+                    dateText(.dateTime.month(.abbreviated).day().weekday(.abbreviated))
+                    dateText(.dateTime.month(.abbreviated).day())
+                }
+                .layoutPriority(1)
                 if let summary {
                     Text(summary)
                         .font(.system(size: 13 * interfaceScale))
@@ -75,6 +78,13 @@ struct DeskHeader<Trailing: View>: View {
         }
         .padding(.horizontal, 10)
         .frame(minHeight: 40)
+    }
+
+    private func dateText(_ format: Date.FormatStyle) -> some View {
+        Text(date, format: format)
+            .font(.system(size: 18 * interfaceScale, weight: .semibold))
+            .fixedSize()
+            .accessibilityAddTraits(.isHeader)
     }
 }
 
@@ -278,6 +288,7 @@ struct DeskHome<Switch: View, Bottom: View>: View {
             }
             .defaultScrollAnchor(.top)
             bottomPane
+                .padding(.horizontal, NewTaskHomeLayout.inset)
         }
     }
 

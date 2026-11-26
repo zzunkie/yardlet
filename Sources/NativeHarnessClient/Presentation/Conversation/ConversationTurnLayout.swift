@@ -300,12 +300,17 @@ struct ConversationWorkStretch: Identifiable {
     /// The fold hides some of the stretch's work.
     var hidesWork: Bool { kept.count < work.count }
 
+    /// The work the fold hides, in its order.
+    var hidden: [ConversationItem] {
+        let keptIDs = Set(kept.map(\.id))
+        return work.filter { !keptIDs.contains($0.id) }
+    }
+
     /// What the stretch's fold reads: the calls it hides, as a run of them reads folded
     /// (`ConversationWorkSummary`), so the line says what happened between the messages around it;
     /// nil when it hides no call, for the fold to read "Work details".
     func foldTitle(harness: HarnessKind) -> String? {
-        let keptIDs = Set(kept.map(\.id))
-        let calls = work.filter { !keptIDs.contains($0.id) && ConversationWorkSummary.category(of: $0) != nil }
+        let calls = hidden.filter { ConversationWorkSummary.category(of: $0) != nil }
         return calls.isEmpty ? nil : ConversationWorkSummary.title(for: calls, harness: harness)
     }
 
