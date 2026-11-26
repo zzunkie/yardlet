@@ -4806,7 +4806,10 @@ extension FakeHarnessAdapter: HarnessTaskTitleSuggesting {
 }
 
 extension FakeHarnessAdapter: HarnessSessionLifecycleProviding {
-    func archiveProviderSession(_ session: HarnessSessionHandle) async throws {
+    /// Records the archive against the attached session that holds the thread; this double keeps no
+    /// threads of its own for a detached one.
+    func archiveProviderSession(providerSessionID: String) async throws {
+        guard let session = handles.values.first(where: { $0.providerSessionID == providerSessionID }) else { return }
         try await archiveThread(session)
     }
 

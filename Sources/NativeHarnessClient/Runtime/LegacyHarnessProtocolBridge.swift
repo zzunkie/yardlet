@@ -770,17 +770,22 @@ actor LegacyHarnessProtocolBridge {
             return try payloadCodec.encode(HarnessProtocolCodexTaskTitleSuggestResult(
                 title: try await provider.suggestTaskTitle(fromRecentConversation: params.excerpt)))
         }
-        if request.method == .codexThreadUnarchive {
+        // Archive and unarchive name the thread, since the task need not be attached.
+        if request.method == .codexThreadArchive || request.method == .codexThreadUnarchive {
             let params = try request.decodeParams(HarnessProtocolCodexThreadReference.self)
             guard let provider = adapter as? any HarnessSessionLifecycleProviding else {
                 throw HarnessAdapterError.capabilityUnavailable(
                     "This compatibility adapter does not expose Codex thread actions"
                 )
             }
-            try await provider.unarchiveProviderSession(providerSessionID: params.providerSessionID)
+            if request.method == .codexThreadArchive {
+                try await provider.archiveProviderSession(providerSessionID: params.providerSessionID)
+            } else {
+                try await provider.unarchiveProviderSession(providerSessionID: params.providerSessionID)
+            }
             return try acknowledgement()
         }
-        if request.method == .codexThreadArchive || request.method == .codexThreadDelete {
+        if request.method == .codexThreadDelete {
             let params = try request.decodeParams(HarnessProtocolSessionReference.self)
             let handle = try requireHandle(params.localSessionID)
             guard let provider = adapter as? any HarnessSessionLifecycleProviding else {
@@ -788,11 +793,7 @@ actor LegacyHarnessProtocolBridge {
                     "This compatibility adapter does not expose Codex thread actions"
                 )
             }
-            if request.method == .codexThreadArchive {
-                try await provider.archiveProviderSession(handle)
-            } else {
-                try await provider.deleteProviderSession(handle)
-            }
+            try await provider.deleteProviderSession(handle)
             return try acknowledgement()
         }
         if request.method == .codexServerRequestRespond {

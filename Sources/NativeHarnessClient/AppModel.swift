@@ -2909,10 +2909,11 @@ final class AppModel {
         bootstrapError = nil
         var archivedInProvider = false
         do {
-            // An attached task whose provider keeps its own sessions is archived there before its
-            // local record is removed. Detached tasks keep the existing lazy local-archive behavior.
-            if let (provider, handle) = attachedSessionLifecycle(for: session.id) {
-                try await provider.archiveProviderSession(handle)
+            // A task whose provider keeps its own sessions is archived there before its local record
+            // is removed, attached or not, so the provider's own apps list it archived too.
+            if let (provider, providerSessionID) = try await providerSessionLifecycle(for: session) {
+                guard store.sessions.contains(where: { $0.id == session.id }) else { return nil }
+                try await provider.archiveProviderSession(providerSessionID: providerSessionID)
                 archivedInProvider = true
                 guard store.sessions.contains(where: { $0.id == session.id }) else { return nil }
             }
@@ -3068,7 +3069,8 @@ final class AppModel {
 
     /// Brings an archived task back to the sidebar with its provider session ID, account binding,
     /// storage scope, and project unchanged. A session Yardlet archived in the provider (a Codex
-    /// thread) is unarchived there first; one Yardlet never archived there is left alone. A Yardlet
+    /// thread) is unarchived there first, through the same provider side as archiving
+    /// (`providerSessionLifecycle`); one Yardlet never archived there is left alone. A Yardlet
     /// worktree that archiving removed is checked out again from its branch, or the notice says
     /// why it could not be; the task comes back either way. Nothing is resumed and no turn
     /// starts: the task attaches the next time it is opened.
@@ -3080,16 +3082,8 @@ final class AppModel {
         archivedTaskError = nil
         worktreeNotice = nil
         do {
-            if archived.isProviderArchived, !isVisualFixture,
-               let providerSessionID = session.providerSessionID {
-                try session.connection?.validate(for: session.harness)
-                let adapter = await registryAdapter(for: session)
-                _ = try await adapter.probeRuntime()
-                guard let provider = adapter as? any HarnessSessionLifecycleProviding else {
-                    throw HarnessAdapterError.capabilityUnavailable(
-                        "\(session.harness.displayName) session unarchive is unavailable"
-                    )
-                }
+            if archived.isProviderArchived,
+               let (provider, providerSessionID) = try await providerSessionLifecycle(for: session) {
                 try await provider.unarchiveProviderSession(providerSessionID: providerSessionID)
             }
             // The folder comes back first, while the row still shows it is being restored, so the
@@ -3416,9 +3410,34 @@ final class AppModel {
         }
     }
 
-    /// The provider side of an attached task's archive, delete, and rename, when its adapter keeps
-    /// its own sessions. A detached task has none, so these actions never wake a runtime, and the
-    /// visual fixture stays provider-free.
+    /// The provider side of a task's archive and unarchive, when its adapter keeps its own sessions
+    /// (Codex threads), with the session's provider ID. An attached task's goes through the runtime
+    /// it is attached to. Any other's goes through the adapter of its harness, runtime, account and
+    /// storage scope, the one a detached task's saved conversation is read with, after the checks
+    /// restoring a task makes; it starts that provider's server if none runs, but resumes nothing and
+    /// starts no turn. Nil when there is no provider side: a harness whose adapter keeps no sessions
+    /// of its own, no provider session yet, an account whose folder is gone (and its sessions with
+    /// it), or the visual fixture.
+    private func providerSessionLifecycle(
+        for session: SessionRecord
+    ) async throws -> (any HarnessSessionLifecycleProviding, String)? {
+        guard !isVisualFixture else { return nil }
+        if let (provider, handle) = attachedSessionLifecycle(for: session.id) {
+            return (provider, handle.providerSessionID)
+        }
+        guard handlesBySessionID[session.id] == nil, let providerSessionID = session.providerSessionID,
+              session.connection?.homePath.map({ FileManager.default.fileExists(atPath: $0) }) ?? true
+        else { return nil }
+        let adapter = await registryAdapter(for: session)
+        guard let provider = adapter as? any HarnessSessionLifecycleProviding else { return nil }
+        try session.connection?.validate(for: session.harness)
+        _ = try await adapter.probeRuntime()
+        return (provider, providerSessionID)
+    }
+
+    /// The provider side of an attached task's delete and rename, when its adapter keeps its own
+    /// sessions. A detached task has none, so these actions never wake a runtime, and the visual
+    /// fixture stays provider-free.
     private func attachedSessionLifecycle(
         for sessionID: UUID
     ) -> (any HarnessSessionLifecycleProviding, HarnessSessionHandle)? {
