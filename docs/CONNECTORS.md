@@ -562,9 +562,11 @@ becomes `yardlet_` and the first 8 hex digits of the spec's SHA-256 (16, then al
 then `mcp_yardlet_<8 hex>_<tool>`, which is why connector tool names stop at 43 characters. The CLI keeps each server
 name's tool schemas in `~/.gemini/antigravity-cli/mcp/<name>/` and does not remove them.
 
-Because Antigravity CLI packs MCP tools smallest-first into a shared eager schema budget and omits tools that do not
-fit, listing hundreds of connector tools or full verbose core schemas pushes Yardlet's largest tools (`create_task`,
-`update_scheduled_task`, `create_scheduled_task`, `spawn_task`, `run_agent`, `browser_snapshot`) out of the session.
+Because Antigravity CLI packs MCP tools smallest-first into an eager budget that the person's skills, workflows,
+subagents and every MCP server share (`customization-token-budget`, 20,000 tokens by default in agy 1.5.17) and leaves
+out whole the items that do not fit, listing hundreds of connector tools or full verbose core schemas pushes Yardlet's
+largest tools (`create_task`, `update_scheduled_task`, `create_scheduled_task`, `spawn_task`, `run_agent`,
+`browser_snapshot`) out of the session.
 For Antigravity tasks, `AgentToolBroker` uses a compact tool surface: connected services are listed through two gateway
 tools (`list_connector_tools` and `call_connector_tool`, `ConnectorGatewayToolCatalog`), simulator actions through two
 gateway tools (`list_simulator_tools` and `call_simulator_tool`, `SimulatorGatewayToolCatalog`), and core tool prose is
