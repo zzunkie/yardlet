@@ -959,6 +959,7 @@
 "Last checked: %@" = "마지막 확인: %@";
 "The task could not start. Your draft is still here." = "작업을 시작하지 못했습니다. 작성한 내용은 유지됩니다.";
 "Add a harness to start a task." = "작업을 시작하려면 하네스를 추가하세요.";
+"Connect a harness, such as Claude Code or Codex, to start a task." = "작업을 시작하려면 Claude Code나 Codex 같은 하네스를 연결하세요.";
 "Project" = "프로젝트";
 "No available harnesses" = "사용 가능한 하네스 없음";
 "Choose harness" = "하네스 선택";
@@ -3832,7 +3833,7 @@
 "Show view again" = "화면 다시 보기";
 "Connector view" = "커넥터 화면";
 "Waiting on you (home)" = "나를 기다리는 것";
-"Running (home)" = "돌고 있는 것";
+"Running (home)" = "실행 중";
 "Just finished" = "방금 끝남";
 "Unread mail" = "읽지 않은 메일";
 "Nothing is waiting on you" = "기다리는 일이 없습니다";
@@ -3847,7 +3848,7 @@
 "Checks failed" = "PR 검사 실패";
 "Pull request #%lld: checks failed" = "PR #%lld의 검사가 실패했습니다.";
 "Subtask" = "하위 작업";
-"%lld running in the family" = "실행 %lld";
+"%lld running in the family" = "실행 중 %lld";
 "%lld to approve" = "승인 %lld";
 "%lld to answer" = "질문 %lld";
 "%lld in the browser" = "브라우저 %lld";

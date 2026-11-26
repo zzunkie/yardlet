@@ -270,19 +270,28 @@ final class AppModelRemoteBridge: RemoteBridge {
     /// What the newest request a task waits on asks, on one line for the home's desk: a question's first
     /// line, or the command to approve before its description, masked as a notification's line is. The
     /// line is cut where the desk's row ends; the request's card shows it whole.
-    static func requestLine(of session: SessionRecord, in model: AppModel) -> String? {
-        switch newestRequest(of: session, in: model) {
+    static func requestLine(of session: SessionRecord, in model: AppModel) -> NewTaskHomeRequestLine? {
+        let line: (text: String?, kind: NewTaskHomeRequestLine.Kind)? = switch newestRequest(of: session, in: model) {
         case let .held(request)? where request.form == nil:
-            RemoteSummary.line([request.command ?? request.detail ?? request.title], limit: requestLineLimit)
+            approvalLine(command: request.command, other: request.detail ?? request.title)
         case let .held(request)?:
-            RemoteTaskProjection.requestSummary(request)
+            (RemoteTaskProjection.requestSummary(request), .question)
         case let .permission(request)? where request.structured == nil:
-            RemoteSummary.line([request.command ?? request.detail ?? request.title], limit: requestLineLimit)
+            approvalLine(command: request.command, other: request.detail ?? request.title)
         case let .permission(request)?:
-            RemoteTaskProjection.requestSummary(request)
+            (RemoteTaskProjection.requestSummary(request), .question)
         case nil:
             nil
         }
+        guard let line, let text = line.text else { return nil }
+        return NewTaskHomeRequestLine(text: text, kind: line.kind)
+    }
+
+    private static func approvalLine(command: String?, other: String?) -> (text: String?, kind: NewTaskHomeRequestLine.Kind) {
+        if let command, !command.isEmpty {
+            return (RemoteSummary.line([command], limit: requestLineLimit), .command)
+        }
+        return (RemoteSummary.line([other], limit: requestLineLimit), .approval)
     }
 
     /// Longer than a notification's: the desk's row is wider than a lock screen's.

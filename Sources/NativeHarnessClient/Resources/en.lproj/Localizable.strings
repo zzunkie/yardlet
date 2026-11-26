@@ -961,6 +961,7 @@
 "Last checked: %@" = "Last checked: %@";
 "The task could not start. Your draft is still here." = "The task could not start. Your draft is still here.";
 "Add a harness to start a task." = "Add a harness to start a task.";
+"Connect a harness, such as Claude Code or Codex, to start a task." = "Connect a harness, such as Claude Code or Codex, to start a task.";
 "Project" = "Project";
 "No available harnesses" = "No available harnesses";
 "Choose harness" = "Choose harness";

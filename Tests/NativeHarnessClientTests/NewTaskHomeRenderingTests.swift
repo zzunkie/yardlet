@@ -387,8 +387,11 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         }, report["home-chat"]!)
         XCTAssertTrue(shows("home-chat", L10n.string("What should we build?")))
 
-        // Nothing to show: the recent tasks and the import links.
-        XCTAssertTrue(shows("home-empty", L10n.string("Recent tasks")), report["home-empty"]!)
+        // Nothing to show and no task yet: one way to import, under no empty heading.
+        XCTAssertFalse(shows("home-empty", L10n.string("Recent tasks")), report["home-empty"]!)
+        XCTAssertTrue(shows("home-empty", L10n.string("Import Conversations from Other Apps…")), report["home-empty"]!)
+        XCTAssertFalse((elements["home-empty"] ?? []).contains { $0.label == L10n.string("Import conversation…") },
+                       report["home-empty"]!)
     }
 
     /// Compare active controls without making the test window key or visible. An unshown window's
@@ -427,7 +430,7 @@ final class NewTaskHomeRenderingTests: XCTestCase {
     /// pull request whose checks fail, a plan limit, two results just finished, three daily schedules and a
     /// one-off run, and three unread threads. A subtask its coordinator already read is not on the desk. `cleared` is the same
     /// day after the last waiting line was handled; `quiet` has nothing waiting, running or unread.
-    private func deskFixture(_ day: DeskDay) -> (fixture: Fixture, requestLines: [UUID: String]) {
+    private func deskFixture(_ day: DeskDay) -> (fixture: Fixture, requestLines: [UUID: NewTaskHomeRequestLine]) {
         let w = Self.words
         let web = root.appending(path: "example-web", directoryHint: .isDirectory)
         let designKit = root.appending(path: "design-kit", directoryHint: .isDirectory)
@@ -451,7 +454,7 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         var details: [UUID: TaskAttentionDetail] = [:]
         var turns: [UUID: TaskLatestTurn] = [:]
         var answers: [UUID: String] = [:]
-        var lines: [UUID: String] = [:]
+        var lines: [UUID: NewTaskHomeRequestLine] = [:]
         var sessions: [SessionRecord] = []
 
         let coordinator = make(w("Codex/Claude 코드 경험 개선", "Improve the Codex/Claude coding experience"),
@@ -461,7 +464,7 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         let reattach = make(w("원격 패널 터미널 다시 붙기", "Reattach the remote panel's terminal"), in: repository,
                             minutes: busy ? 2 : 1, status: busy ? .waitingForApproval : (quiet ? .completed : .running),
                             parent: coordinator)
-        lines[reattach.id] = "git push -u origin remote-terminal-reattach && gh pr create --base main --head remote-terminal-reattach --title \"Reattach the remote panel's terminal after the host restarts\" --body-file /private/tmp/remote-terminal-reattach/pr-body.md --label bug --draft"
+        lines[reattach.id] = NewTaskHomeRequestLine(text: "git push -u origin remote-terminal-reattach && gh pr create --base main --head remote-terminal-reattach --title \"Reattach the remote panel's terminal after the host restarts\" --body-file /private/tmp/remote-terminal-reattach/pr-body.md --label bug --draft", kind: .command)
         let report = make(w("문제 신고 메뉴", "Report a Problem menu"), in: repository, minutes: 3,
                           status: quiet ? .completed : .running, parent: coordinator)
         turns[report.id] = TaskLatestTurn(startedAt: ago(32))
@@ -485,8 +488,10 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         let naming = make(w("탐색 메뉴 이름 정하기", "Name the archive menu"), .codex, in: repository, minutes: busy ? 6 : 1,
                           status: quiet ? .completed : .running)
         if busy { details[naming.id] = TaskAttentionDetail(pendingRequest: .input) }
-        lines[naming.id] = w("보관한 작업을 모아 두는 메뉴 이름을 \u{201C}보관함\u{201D}과 \u{201C}보관된 작업\u{201D} 중 무엇으로 할까요?",
-                             "Should the menu that collects archived tasks be called \u{201C}Archive\u{201D} or \u{201C}Archived tasks\u{201D}?")
+        lines[naming.id] = NewTaskHomeRequestLine(
+            text: w("보관한 작업을 모아 두는 메뉴 이름을 \u{201C}보관함\u{201D}과 \u{201C}보관된 작업\u{201D} 중 무엇으로 할까요?",
+                    "Should the menu that collects archived tasks be called \u{201C}Archive\u{201D} or \u{201C}Archived tasks\u{201D}?"),
+            kind: .question)
         let blog = make(w("블로그 목록 첫 화면 속도", "Blog list first-load speed"), .codex, in: web, minutes: busy ? 25 : 1,
                         status: busy || quiet ? .completed : .running)
         let weekly = make(w("주간 리포트 정리", "Tidy the weekly report"), in: designKit, minutes: busy ? 41 : 1,
@@ -527,7 +532,7 @@ final class NewTaskHomeRenderingTests: XCTestCase {
             TranscriptEntry(content: .user(text: w("PR을 열어 주세요", "Open the pull request"))),
             TranscriptEntry(content: .permission(PermissionRequest(
                 id: "push", title: "Bash", detail: w("갈래를 올리고 초안 PR을 엽니다.", "Pushes the branch and opens a draft pull request."),
-                command: lines[reattach.id], toolCallID: "toolu_push"), state: .pending)),
+                command: lines[reattach.id]?.text, toolCallID: "toolu_push"), state: .pending)),
         ]]
         let names = [ProjectSidebarPresentation.normalizedPath(for: repository): "yardlet",
                      ProjectSidebarPresentation.normalizedPath(for: web): "example-web",
