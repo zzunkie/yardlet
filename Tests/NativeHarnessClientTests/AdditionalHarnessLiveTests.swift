@@ -128,7 +128,7 @@ final class AdditionalHarnessLiveTests: XCTestCase {
         XCTAssertTrue(metrics.allSatisfy { $0.id.hasPrefix("antigravity:") && $0.usedFraction != nil })
     }
 
-    /// "Steer Antigravity turns" on a real `agy acp`: a message left while the agent runs a command reaches the
+    /// "Send now in Antigravity tasks" on a real `agy acp`: a message left while the agent runs a command reaches the
     /// same turn before its next model call, and the stream reports it where it joined. One short turn on the
     /// account already signed in, with a temporary `--gemini-dir`, so the plugin goes there and nothing is
     /// added to the person's own Antigravity folder.

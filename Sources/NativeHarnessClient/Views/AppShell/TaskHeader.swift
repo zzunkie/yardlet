@@ -209,7 +209,7 @@ struct TaskHeaderStatus: View {
 /// The servers a task's processes run, after its pull request, as plain text: "localhost:3000",
 /// which opens it in the task's browser (the Claude app names its preview's server "localhost:3000"
 /// the same way). With more than one, "and 1 more" beside it lists them all, each with the process
-/// listening. Nothing shows without one, or with Settings › General's "Show servers tasks start" off.
+/// listening. Nothing shows without one, or with Settings › General's "Show servers that tasks start" off.
 struct TaskServersLink: View {
     /// All of them (the first and the list), the first alone, or none, by the header's room.
     enum Extent { case all, first, none }

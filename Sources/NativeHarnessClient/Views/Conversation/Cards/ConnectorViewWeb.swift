@@ -106,13 +106,14 @@ final class MCPAppViewController: NSObject {
     }
 
     /// Draws a `show_widget` call's HTML as a visualization without the Codex skill's kit: the same sandbox, policy
-    /// and bridge, in the system's plain styles.
+    /// and bridge, with Yardlet's theme (`YardletWidgetTheme`) under the widget's own styles.
     func startWidget(_ widget: ConversationWidget, key: String, isDark: Bool, maximumHeight: CGFloat,
                      openLink: @escaping @MainActor (URL) -> Void, followUp: (@MainActor (String) -> Void)?) {
         startPage(uri: WidgetToolCatalog.showWidget, key: key, isDark: isDark, maximumHeight: maximumHeight,
                   openLink: openLink, followUp: followUp) { state in
             await Task.detached(priority: .userInitiated) {
-                CodexVisualizationPage(html: CodexVisualizationPage.page(widget.code, kit: nil, state: state),
+                CodexVisualizationPage(html: CodexVisualizationPage.page(widget.code, kit: nil, state: state,
+                                                                          stylesheet: YardletWidgetTheme.stylesheet),
                                        policy: CodexVisualizationPage.policy)
             }.value
         }

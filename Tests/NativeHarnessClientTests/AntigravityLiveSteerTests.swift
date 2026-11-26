@@ -2,7 +2,7 @@ import Foundation
 import XCTest
 @testable import NativeHarnessClient
 
-/// "Steer Antigravity turns": the plugin Yardlet adds and removes, its hook as `agy` runs it, and the
+/// "Send now in Antigravity tasks": the plugin Yardlet adds and removes, its hook as `agy` runs it, and the
 /// adapter's account of what the running turn read, as `agy acp` 1.5.17 reports an injected message.
 final class AntigravityLiveSteerTests: XCTestCase {
     private var root: URL!
@@ -220,7 +220,7 @@ final class AntigravityLiveSteerTests: XCTestCase {
         XCTAssertEqual(FollowUpPolicy.antigravity.heldStatus, L10n.string("Delivered · Antigravity reads it at its next step"))
     }
 
-    /// An app with "Steer Antigravity turns" on, whose Antigravity task's first prompt is running.
+    /// An app with "Send now in Antigravity tasks" on, whose Antigravity task's first prompt is running.
     @MainActor
     private func runningApp() async throws -> (AppModel, SessionRecord, FakeACPTransport, AntigravityLiveSteer, String) {
         UserDefaults.yardlet.set(true, forKey: AntigravityLiveSteer.preferenceKey)

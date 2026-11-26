@@ -271,12 +271,13 @@ struct SettingsCenterView: View {
                                     if let error = remoteHost?.commandError {
                                         Text(error)
                                             .font(SettingsMetrics.detailFont)
-                                            .foregroundStyle(Color.orange)
+                                            .foregroundStyle(ParityTheme.warningText)
                                             .fixedSize(horizontal: false, vertical: true)
                                     }
                                     detail
                                 }
                                 .padding(SettingsMetrics.pageInset)
+                                .padding(.bottom, SettingsMetrics.pageBottomInset)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             }
                             // The page of a section just chosen lays out first, then its row comes into view.
@@ -1272,7 +1273,8 @@ private struct CredentialHidingContentRow: View {
 /// The sizes every settings page shares, as both apps set theirs, on the design tokens at the standard size (Settings
 /// keeps its size under View › Zoom): a 13 pt title, a 12 pt line under it in the secondary colour, 12 pt above and
 /// below, 16 pt inside a group's sides; a group's heading 8 pt over it and 24 pt between a page's groups, so a heading
-/// reads with the rows under it; the page's 18 pt heading 16 pt over its content, inside a 20 pt margin.
+/// reads with the rows under it; the page's 18 pt heading 16 pt over its content, inside a 20 pt margin, with 40 pt
+/// under a scrolling page's end.
 enum SettingsMetrics {
     static let titleFont = Font.parity(.control, weight: .medium, scale: 1)
     static let detailFont = Font.parity(.caption, scale: 1)
@@ -1283,6 +1285,9 @@ enum SettingsMetrics {
     static let groupSpacing = ParitySpace.s24
     static let headerSpacing = ParitySpace.s16
     static let pageInset = ParitySpace.s20
+    /// Added under a scrolling page's last group, so scrolled to its end the group stands clear of the window's
+    /// edge rather than running into it.
+    static let pageBottomInset = ParitySpace.s20
     /// The section list's margin, and the inset of its rows' words.
     static let listInset = ParitySpace.s12
     static let listRowInset = ParitySpace.s8
