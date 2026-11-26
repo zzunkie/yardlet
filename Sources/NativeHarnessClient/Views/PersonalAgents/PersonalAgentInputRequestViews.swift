@@ -308,7 +308,7 @@ struct PersonalAgentRequestCard: View {
         let disabled = answer.result == nil || phase != .answerable
         if answer.isPrimary {
             Button(answer.title, role: answer.role, action: send)
-                .parityProminentButton()
+                .parityPrimaryActionButton()
                 .parityPointer()
                 .disabled(disabled)
                 .accessibilityLabel(answer.title)

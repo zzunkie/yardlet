@@ -80,6 +80,35 @@ final class PermissionCardRenderingTests: XCTestCase {
         try render(entries, height: 1_500, name: "other-changes")
     }
 
+    /// The answer a row leads to keeps its title on one line at its own width, as a native button does, so a
+    /// row too narrow for its answers stacks them rather than wrapping the title inside the fill; and the
+    /// front card of the dock counts the requests behind it.
+    func testTheLeadingAnswerKeepsItsTitleOnOneLineAndTheBandCountsTheRequestsBehind() throws {
+        let button = NSHostingController(rootView: Button("Allow for this conversation") {}.parityPrimaryActionButton())
+        let own = button.sizeThatFits(in: CGSize(width: 1_000, height: 1_000))
+        let narrow = button.sizeThatFits(in: CGSize(width: 40, height: 1_000))
+        XCTAssertEqual(narrow, own, "Offered less room, the button keeps its one line and its size")
+        XCTAssertGreaterThanOrEqual(own.height, 24)
+
+        let entry = TranscriptEntry(content: .plan(""))
+        let approval = ConversationRequest(id: "bash", title: "Bash", command: "swift test", state: .pending,
+                                           responses: ConversationRequestResponses.plain(providerActions: []),
+                                           source: .transcript(entry))
+        for width: CGFloat in [640, 180] {
+            let host = WindowlessRender.Host(
+                ConversationRequestCard(request: approval, actions: ConversationActions(chooseOption: { _, _ in }),
+                                        waitingBehind: 1)
+                    .frame(width: width).fixedSize(horizontal: false, vertical: true),
+                size: NSSize(width: width, height: 400))
+            defer { host.close() }
+            host.settle(passes: 4)
+            let elements = host.accessibilityElements()
+            XCTAssertTrue(elements.contains { $0.value == L10n.format("%lld more waiting", Int64(1)) }, "\(elements)")
+            XCTAssertEqual(elements.filter { $0.role == "AXButton" }.map(\.label),
+                           [L10n.string("Deny"), L10n.string("Allow")], "\(width)")
+        }
+    }
+
     private func request(
         _ id: String, tool: String, name: String, detail: String, input: JSONValue,
         actions: [PermissionRequestAction] = []

@@ -7,6 +7,10 @@ struct ControlRowLayout: Layout {
     var rowSpacing: CGFloat = 4
     var pinsTrailingActions = false
 
+    /// What sums of widths may differ by in floating point and still fit: actions shortened to exactly the room
+    /// left could add up a hair over the row's width and wrap.
+    private static let tolerance: CGFloat = 0.01
+
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let idealSizes = subviews.map { $0.sizeThatFits(.unspecified) }
         let idealWidth = idealSizes.reduce(0) { $0 + $1.width } + spacing * CGFloat(max(0, idealSizes.count - 1))
@@ -62,7 +66,7 @@ struct ControlRowLayout: Layout {
             let room = width - leading
             if leading + actions.width > width, room >= actions.width / 2 {
                 let shortened = subviews[subviews.count - 1].sizeThatFits(ProposedViewSize(width: room, height: nil))
-                if shortened.width <= room { sizes[sizes.count - 1] = shortened }
+                if shortened.width <= room + Self.tolerance { sizes[sizes.count - 1] = shortened }
             }
         }
         return sizes
@@ -76,12 +80,13 @@ struct ControlRowLayout: Layout {
             let itemWidth = min(size.width, width)
             var requiredWidth = itemWidth
             // When possible, keep the last input control beside the actions instead of
-            // leaving only a send button on a second row.
-            if pinsTrailingActions, index == sizes.count - 2, let actions = sizes.last,
+            // leaving only a send button on a second row, but not by leaving the row before
+            // it one control alone (the composer's "+").
+            if pinsTrailingActions, index == sizes.count - 2, row.indices.count != 1, let actions = sizes.last,
                itemWidth + spacing + actions.width <= width {
                 requiredWidth += spacing + actions.width
             }
-            if !row.indices.isEmpty, row.width + spacing + requiredWidth > width {
+            if !row.indices.isEmpty, row.width + spacing + requiredWidth > width + Self.tolerance {
                 result.append(row)
                 row = Row()
             }

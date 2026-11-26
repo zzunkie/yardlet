@@ -28,6 +28,13 @@ final class WorkspaceFileTests: XCTestCase {
         XCTAssertEqual(try WorkspaceFileLocation.resolve(URL(string: "Sources/../Sources/한글 👩🏽‍💻.swift#L2-L4")!, in: root).line, 2)
     }
 
+    func testTheFilesListShowsAFolderOnlyForAFileInOne() {
+        XCTAssertNil(FilesPane.folder(of: "README.md"))
+        XCTAssertEqual(FilesPane.folder(of: "Sources/Parser/Parser.swift"), "Sources/Parser")
+        XCTAssertEqual(FilesPane.folder(of: "/tmp/notes.txt"), "/tmp")
+        XCTAssertNil(FilesPane.folder(of: "/notes.txt"))
+    }
+
     func testRealColonFilenameDoesNotBecomeLineNumber() throws {
         let root = try workspace()
         let url = try write("notes:42", text: "colon filename", in: root)

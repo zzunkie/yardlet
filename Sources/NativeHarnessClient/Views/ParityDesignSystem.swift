@@ -784,22 +784,40 @@ extension View {
     }
 }
 
-/// `parityPrimaryActionButton()`: a native bordered button's size, filled with the action fill.
+/// `parityPrimaryActionButton()`: a native bordered button's size, filled with the action fill. Its title stays on one
+/// line at its own width, as a native button's does, so a row of answers too narrow for it stacks them
+/// (`ViewThatFits`) rather than wrapping the title inside the fill.
 struct ParityPrimaryActionButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        ParityPrimaryActionLabel(configuration: configuration)
+    }
+}
+
+private struct ParityPrimaryActionLabel: View {
+    let configuration: ButtonStyleConfiguration
+    @State private var isHovering = false
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.yardletInterfaceScale) private var interfaceScale
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    func makeBody(configuration: Configuration) -> some View {
+    var body: some View {
         let shape = RoundedRectangle(cornerRadius: ParityRadius.control, style: .continuous)
         configuration.label
             .font(.parity(.control, weight: .medium, scale: interfaceScale))
+            .lineLimit(1)
+            .fixedSize()
             .foregroundStyle(isEnabled ? AnyShapeStyle(ParityTheme.primaryActionForeground) : AnyShapeStyle(.tertiary))
             .padding(.horizontal, ParitySpace.s8)
-            .frame(minHeight: 22 * interfaceScale)
+            .padding(.vertical, 3)
+            // A native bordered button's height beside it, which View › Zoom does not change.
+            .frame(minHeight: 24)
             .background(isEnabled ? AnyShapeStyle(ParityTheme.primaryActionFill) : AnyShapeStyle(ParityTheme.subtleFill),
                         in: shape)
-            .opacity(configuration.isPressed ? 0.85 : 1)
+            // Hovered as Send is (`ParityIconButton`), pressed a little further.
+            .opacity(configuration.isPressed ? 0.8 : (isEnabled && isHovering ? 0.88 : 1))
             .contentShape(shape)
+            .onHover { isHovering = $0 }
+            .animation(ParityMotion.easeOut(reduceMotion: reduceMotion, duration: 0.1), value: isHovering)
     }
 }
 

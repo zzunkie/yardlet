@@ -103,7 +103,9 @@ struct ConversationLiveWorkLine<Cell: View>: View {
                 mark
                     .frame(width: 14 * interfaceScale, height: 14 * interfaceScale)
                 ShimmeringText(text: live.activity.text, isShimmering: live.activity.isProviderWorking)
-                    .foregroundStyle(live.activity.isWaitingOnPerson ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary))
+                    // Waiting on the person, the words read in primary text beside the orange hand: orange
+                    // text on the light canvas is 2.25:1, under the 4.5:1 that words need.
+                    .foregroundStyle(live.activity.isWaitingOnPerson ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .layoutPriority(1)
