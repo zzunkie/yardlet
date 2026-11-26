@@ -101,3 +101,12 @@ struct NewTaskHomeRequestLine: Equatable, Sendable {
     let text: String
     let kind: Kind
 }
+
+extension SidebarTaskStatus {
+    /// The state a home line names for a task waiting on `request`: a question its task reports as an approval
+    /// reads as the question it is, with its words and color; every other state stays the task's own, in the
+    /// colors the sidebar gives it.
+    func asking(_ request: NewTaskHomeRequestLine?) -> SidebarTaskStatus {
+        self == .awaitingApproval && request?.kind == .question ? .needsInput : self
+    }
+}

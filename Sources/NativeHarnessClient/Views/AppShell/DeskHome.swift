@@ -673,7 +673,7 @@ struct DeskWaitingRow: View, @MainActor Equatable {
                        markRead: onMarkRead, action: { onChoose((NSApp.currentEvent?.clickCount ?? 1) > 1) }) {
             HStack(alignment: .center, spacing: 9) {
                 RoundedRectangle(cornerRadius: 1.5, style: .continuous)
-                    .fill(statusBarColor)
+                    .fill(statusBarColor(request))
                     .frame(width: 3)
                     .padding(.vertical, 2)
                     .accessibilityHidden(true)
@@ -694,10 +694,11 @@ struct DeskWaitingRow: View, @MainActor Equatable {
         .accessibilityAddTraits(isAnswering ? .isSelected : [])
     }
 
-    /// The zone's waiting orange for whatever asks the person, an approval as a question; red for what failed.
-    private var statusBarColor: Color {
+    /// The sidebar's colors: green for an approval, orange for a question or anything else that waits, red for
+    /// what failed.
+    private func statusBarColor(_ request: NewTaskHomeRequestLine?) -> Color {
         switch item.kind {
-        case .request: .orange
+        case let .request(status): status.asking(request) == .awaitingApproval ? .green : .orange
         case .stopped(.failed), .checksFailed: .red
         case .stopped: .orange
         case .report: ParityTheme.accent
@@ -710,16 +711,16 @@ struct DeskWaitingRow: View, @MainActor Equatable {
         return nil
     }
 
-    private var readableLabelColor: Color {
-        ThemeContrast.readableTint(statusBarColor, over: ThemeSurface.canvas.resolve(in: environment), in: environment)
+    private func readableLabelColor(_ request: NewTaskHomeRequestLine?) -> Color {
+        ThemeContrast.readableTint(statusBarColor(request), over: ThemeSurface.canvas.resolve(in: environment), in: environment)
     }
 
     private func firstLine(showsPlace: Bool, request: NewTaskHomeRequestLine?) -> some View {
         HStack(spacing: 7) {
-            mark.accessibilityHidden(true)
+            mark(request).accessibilityHidden(true)
             Text(label(request))
                 .font(.parity(.caption, weight: .semibold, scale: interfaceScale))
-                .foregroundStyle(readableLabelColor)
+                .foregroundStyle(readableLabelColor(request))
                 .lineLimit(1)
                 .fixedSize()
             HarnessIdentityIcon(harness: item.session.harness, size: 14)
@@ -741,9 +742,9 @@ struct DeskWaitingRow: View, @MainActor Equatable {
     }
 
     @ViewBuilder
-    private var mark: some View {
+    private func mark(_ request: NewTaskHomeRequestLine?) -> some View {
         if let status = item.status {
-            HomeTaskStatusMark(status: status)
+            SidebarTaskStatusView(status: status.asking(request))
         } else {
             Image(systemName: "xmark.circle")
                 .font(.system(size: 10.5 * interfaceScale, weight: .semibold))
@@ -752,11 +753,11 @@ struct DeskWaitingRow: View, @MainActor Equatable {
         }
     }
 
-    /// The state's name; a question a task waits on is named as one, whatever state the task reports.
+    /// The state's name; a question its task reports as an approval is named as a question.
     private func label(_ request: NewTaskHomeRequestLine?) -> String {
         switch item.kind {
-        case .request where request?.kind == .question: SidebarTaskStatus.needsInput.homeName
-        case let .request(status), let .stopped(status): status.homeName
+        case let .request(status): status.asking(request).homeName
+        case let .stopped(status): status.homeName
         case .checksFailed: L10n.string("Checks failed")
         case .report: L10n.string("Coordinator report")
         }
@@ -865,7 +866,7 @@ struct DeskFamilyView: View, @MainActor Equatable {
     @ViewBuilder
     private var familyMark: some View {
         if let status = family.status {
-            HomeTaskStatusMark(status: status)
+            SidebarTaskStatusView(status: status)
         } else {
             // The top task does nothing itself while its family works.
             Circle().strokeBorder(.tertiary, lineWidth: 1).frame(width: 7, height: 7).frame(width: 14, height: 14)
@@ -875,7 +876,7 @@ struct DeskFamilyView: View, @MainActor Equatable {
     private func memberLine(_ member: DeskFamily.Member) -> some View {
         Button { onOpen(member.id) } label: {
             HStack(spacing: 7) {
-                HomeTaskStatusMark(status: member.status).accessibilityHidden(true)
+                SidebarTaskStatusView(status: member.status).accessibilityHidden(true)
                 Text(member.session.title)
                     .font(.parity(.caption, scale: interfaceScale))
                     .lineLimit(1)

@@ -421,13 +421,16 @@ struct NewTaskHomeLists: View {
     private func taskLine(_ task: NewTaskProjectTask) -> some View {
         switch task {
         case let .attention(row) where row.waitsOnPerson:
-            let tint: Color = switch row.status {
+            // A question its task reports as an approval reads as the question it is, as on the desk.
+            let status = row.status == .awaitingApproval ? row.status.asking(activity.requestLine(row.session)) : row.status
+            let tint: Color = switch status {
+            case .awaitingApproval: .green
             case .failed: .red
             default: .orange
             }
-            HomeTaskStatusMark(status: row.status)
+            SidebarTaskStatusView(status: status)
                 .accessibilityHidden(true)
-            Text(row.status.homeName)
+            Text(status.homeName)
                 .font(.system(size: 12 * interfaceScale, weight: .semibold))
                 .foregroundStyle(ThemeContrast.readableTint(tint, over: ThemeSurface.canvas.resolve(in: environment), in: environment))
                 .lineLimit(1)
@@ -710,26 +713,11 @@ extension NewTaskHomeListKeyboard.Entry {
 private extension NewTaskFolderRow {
     var tint: Color {
         switch self {
-        case .waiting: .orange
+        case .waiting(_, .approval): .green
+        case .waiting(_, .input): .orange
         case .runningHere: .orange
         case .failingChecks: .red
         case .continueBranch, .resume: .secondary
-        }
-    }
-}
-
-/// A task's state mark on the home and the desk: the sidebar's (`SidebarTaskStatusView`), except that an approval
-/// takes the waiting orange a question has, so every line that waits on the person reads as one color
-/// (docs/DESIGN_SYSTEM.md, "Semantic colors"); the line's own words name which it waits for.
-struct HomeTaskStatusMark: View {
-    let status: SidebarTaskStatus
-
-    var body: some View {
-        if status == .awaitingApproval {
-            SidebarTaskStatusView(status: .needsInput)
-                .accessibilityLabel(status.accessibilityName)
-        } else {
-            SidebarTaskStatusView(status: status)
         }
     }
 }

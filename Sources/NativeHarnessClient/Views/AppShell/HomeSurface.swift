@@ -443,11 +443,15 @@ struct NewTaskHeroTitle<Destination: View>: View {
                 if !parts.before.isEmpty { text(parts.before, size: 22) }
                 line((before: "", project: parts.project, after: parts.after), size: 22)
             }
+            // Narrowest: a line each, the clear button still ending the sentence's last line.
             VStack(spacing: 2) {
                 if !parts.before.isEmpty { text(parts.before, size: 22) }
-                if let project = parts.project { projectMenu(project, size: 22) }
-                if !parts.after.isEmpty { text(parts.after, size: 22) }
-                clearButton(size: 22)
+                if parts.after.isEmpty {
+                    line((before: "", project: parts.project, after: ""), size: 22)
+                } else {
+                    if let project = parts.project { projectMenu(project, size: 22) }
+                    line((before: "", project: nil, after: parts.after), size: 22)
+                }
             }
         }
         .accessibilityElement(children: .contain)
@@ -461,14 +465,15 @@ struct NewTaskHeroTitle<Destination: View>: View {
             if let project = parts.project { projectMenu(project, size: size) }
             if !parts.after.isEmpty { text(parts.after, size: size) }
             clearButton(size: size)
-                .padding(.leading, 4)
         }
     }
 
+    /// Only a title that names a project offers to clear it.
     @ViewBuilder
     private func clearButton(size: CGFloat) -> some View {
-        if let onClearProject {
+        if kind.parts.project != nil, let onClearProject {
             NewTaskProjectClearButton(size: size * interfaceScale, onClear: onClearProject)
+                .padding(.leading, 4)
         }
     }
 
@@ -1265,7 +1270,7 @@ private struct NewTaskComposer: View {
     @ViewBuilder
     private func guidanceButton(_ title: String, prominent: Bool, perform: @escaping () -> Void) -> some View {
         if prominent {
-            Button(L10n.string(title), action: perform).buttonStyle(.borderedProminent).parityPointer()
+            Button(L10n.string(title), action: perform).parityProminentButton().parityPointer()
         } else {
             Button(L10n.string(title), action: perform).parityPointer()
         }

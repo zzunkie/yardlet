@@ -80,17 +80,14 @@ final class InlineMarkAlignmentRenderingTests: XCTestCase {
     }
 
     func testTheNewTaskTitlesClearButtonSitsOnItsWordsMiddle() throws {
-        // The button after the project's name, set on the name's capitals: the name's ink from its
-        // top, as tall as the capitals, leaving out the dotted line under it. The sentence around the
-        // name follows the system language.
-        let capHeight = NSFont.systemFont(ofSize: 28).capHeight
+        // The button ends the sentence, set on its words' capitals. The sentence follows the system language and
+        // ends in "?" in English and Korean, as tall as the capitals and parted from the word before it by a
+        // narrower gap than words: ink is split at half a point so the "?" stands alone and is the measure.
         let (offset, tolerance) = try Self.offset(named: "new-task-title-clear", size: NSSize(width: 640, height: 60),
-                                                  pick: { clusters, scale in
-            guard let button = clusters.firstIndex(where: { $0.isRound(widthPoints: 6...14, scale: scale) }),
+                                                  gap: 0.5, pick: { clusters, scale in
+            guard let button = clusters.lastIndex(where: { $0.isRound(widthPoints: 6...14, scale: scale) }),
                   button > 0 else { return nil }
-            var name = clusters[button - 1]
-            name.maxY = name.minY + Int((capHeight * scale).rounded()) - 1
-            return (clusters[button], name)
+            return (clusters[button], clusters[button - 1])
         }) {
             NewTaskHeroTitle(kind: .build(project: "EHEH"), onClearProject: {}) { EmptyView() }
         }
@@ -106,7 +103,7 @@ final class InlineMarkAlignmentRenderingTests: XCTestCase {
     /// first nor its last ink.
     private static func offset<Content: View>(
         named name: String, markIsFirst: Bool = false, skipsBorder: Bool = false,
-        size: NSSize = NSSize(width: 360, height: 44),
+        size: NSSize = NSSize(width: 360, height: 44), gap: CGFloat = 4,
         pick: (([Cluster], CGFloat) -> (mark: Cluster, words: Cluster)?)? = nil,
         @ViewBuilder content: () -> Content
     ) throws -> (offset: CGFloat, tolerance: CGFloat) {
@@ -121,7 +118,7 @@ final class InlineMarkAlignmentRenderingTests: XCTestCase {
         }
         let capture = captures[0]
         let scale = capture.backingScaleFactor
-        let clusters = Array(inkClusters(capture.bitmap, scale: scale).dropFirst(skipsBorder ? 1 : 0))
+        let clusters = Array(inkClusters(capture.bitmap, scale: scale, gap: gap).dropFirst(skipsBorder ? 1 : 0))
         let bound = tolerance(atScale: scale)
         XCTAssertGreaterThanOrEqual(clusters.count, 2, "\(name): \(clusters)")
         guard clusters.count >= 2 else { return (.infinity, bound) }
@@ -148,7 +145,8 @@ final class InlineMarkAlignmentRenderingTests: XCTestCase {
 
     /// Runs of columns with ink, split where at least a few blank columns separate them, each with
     /// the rows its ink covers. "EHEH" is one cluster: its letters sit closer than the gap.
-    private static func inkClusters(_ bitmap: NSBitmapImageRep, scale: CGFloat) -> [Cluster] {
+    /// Ink split where `gap` points of blank columns part it.
+    private static func inkClusters(_ bitmap: NSBitmapImageRep, scale: CGFloat, gap: CGFloat = 4) -> [Cluster] {
         // Inside a card when the line draws one: the right end of the middle row holds no ink.
         let background = bitmap.colorAt(x: bitmap.pixelsWide - 40, y: bitmap.pixelsHigh / 2)?.usingColorSpace(.deviceRGB)
         func isInk(_ x: Int, _ y: Int) -> Bool {
@@ -157,7 +155,7 @@ final class InlineMarkAlignmentRenderingTests: XCTestCase {
                 + abs(c.blueComponent - b.blueComponent)
             return d > 0.12
         }
-        let gap = Int(4 * scale)
+        let gap = max(1, Int(gap * scale))
         var clusters: [Cluster] = []
         var blank = gap
         // Inside the card's border, which is ink of its own.

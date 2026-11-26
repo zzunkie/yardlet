@@ -959,7 +959,6 @@
 "Last checked: %@" = "最終確認: %@";
 "The task could not start. Your draft is still here." = "タスクを開始できませんでした。下書きはそのまま残っています。";
 "Add a harness to start a task." = "タスクを開始するにはハーネスを追加してください。";
-"Connect a harness, such as Claude Code or Codex, to start a task." = "タスクを開始するには、Claude Code や Codex などのハーネスを接続してください。";
 "Project" = "プロジェクト";
 "No available harnesses" = "利用可能なハーネスがありません";
 "Choose harness" = "ハーネスを選択";

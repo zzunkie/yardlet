@@ -164,6 +164,35 @@ final class NewTaskHomeTests: XCTestCase {
                        rows.map(\.id))
     }
 
+    /// What a waiting task's request says on the desk, and how it is drawn: a command as code, any other approval
+    /// (a plan to review among them, as the task's attention counts it) and a question as words, and a command of
+    /// blanks as the request's own words. A question its task reports as an approval is named as a question.
+    func testAWaitingRequestsLineSaysWhatKindOfAnswerItWaitsFor() {
+        func held(_ form: ConversationRequestForm?, command: String? = nil) -> ConversationRequest {
+            ConversationRequest(id: "r", title: "Bash", detail: "Pushes the branch", command: command, form: form,
+                                state: .pending, source: .transcript(TranscriptEntry(content: .plan("x"))))
+        }
+        func permission(_ structure: PermissionRequestStructure?, command: String? = nil) -> PermissionRequest {
+            PermissionRequest(id: "p", title: "Edit", detail: "Edits Package.swift", command: command, structured: structure)
+        }
+        let question = PermissionQuestion(question: "Archive or Archived tasks?", options: [.init(label: "Archive")])
+        typealias Line = NewTaskHomeRequestLine
+        XCTAssertEqual(AppModelRemoteBridge.requestLine(held(nil, command: "git push")), Line(text: "git push", kind: .command))
+        XCTAssertEqual(AppModelRemoteBridge.requestLine(held(nil, command: " \n ")), Line(text: "Pushes the branch", kind: .approval))
+        XCTAssertEqual(AppModelRemoteBridge.requestLine(held(.choices([question]))),
+                       Line(text: "Archive or Archived tasks?", kind: .question))
+        XCTAssertEqual(AppModelRemoteBridge.requestLine(held(.planReview("# Plan")))?.kind, .approval)
+        XCTAssertEqual(AppModelRemoteBridge.requestLine(permission(nil)), Line(text: "Edits Package.swift", kind: .approval))
+        XCTAssertEqual(AppModelRemoteBridge.requestLine(permission(nil, command: "swift test"))?.kind, .command)
+        XCTAssertEqual(AppModelRemoteBridge.requestLine(permission(.questions([question])))?.kind, .question)
+        XCTAssertEqual(AppModelRemoteBridge.requestLine(permission(.plan("# Plan")))?.kind, .approval)
+
+        let asked = Line(text: "Archive?", kind: .question)
+        XCTAssertEqual(SidebarTaskStatus.awaitingApproval.asking(asked), .needsInput)
+        XCTAssertEqual(SidebarTaskStatus.awaitingApproval.asking(Line(text: "git push", kind: .command)), .awaitingApproval)
+        XCTAssertEqual(SidebarTaskStatus.waitingInBrowser.asking(asked), .waitingInBrowser)
+    }
+
     // MARK: - Pull requests
 
     func testPullRequestRowsListOpenOnesOnceMostRecentFirst() {
