@@ -603,14 +603,22 @@ final class VaultTests: XCTestCase {
         try center.save(saved, secret: updated)
         XCTAssertEqual(center.secret(of: saved.id)?.previousPasswords?.map(\.password), ["correct horse"])
 
-        let request = { (name: String?) in
-            VaultFillRequest(sessionID: UUID(), itemName: name, kind: .newPassword, origin: "https://github.com")
+        let request = { (name: String?, framedBy: [String]) in
+            var request = VaultFillRequest(sessionID: UUID(), itemName: name, kind: .newPassword, origin: "https://github.com")
+            request.framedBy = framedBy
+            return request
         }
-        let sameUser = await center.authorizeNewPassword(request(nil), username: "ada")
-        let sameName = await center.authorizeNewPassword(request("GitHub"), username: "")
-        let newAccount = await center.authorizeNewPassword(request(nil), username: "grace")
+        let sameUser = await center.authorizeNewPassword(request(nil, []), username: "ada")
+        let sameName = await center.authorizeNewPassword(request("GitHub", []), username: "")
+        let newAccount = await center.authorizeNewPassword(request(nil, []), username: "grace")
         guard case .failure = sameUser, case .failure = sameName, case .success(.always) = newAccount else {
             return XCTFail("an agent's new password went over a saved one, or not into a new account")
+        }
+        // A new password field in a frame takes one only when the pages around the frame are on its site (design §6.2).
+        let sameSite = await center.authorizeNewPassword(request(nil, ["https://www.github.com"]), username: "grace")
+        let foreignPage = await center.authorizeNewPassword(request(nil, ["https://www.example.com"]), username: "grace")
+        guard case .success = sameSite, case .failure = foreignPage else {
+            return XCTFail("a new password in a frame went by another rule than the frame's site around it")
         }
 
         // An item made for a password the page certainly did not take is deleted with a reason; the log says what
@@ -627,7 +635,8 @@ final class VaultTests: XCTestCase {
             .object(["frameTree": .object(["frame": .object(["id": .string("F"), "loaderId": .string("L"),
                                                              "securityOrigin": .string("https://github.com")])])])
         }
-        let frame = (id: "F", loaderID: "L", origin: "https://github.com")
+        let frame = VaultFillFrame(frame: VaultFrame(id: "F", parentID: nil, loaderID: "L", origin: "https://github.com",
+                                                     url: "https://github.com/", session: nil), framedBy: [], pageLoaderID: "L")
         let answers: [(JSONValue?, VaultPageScripts.NewPasswordFill, Int)] = [
             (ScriptedCDP.value(.object(["kinds": .array([.string("new_password")])])), .filled, 1),
             (ScriptedCDP.value(.object(["error": .string("moved")])), .nothing, 0),

@@ -134,6 +134,14 @@ enum VaultSite {
         return host == site || host.hasSuffix("." + site)
     }
 
+    /// Whether an item with these sites may fill a field whose document and the frames around it have `origins`
+    /// (design §6.2): the field's frame first, the tab's main frame last, each one a page of one of the sites. A field
+    /// of the main frame has that frame's origin alone. An opaque origin (a sandboxed frame, a `data:` document) is
+    /// no site's page.
+    static func matches(_ sites: [String], origins: [String]) -> Bool {
+        !origins.isEmpty && origins.allSatisfy { origin in sites.contains { matches($0, origin: origin) } }
+    }
+
     /// Whether a name, such as an authenticator app's issuer, names the site: the name or its first word
     /// is the own label of the site's registrable domain (`Vercel` for `vercel.com`, `Amazon Web Services`
     /// for `signin.aws.amazon.com`), apart from case, spaces and punctuation. The public suffix is not

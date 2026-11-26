@@ -98,10 +98,47 @@ struct VaultScrubList {
 }
 
 /// A password or a code the vault filled into a page: the document (the main frame's `loaderId`) and where the
-/// tab's event log stood (a main-frame navigation after it ends the fill).
+/// tab's event log stood (a main-frame navigation after it ends the fill). A fill into a frame (design §6.2) names it,
+/// for a snapshot to leave out its filled fields too; the tab's document holds it all the same.
 struct BrowserAgentVaultFill: Equatable {
     var loaderID: String
     var eventMark: Int
+    var frame: VaultFrame.Place? = nil
+}
+
+/// A frame of the tab as the browser reports it (`VaultPageScripts.frames`).
+struct VaultFrame: Equatable {
+    /// Where a frame answers: its id and the session that answers for it (nil for the tab's own).
+    struct Place: Equatable, Hashable {
+        var id: String
+        var session: String?
+    }
+
+    var id: String
+    /// The frame that holds it; nil for the tab's main frame.
+    var parentID: String?
+    /// The document it shows.
+    var loaderID: String
+    /// Its origin as the browser reports it; empty for an opaque one (a sandboxed frame, a `data:` document).
+    var origin: String
+    var url: String
+    var session: String?
+
+    var place: Place { Place(id: id, session: session) }
+}
+
+/// A document the vault may fill (design §6.2): the tab's main frame's, or a frame's whose origin and those around it
+/// are pages of the item's sites.
+struct VaultFillFrame: Equatable {
+    var frame: VaultFrame
+    /// The origins of the frames around it, from the one that holds it to the main frame; empty for the main frame.
+    var framedBy: [String]
+    /// The tab's document (the main frame's `loaderId`): the fill is recorded for it, and goes in only while it shows.
+    var pageLoaderID: String
+
+    var isMain: Bool { framedBy.isEmpty && frame.parentID == nil && frame.session == nil }
+    /// The frame a fill record names: nil for the main frame.
+    var recordedPlace: VaultFrame.Place? { isMain ? nil : frame.place }
 }
 
 /// The vault's fills in one tab, the agent's and the person's (the key button, the code bar) alike, so that what an
@@ -665,12 +702,13 @@ enum VaultPageScripts {
     /// What the person's fill from the key button would put into the page (design §16), by its target field
     /// (`personTarget`): `code` for a field that looks like a one-time code field, `signIn` for a password field, a
     /// username or email field, or another field of a form with a password field; nothing for a page with no field or
-    /// a field that says neither, where the list offers every item.
-    static func personFieldKind(_ cdp: any BrowserAgentCDP, timeout: Duration) async -> VaultPickerKind? {
-        let script = """
-            (() => {
+    /// a field that says neither, where the list offers every item. The field may be in a frame the page's items with
+    /// `sites` could fill (`fillFrames`).
+    static func personFieldKind(_ cdp: any BrowserAgentCDP, sites: [String]? = nil, timeout: Duration) async -> VaultPickerKind? {
+        let kind = """
+            function() {
               \(codeFieldTests)
-              const target = \(personTarget(codeOnly: false));
+              const target = this;
               if (!(target instanceof HTMLInputElement)) return '';
               if (looksLikeCodeField(target)) return 'code';
               const autocomplete = (target.getAttribute('autocomplete') || '').toLowerCase().split(/\\s+/);
@@ -680,13 +718,13 @@ enum VaultPageScripts {
                 || target.type === 'email' || autocomplete.some(t => ['username', 'email', 'current-password'].includes(t))
                 || (!isCodeField(target) && Array.from(scope.querySelectorAll('input[type=password]')).some(visible));
               return signIn ? 'signIn' : '';
-            })()
+            }
             """
-        guard let frame = try? await mainFrame(cdp, timeout: timeout),
-              let context = try? await vaultWorld(cdp, frame: frame.id, timeout: timeout),
-              let found = try? await cdp.send("Runtime.evaluate", [
-                  "expression": .string(script), "contextId": .integer(context), "returnByValue": .bool(true)
-              ], timeout: timeout) else { return nil }
+        guard let frames = try? await fillFrames(cdp, sites: sites, timeout: timeout),
+              let field = await personField(cdp, in: frames, target: personTarget(codeOnly: false), timeout: timeout),
+              let found = try? await cdp.send("Runtime.callFunctionOn", [
+                  "functionDeclaration": .string(kind), "objectId": .string(field.objectID), "returnByValue": .bool(true)
+              ], session: field.frame.frame.session, timeout: timeout) else { return nil }
         switch found["result"]?["value"]?.stringValue {
         case "code": return .code
         case "signIn": return .signIn
@@ -748,22 +786,23 @@ enum VaultPageScripts {
         }
         """
 
-    /// The person's field for a strong password, in the vault's world of the main frame: the field's object, bound
-    /// to the document it is in, that document as the browser reports it, what the password must meet and the form's
-    /// username; nil when the page has no password field.
-    static func newPasswordField(_ cdp: any BrowserAgentCDP, timeout: Duration = .seconds(10)) async
-        -> (objectID: String, frame: (id: String, loaderID: String, origin: String), context: JSONValue)? {
-        guard let frame = try? await mainFrame(cdp, timeout: timeout),
-              let world = try? await vaultWorld(cdp, frame: frame.id, timeout: timeout),
-              let target = try? await cdp.send("Runtime.evaluate", [
-                  "expression": .string(newPasswordTarget), "contextId": .integer(world)
-              ], timeout: timeout),
-              let objectID = target["result"]?["objectId"]?.stringValue,
+    /// The person's field for a strong password, in the vault's world of its document: the field's object, bound to
+    /// that document, the document as the browser reports it, what the password must meet and the form's username; nil
+    /// when the page has no password field. The new item keeps the main frame's site, so with `suffixes` the field may
+    /// also be in a frame on that site (`fillFrames`).
+    static func newPasswordField(_ cdp: any BrowserAgentCDP, suffixes: PublicSuffixList? = nil,
+                                 timeout: Duration = .seconds(10)) async
+        -> (objectID: String, frame: VaultFillFrame, context: JSONValue)? {
+        guard let all = try? await frames(cdp, sessions: suffixes == nil ? [] : nil, timeout: timeout) else { return nil }
+        let site = all.first.flatMap { main in suffixes.flatMap { VaultSite.suggestion(for: main.origin, suffixes: $0) } }
+        guard let field = await personField(cdp, in: fillFrames(of: all, sites: site.map { [$0] }), target: newPasswordTarget,
+                                            timeout: timeout),
               let context = try? await cdp.send("Runtime.callFunctionOn", [
-                  "functionDeclaration": .string(newPasswordContext), "objectId": .string(objectID), "returnByValue": .bool(true)
-              ], timeout: timeout),
+                  "functionDeclaration": .string(newPasswordContext), "objectId": .string(field.objectID),
+                  "returnByValue": .bool(true)
+              ], session: field.frame.frame.session, timeout: timeout),
               context["result"]?["value"]?["isPassword"]?.boolValue == true else { return nil }
-        return (objectID, frame, context["result"]?["value"] ?? .null)
+        return (field.objectID, field.frame, context["result"]?["value"] ?? .null)
     }
 
     /// What a fill of a made password did: it went in; nothing went in for sure (the page moved on first, or the fill
@@ -773,18 +812,17 @@ enum VaultPageScripts {
 
     /// Puts a password the vault made into the field and its confirmation, as `fillForPerson` puts a saved one: only
     /// into the document of `frame`, recorded on the tab before it goes in, and taken back only when nothing went in.
-    static func fillNewPassword(_ cdp: any BrowserAgentCDP, frame: (id: String, loaderID: String, origin: String),
-                                fills: BrowserVaultFills, into objectID: String, password: String,
-                                timeout: Duration = .seconds(10)) async -> NewPasswordFill {
-        guard (try? await mainFrame(cdp, timeout: timeout))?.loaderID == frame.loaderID else { return .nothing }
-        let record = BrowserAgentVaultFill(loaderID: frame.loaderID, eventMark: cdp.eventLog.count)
+    static func fillNewPassword(_ cdp: any BrowserAgentCDP, frame: VaultFillFrame, fills: BrowserVaultFills,
+                                into objectID: String, password: String, timeout: Duration = .seconds(10)) async -> NewPasswordFill {
+        guard (try? await mainFrame(cdp, timeout: timeout))?.loaderID == frame.pageLoaderID else { return .nothing }
+        let record = BrowserAgentVaultFill(loaderID: frame.pageLoaderID, eventMark: cdp.eventLog.count, frame: frame.recordedPlace)
         fills.record(record)
         let filled = try? await cdp.send("Runtime.callFunctionOn", [
             "functionDeclaration": .string(BrowserAgentTools.fillFunction), "objectId": .string(objectID),
             "arguments": .array([.string(VaultFillKind.newPassword.rawValue), .null, .string(password), .null,
-                                 .string(frame.origin)].map { .object(["value": $0]) }),
+                                 .string(frame.frame.origin)].map { .object(["value": $0]) }),
             "returnByValue": .bool(true)
-        ], timeout: timeout)
+        ], session: frame.frame.session, timeout: timeout)
         let answer = filled?["result"]?["value"]
         guard answer?["kinds"] != nil else {
             // The fill says why it put nothing in; with no answer the page may hold the value.
@@ -792,7 +830,7 @@ enum VaultPageScripts {
             fills.withdraw(record)
             return .nothing
         }
-        if let now = try? await mainFrame(cdp, timeout: timeout), now.loaderID != frame.loaderID {
+        if let now = try? await mainFrame(cdp, timeout: timeout), now.loaderID != frame.pageLoaderID {
             // The page went on to another document of its own as the fill went in; it may hold the value too.
             fills.record(BrowserAgentVaultFill(loaderID: now.loaderID, eventMark: record.eventMark))
         }
@@ -901,11 +939,163 @@ enum VaultPageScripts {
         return (frame?["id"]?.stringValue ?? "", frame?["loaderId"]?.stringValue ?? "", origin)
     }
 
+    /// The tab's frames as the browser reports them, the main frame first and the rest in the order of its tree: the
+    /// frames of the tab's own process, then those of each frame session (`frameSessions`) with the frames of its
+    /// process, or of `sessions` alone. A frame session that does not answer is left out with its frames, which then take
+    /// no fill. Throws when the tab's own tree cannot be read.
+    static func frames(_ cdp: any BrowserAgentCDP, sessions: [String]? = nil, timeout: Duration) async throws -> [VaultFrame] {
+        let attached = cdp.frameSessions
+        let remote = Set(attached.map(\.frameID))
+        var frames: [VaultFrame] = []
+        for session in [nil] + (sessions ?? attached.map(\.id)).map(Optional.some) {
+            let tree: JSONValue
+            do {
+                tree = try await cdp.send("Page.getFrameTree", [:], session: session,
+                                          timeout: session == nil ? timeout : min(timeout, .seconds(5)))
+            } catch {
+                if session == nil { throw error }
+                continue
+            }
+            var pending = tree["frameTree"].map { [$0] } ?? []
+            var isRoot = true
+            while !pending.isEmpty {
+                let node = pending.removeFirst()
+                defer { isRoot = false }
+                // A frame from another site is read on its own session.
+                guard let frame = node["frame"], let id = frame["id"]?.stringValue, isRoot || !remote.contains(id) else { continue }
+                let main = session == nil && isRoot
+                let security = frame["securityOrigin"]?.stringValue.flatMap { $0.isEmpty || $0 == "null" ? nil : $0 }
+                // Only the main frame's origin falls back to its address: a frame's opaque origin stays one.
+                let origin = security ?? (main ? frame["url"]?.stringValue.flatMap(VaultSite.origin(of:)) : nil) ?? ""
+                frames.append(VaultFrame(id: id, parentID: main ? nil : frame["parentId"]?.stringValue,
+                                         loaderID: frame["loaderId"]?.stringValue ?? "", origin: origin,
+                                         url: (frame["url"]?.stringValue ?? "") + (frame["urlFragment"]?.stringValue ?? ""),
+                                         session: session))
+                pending += node["childFrames"]?.arrayValue ?? []
+            }
+            // Without the tab's own frame first, a frame below it would pass for the main frame.
+            guard !frames.isEmpty else { throw BrowserAgentToolError("The browser did not describe the page.") }
+        }
+        return frames
+    }
+
+    /// The sessions from the tab's own to `session`, each frame session after the one it was attached from: the
+    /// sessions that answer for the frames around a frame on `session`.
+    static func sessions(to session: String?, in cdp: any BrowserAgentCDP) -> [String] {
+        var chain: [String] = []
+        var current = session
+        while let id = current, chain.count < 32, !chain.contains(id) {
+            chain.insert(id, at: 0)
+            current = cdp.frameSessions.first { $0.id == id }?.parent
+        }
+        return chain
+    }
+
+    /// The origins of the frames around `frame`, from the one that holds it to the tab's main frame (`frames.first`):
+    /// empty for the main frame, nil when a frame on the way is not among `frames` or the way does not reach the main
+    /// frame.
+    static func origins(around frame: VaultFrame, in frames: [VaultFrame]) -> [String]? {
+        guard let main = frames.first else { return nil }
+        var around: [String] = []
+        var current = frame
+        while current.place != main.place {
+            guard around.count < 32, let parentID = current.parentID,
+                  let parent = frames.first(where: { $0.id == parentID }) else { return nil }
+            around.append(parent.origin)
+            current = parent
+        }
+        return around
+    }
+
+    /// The documents a fill of an item with `sites` may go into (design §6.2): the tab's main frame's, then each frame's
+    /// whose origin and those of the frames around it are pages of the sites. `sites` nil gives the main frame alone.
+    static func fillFrames(_ cdp: any BrowserAgentCDP, sites: [String]?, timeout: Duration) async throws -> [VaultFillFrame] {
+        fillFrames(of: try await frames(cdp, sessions: sites == nil ? [] : nil, timeout: timeout), sites: sites)
+    }
+
+    /// `fillFrames` of the tab's `frames`.
+    static func fillFrames(of all: [VaultFrame], sites: [String]?) -> [VaultFillFrame] {
+        guard let main = all.first else { return [] }
+        let framed = all.dropFirst().compactMap { frame -> VaultFillFrame? in
+            guard let sites, let around = origins(around: frame, in: all),
+                  VaultSite.matches(sites, origins: [frame.origin] + around) else { return nil }
+            return VaultFillFrame(frame: frame, framedBy: around, pageLoaderID: main.loaderID)
+        }
+        return [VaultFillFrame(frame: main, framedBy: [], pageLoaderID: main.loaderID)] + framed
+    }
+
+    /// The field a person's fill goes to, among `frames` (`fillFrames`): the main frame's `target` (an expression that
+    /// gives the field or null, such as `personTarget`), else that of the frame the page's keyboard focus is in, else
+    /// that of the first frame of the main frame's own origin with one. A frame of another origin, such as another
+    /// subdomain's, which the address field does not show, takes a fill only once the person put the focus in it. The
+    /// field's object is bound to its frame's vault world.
+    static func personField(_ cdp: any BrowserAgentCDP, in frames: [VaultFillFrame], target: String,
+                            timeout: Duration) async -> (frame: VaultFillFrame, objectID: String)? {
+        var sameOrigin: (frame: VaultFillFrame, objectID: String)?
+        for frame in frames {
+            guard let context = try? await vaultWorld(cdp, frame: frame.frame.id, session: frame.frame.session, timeout: timeout),
+                  let field = try? await cdp.send("Runtime.evaluate", [
+                      "expression": .string(target), "contextId": .integer(context)
+                  ], session: frame.frame.session, timeout: timeout),
+                  let objectID = field["result"]?["objectId"]?.stringValue else { continue }
+            if frame.isMain { return (frame, objectID) }
+            if await holdsFocus(frame.frame, in: frames.map(\.frame), cdp: cdp, timeout: timeout) { return (frame, objectID) }
+            if sameOrigin == nil, frame.frame.origin == frames.first?.frame.origin { sameOrigin = (frame, objectID) }
+        }
+        return sameOrigin
+    }
+
+    /// Whether the page's keyboard focus is in `frame`'s document: from the main frame down, each document's focused
+    /// element is the iframe that holds the next one, as the browser reports the iframe (`DOM.getFrameOwner`).
+    static func holdsFocus(_ frame: VaultFrame, in frames: [VaultFrame], cdp: any BrowserAgentCDP,
+                           timeout: Duration) async -> Bool {
+        var child = frame
+        for _ in 0..<32 {
+            guard let parentID = child.parentID else { return child.place == frames.first?.place }
+            guard let parent = frames.first(where: { $0.id == parentID }),
+                  let owner = try? await cdp.send("DOM.getFrameOwner", ["frameId": .string(child.id)], session: parent.session,
+                                                  timeout: timeout)["backendNodeId"]?.integerValue,
+                  let context = try? await vaultWorld(cdp, frame: parent.id, session: parent.session, timeout: timeout),
+                  let focused = try? await cdp.send("Runtime.evaluate", [
+                      "expression": .string("document.activeElement"), "contextId": .integer(context)
+                  ], session: parent.session, timeout: timeout)["result"]?["objectId"]?.stringValue,
+                  let node = try? await cdp.send("DOM.describeNode", ["objectId": .string(focused)], session: parent.session,
+                                                 timeout: timeout)["node"]?["backendNodeId"]?.integerValue,
+                  node == owner else { return false }
+            child = parent
+        }
+        return false
+    }
+
+    /// Whether a frame the vault was to fill (`fillFrames`) still shows its document, of the same origin, among the same
+    /// frames around it; true for the main frame, whose document the caller checks.
+    static func stillShows(_ frame: VaultFillFrame, on cdp: any BrowserAgentCDP, timeout: Duration) async -> Bool {
+        guard !frame.isMain else { return true }
+        guard let all = try? await frames(cdp, sessions: sessions(to: frame.frame.session, in: cdp), timeout: timeout),
+              all.first?.loaderID == frame.pageLoaderID,
+              let now = all.first(where: { $0.place == frame.frame.place }) else { return false }
+        return now.loaderID == frame.frame.loaderID && now.origin == frame.frame.origin
+            && origins(around: now, in: all) == frame.framedBy
+    }
+
     /// Whether the tab's main frame still shows `page`, the document a watch report named: a report the document sent
     /// as the tab left it arrives after the move, and its bar would stay over the next page.
     static func shows(_ page: String, _ cdp: any BrowserAgentCDP, timeout: Duration = .seconds(10)) async -> Bool {
         let tree = try? await cdp.send("Page.getFrameTree", [:], timeout: timeout)
         return BrowserURLPolicy.sameAddress(tree?["frameTree"]?["frame"]?["url"]?.stringValue, page)
+    }
+
+    /// The page a bar for a watch report from `page` stays with: `page` while the main frame shows it, or the main
+    /// frame's address while a frame shows it that one item's sites (each of `sites`) may fill (`fillFrames`); nil once
+    /// the tab shows neither. The watch runs in the documents of the tab's own process, so only its frames are read.
+    static func showing(_ page: String, _ cdp: any BrowserAgentCDP, sites: [[String]],
+                        timeout: Duration = .seconds(10)) async -> String? {
+        guard let all = try? await frames(cdp, sessions: [], timeout: timeout), let main = all.first else { return nil }
+        if BrowserURLPolicy.sameAddress(main.url, page) { return page }
+        let framed = sites.contains { sites in
+            fillFrames(of: all, sites: sites).dropFirst().contains { BrowserURLPolicy.sameAddress($0.frame.url, page) }
+        }
+        return framed ? main.url : nil
     }
 
     /// A context in the vault's isolated world of a frame: the tab's main frame, or one on `session`.
@@ -937,31 +1127,36 @@ enum VaultPageScripts {
 
     /// The person's fill from the key button (the focused field's form, the page's sign-in form, or its
     /// code field) or from the code bar (`codeOnly`: the code alone, into the page's code field), into the document
-    /// the values were given for (`frame`): a page that moved on since takes nothing. It is recorded in the tab's
-    /// `fills` before the values go in, as an agent's fill is, so the agent's tools treat the page alike.
+    /// the values were given for (`frame`, the tab's main frame): a page that moved on since takes nothing. With the
+    /// item's `sites`, a page with no such field there takes them in a frame those sites may fill (`fillFrames`). It is
+    /// recorded in the tab's `fills` before the values go in, as an agent's fill is, so the agent's tools treat the page
+    /// alike.
     @discardableResult
     static func fillForPerson(_ cdp: any BrowserAgentCDP, frame: (id: String, loaderID: String, origin: String),
-                              fills: BrowserVaultFills, username: String?, password: String?, code: String?,
-                              fields: [VaultFormField]? = nil, secretFields: [VaultFormField]? = nil, codeOnly: Bool = false,
+                              sites: [String]? = nil, codeSites: [String]? = nil, fills: BrowserVaultFills,
+                              username: String?, password: String?, code: String?, fields: [VaultFormField]? = nil,
+                              secretFields: [VaultFormField]? = nil, codeOnly: Bool = false,
                               timeout: Duration = .seconds(10)) async -> Bool {
-        guard let context = try? await vaultWorld(cdp, frame: frame.id, timeout: timeout),
-              let target = try? await cdp.send("Runtime.evaluate", [
-                  "expression": .string(personTarget(codeOnly: codeOnly)), "contextId": .integer(context)
-              ], timeout: timeout),
-              let objectID = target["result"]?["objectId"]?.stringValue,
+        // A code from another item of the account goes into a frame only where that item's sites hold it too.
+        guard let frames = try? await fillFrames(cdp, sites: sites, timeout: timeout).filter({ frame in
+                  frame.isMain || code == nil || codeSites.map { VaultSite.matches($0, origins: [frame.frame.origin] + frame.framedBy) } ?? true
+              }),
+              frames.first?.pageLoaderID == frame.loaderID,
+              let field = await personField(cdp, in: frames, target: personTarget(codeOnly: codeOnly), timeout: timeout),
               (try? await mainFrame(cdp, timeout: timeout))?.loaderID == frame.loaderID else { return false }
         let values: [String?] = codeOnly ? [nil, nil, code] : [username, password, code]
         let secretFields = codeOnly ? nil : secretFields
         let secret = values[1] != nil || values[2] != nil || secretFields != nil
-        let record = BrowserAgentVaultFill(loaderID: frame.loaderID, eventMark: cdp.eventLog.count)
+        let record = BrowserAgentVaultFill(loaderID: frame.loaderID, eventMark: cdp.eventLog.count,
+                                           frame: field.frame.recordedPlace)
         if secret { fills.record(record) }
         let filled = try? await cdp.send("Runtime.callFunctionOn", [
-            "functionDeclaration": .string(personFillFunction), "objectId": .string(objectID),
-            "arguments": .array((values + [frame.origin]).map { .object(["value": $0.map(JSONValue.string) ?? .null]) }
+            "functionDeclaration": .string(personFillFunction), "objectId": .string(field.objectID),
+            "arguments": .array((values + [field.frame.frame.origin]).map { .object(["value": $0.map(JSONValue.string) ?? .null]) }
                 + [.object(["value": codeOnly ? .null : VaultPageScripts.json(fields)]),
                    .object(["value": VaultPageScripts.json(secretFields)])]),
             "returnByValue": .bool(true)
-        ], timeout: timeout)
+        ], session: field.frame.frame.session, timeout: timeout)
         let kinds = filled?["result"]?["value"]?["kinds"]?.arrayValue?.compactMap(\.stringValue)
         guard secret else { return kinds != nil }
         if let kinds, !kinds.contains(where: VaultPageScripts.secretKinds.contains) {
@@ -987,19 +1182,21 @@ enum VaultPageScripts {
     /// tools treat its document as one the vault filled, and a snapshot leaves out what shows them. The caller keeps
     /// them out of results (`VaultScrubList`).
     /// Returns whether the document was marked: false when the page did not say which document it shows.
+    /// The secrets show in `place`'s document when given, a frame of the page's (design §6.2), else in the main frame's.
     @discardableResult
     static func noteSecretsShown(_ secrets: [String], on cdp: any BrowserAgentCDP, fills: BrowserVaultFills,
-                                 timeout: Duration = .seconds(10)) async -> Bool {
+                                 in place: VaultFrame.Place? = nil, timeout: Duration = .seconds(10)) async -> Bool {
         guard let frame = try? await mainFrame(cdp, timeout: timeout) else { return false }
-        fills.record(BrowserAgentVaultFill(loaderID: frame.loaderID, eventMark: cdp.eventLog.count))
-        guard !secrets.isEmpty, let context = try? await vaultWorld(cdp, frame: frame.id, timeout: timeout) else {
+        fills.record(BrowserAgentVaultFill(loaderID: frame.loaderID, eventMark: cdp.eventLog.count, frame: place))
+        guard !secrets.isEmpty,
+              let context = try? await vaultWorld(cdp, frame: place?.id ?? frame.id, session: place?.session, timeout: timeout) else {
             return !frame.loaderID.isEmpty
         }
         _ = try? await cdp.send("Runtime.callFunctionOn", [
             "functionDeclaration": .string("function(values) { window.__yardletVaultSecrets = (window.__yardletVaultSecrets || []).concat(values); }"),
             "executionContextId": .integer(context),
             "arguments": .array([.object(["value": .array(secrets.map(JSONValue.string))])])
-        ], timeout: timeout)
+        ], session: place?.session, timeout: timeout)
         return !frame.loaderID.isEmpty
     }
 
@@ -1174,53 +1371,40 @@ extension BrowserAgentTools {
             throw BrowserAgentToolError("browser_fill_credential needs the ref of a field in the sign-in form.")
         }
         let element = try element(ref, on: page)
-        // The vault fills only the page's own fields: not a frame from another site (docs/BROWSER_VAULT_DESIGN.md, "How filling works"), as not a frame of
-        // the page's own process (`ownerDocument` below).
-        guard element.session == nil else {
-            throw BrowserAgentToolError("\(ref) is inside a frame in the page; Yardlet fills only the page's own fields.")
-        }
-        let node = element.node
-        let frame = try await mainFrame(of: page)
-        // A sign-in Yardlet has something to fill for is the task's own.
-        if kind == .newPassword || !vault.items(for: frame.origin).isEmpty {
+        // The document that holds the field: the main frame's, or a frame's whose origin and those around it may be an
+        // item's sites (docs/BROWSER_VAULT_DESIGN.md, "How filling works"). Whether one item's sites hold them all is
+        // `authorize`'s to say.
+        let field = try await vaultField(ref, element, on: page)
+        let frame = field.frame
+        let objectID = field.objectID
+        // A sign-in Yardlet has something to fill for is the task's own: one an item's sites hold, with the pages around
+        // its frame.
+        if kind == .newPassword || vault.items(for: frame.frame.origin).contains(where: {
+            VaultSite.matches($0.sites, origins: [frame.frame.origin] + frame.framedBy)
+        }) {
             try await takeOwnProfile(sessionID, on: page, how: "password manager fill", undone: "nothing was filled",
                                      again: "call browser_fill_credential again")
-        }
-        let world = try await send(page, "Page.createIsolatedWorld", [
-            "frameId": .string(frame.id), "worldName": .string(Self.vaultWorldName)
-        ])
-        guard let contextID = world["executionContextId"]?.integerValue else {
-            throw BrowserAgentToolError("The browser did not open a context to fill the page in.")
-        }
-        let resolved = try await send(page, "DOM.resolveNode", [
-            "backendNodeId": .integer(Int64(node)), "executionContextId": .integer(contextID)
-        ], ref: ref)
-        guard let objectID = resolved["object"]?["objectId"]?.stringValue else {
-            throw BrowserAgentToolError("\(ref) could not be found on the page. Call browser_snapshot again.")
-        }
-        let onPage = try await callInVaultWorld(page, objectID,
-            "function() { return this instanceof HTMLElement && this.ownerDocument === document; }", ref: ref)
-        guard onPage.boolValue == true else {
-            throw BrowserAgentToolError("\(ref) is inside a frame in the page; Yardlet fills only the page's own fields.")
         }
         if kind == .newPassword {
             return try await fillNewPassword(vault, itemName: itemName, ref: ref, objectID: objectID, frame: frame,
                                              submit: arguments["submit"]?.boolValue, on: page, sessionID: sessionID)
         }
+        let session = frame.frame.session
 
-        var request = VaultFillRequest(sessionID: sessionID, itemName: itemName, kind: kind, origin: frame.origin)
-        request.afterAgentScript = page.scriptMayReach(frame.loaderID)
+        var request = VaultFillRequest(sessionID: sessionID, itemName: itemName, kind: kind, origin: frame.frame.origin)
+        request.framedBy = frame.framedBy
+        request.afterAgentScript = page.scriptMayReach(frame.pageLoaderID)
         // A two-factor setup the page shows goes into the vault once the person saves it, and its first code is filled.
         var kept = ""
-        if kind == .oneTimeCode, let setup = await setupShown(on: page, objectID: objectID) {
-            let item = try await askToKeep(setup, origin: frame.origin, on: page, sessionID: sessionID)
+        if kind == .oneTimeCode, let setup = await setupShown(on: page, objectID: objectID, in: frame) {
+            let item = try await askToKeep(setup, origin: frame.frame.origin, on: page, sessionID: sessionID)
             request.itemID = item.id
             kept = "The person saved the page's two-factor setup in “\(item.name)”. "
         }
         // Read only when the site has several items to choose from.
         if request.itemID == nil, itemName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true,
-           vault.items(for: frame.origin).count > 1,
-           let accounts = try? await callInVaultWorld(page, objectID, Self.pageAccountsFunction) {
+           vault.items(for: frame.frame.origin).count > 1,
+           let accounts = try? await callInVaultWorld(page, objectID, Self.pageAccountsFunction, session: session) {
             request.pageAccounts = VaultPageAccounts(
                 fieldValues: accounts["values"]?.arrayValue?.compactMap(\.stringValue) ?? [],
                 text: accounts["text"]?.stringValue ?? "")
@@ -1231,12 +1415,13 @@ extension BrowserAgentTools {
         case .failure(let refusal): throw BrowserAgentToolError(refusal.message, refusal.failure)
         }
         // The page may have moved on while the person was asked.
-        guard (try? await mainFrame(of: page))?.loaderID == frame.loaderID else {
+        guard (try? await mainFrame(of: page))?.loaderID == frame.pageLoaderID,
+              await VaultPageScripts.stillShows(frame, on: page.cdp, timeout: commandTimeout) else {
             vault.record(grant, for: request, filled: [], failure: "The page navigated before the fill.")
             throw BrowserAgentToolError("The page navigated before Yardlet could fill it; nothing was filled.")
         }
         // A secret goes only into a form that sends it to the item's own sites over https.
-        let submission = try await callInVaultWorld(page, objectID, Self.submissionFunction)
+        let submission = try await callInVaultWorld(page, objectID, Self.submissionFunction, session: session)
         let targets = (submission["targets"]?.arrayValue ?? []).compactMap { target -> FormTarget? in
             guard let action = target["action"]?.stringValue, let method = target["method"]?.stringValue else { return nil }
             return FormTarget(action: action, method: method)
@@ -1254,16 +1439,16 @@ extension BrowserAgentTools {
         // takes its record back.
         secretValues.forEach { vaultScrub.add($0) }
         let record = !secretValues.isEmpty
-            ? BrowserAgentVaultFill(loaderID: frame.loaderID, eventMark: page.cdp.eventLog.count) : nil
+            ? BrowserAgentVaultFill(loaderID: frame.pageLoaderID, eventMark: page.cdp.eventLog.count, frame: frame.recordedPlace) : nil
         if let record { page.vaultFills.record(record) }
         page.guardFilledValues(([grant.password] + (grant.secretFields ?? []).map(\.value)).compactMap { $0 }
             .filter { $0.count >= VaultScrubList.shortest }.flatMap(VaultScrubList.spellings(of:)))
-        let filled = try await callInVaultWorld(page, objectID, Self.fillFunction, arguments: [
+        let filled = try await callInVaultWorld(page, objectID, Self.fillFunction, session: session, arguments: [
             .string(kind.rawValue),
             grant.username.map(JSONValue.string) ?? .null,
             grant.password.map(JSONValue.string) ?? .null,
             grant.code.map(JSONValue.string) ?? .null,
-            .string(frame.origin),
+            .string(frame.frame.origin),
             kind == .login ? VaultPageScripts.json(grant.item.fields) : .null,
             kind == .login ? VaultPageScripts.json(grant.secretFields) : .null
         ])
@@ -1285,10 +1470,10 @@ extension BrowserAgentTools {
         var submitted = false
         let secret = kinds.contains(where: VaultPageScripts.secretKinds.contains)
         var unsent = submission["form"]?.boolValue == true && secret
-            ? Self.submissionRisk(targets, pageOrigin: frame.origin,
+            ? Self.submissionRisk(targets, pageOrigin: frame.frame.origin,
                                   password: kinds.contains("password") || kinds.contains("secret_field")) : nil
         if asked != false, unsent == nil {
-            switch try await callInVaultWorld(page, objectID, Self.submitFunction).stringValue {
+            switch try await callInVaultWorld(page, objectID, Self.submitFunction, session: session).stringValue {
             case "submitted":
                 submitted = true
             case "address":
@@ -1304,7 +1489,7 @@ extension BrowserAgentTools {
             .filter { kinds.contains($0.0) }.map(\.1)
         let what = named.isEmpty ? "the one-time code"
             : "the " + (named.count > 1 ? named.dropLast().joined(separator: ", ") + " and " + named[named.count - 1] : named[0])
-        let host = VaultSite.host(of: frame.origin)
+        let host = VaultSite.host(of: frame.frame.origin)
         let chosen = Self.chosenNote(grant, host: host)
         if let unsent, asked != false {
             return .text("Filled \(what) of “\(grant.item.name)” into the form on \(host) but did not submit it: \(unsent) "
@@ -1320,11 +1505,18 @@ extension BrowserAgentTools {
     /// code a near-square graphic on screen draws, read from the tab's picture. Every key found is kept out of results
     /// and makes the document one the vault filled, as the panel's watch does. Nil for a page that shows none, or an
     /// export of several accounts.
-    private func setupShown(on page: BrowserAgentPage, objectID: String) async -> OneTimeCodeSetup? {
-        guard let vault, vault.isAllowedBuild, vault.isEnabled,
-              let look = try? await callInVaultWorld(page, objectID, Self.setupLookFunction) else { return nil }
+    private func setupShown(on page: BrowserAgentPage, objectID: String, in frame: VaultFillFrame) async -> OneTimeCodeSetup? {
+        guard let vault, vault.isAllowedBuild, vault.isEnabled else { return nil }
+        // A field in a frame (design §6.2) takes a setup only from its own document's links, and only where the pages
+        // around it are on its site: the tab's picture shows those pages too, whose QR code is not the frame's.
+        if !frame.isMain {
+            guard let site = VaultSite.suggestion(for: frame.frame.origin, suffixes: vault.suffixes),
+                  VaultSite.matches([site], origins: frame.framedBy) else { return nil }
+        }
+        guard let look = try? await callInVaultWorld(page, objectID, Self.setupLookFunction, session: frame.frame.session)
+        else { return nil }
         var setups = (look["links"]?.arrayValue ?? []).compactMap(\.stringValue).flatMap { OneTimeCodeSetup.setups(in: $0).setups }
-        if setups.isEmpty, look["square"]?.boolValue == true, let read = setupsPictured,
+        if setups.isEmpty, frame.isMain, look["square"]?.boolValue == true, let read = setupsPictured,
            let shot = try? await send(page, "Page.captureScreenshot", ["format": .string("png")], timeout: loadTimeout),
            let image = shot["data"]?.stringValue.flatMap({ Data(base64Encoded: $0) }) {
             setups = await read(image)
@@ -1332,7 +1524,7 @@ extension BrowserAgentTools {
         guard !setups.isEmpty else { return nil }
         let spellings = setups.flatMap { VaultPageScripts.spellings(ofSetupKey: $0.secret.key) }
         spellings.forEach { vaultScrub.add($0) }
-        await VaultPageScripts.noteSecretsShown(spellings, on: page.cdp, fills: page.vaultFills)
+        await VaultPageScripts.noteSecretsShown(spellings, on: page.cdp, fills: page.vaultFills, in: frame.recordedPlace)
         let new = setups.filter { !vault.holds($0.secret) }
         return new.count == 1 ? new[0] : nil
     }
@@ -1452,27 +1644,31 @@ extension BrowserAgentTools {
     /// takes it (so a page that fails or submits on its own loses nothing), and fills the field and its confirmation
     /// only when the form sends them to that site.
     private func fillNewPassword(_ vault: VaultCenter, itemName: String?, ref: String, objectID: String,
-                                 frame: (id: String, loaderID: String, origin: String), submit asked: Bool?,
+                                 frame: VaultFillFrame, submit asked: Bool?,
                                  on page: BrowserAgentPage, sessionID: UUID) async throws -> AgentToolResult {
-        let context = try await callInVaultWorld(page, objectID, VaultPageScripts.newPasswordContext)
+        let session = frame.frame.session
+        let origin = frame.frame.origin
+        let context = try await callInVaultWorld(page, objectID, VaultPageScripts.newPasswordContext, session: session)
         guard context["isPassword"]?.boolValue == true else {
             throw BrowserAgentToolError("\(ref) is not a password field. Give the ref of the new password field.")
         }
         let username = context["username"]?.stringValue ?? ""
-        var request = VaultFillRequest(sessionID: sessionID, itemName: itemName, kind: .newPassword, origin: frame.origin)
-        request.afterAgentScript = page.scriptMayReach(frame.loaderID)
+        var request = VaultFillRequest(sessionID: sessionID, itemName: itemName, kind: .newPassword, origin: origin)
+        request.framedBy = frame.framedBy
+        request.afterAgentScript = page.scriptMayReach(frame.pageLoaderID)
         let confirmation: VaultUse.Confirmation
         switch await vault.authorizeNewPassword(request, username: username) {
         case .success(let confirmed): confirmation = confirmed
         case .failure(let refusal): throw BrowserAgentToolError(refusal.message, refusal.failure)
         }
         // The page may have moved on while the person was asked.
-        guard (try? await mainFrame(of: page))?.loaderID == frame.loaderID,
-              let site = VaultSite.suggestion(for: frame.origin, suffixes: vault.suffixes) else {
+        guard (try? await mainFrame(of: page))?.loaderID == frame.pageLoaderID,
+              await VaultPageScripts.stillShows(frame, on: page.cdp, timeout: commandTimeout),
+              let site = VaultSite.suggestion(for: origin, suffixes: vault.suffixes) else {
             throw BrowserAgentToolError("The page navigated before Yardlet could fill it; nothing was filled or saved.")
         }
         // The password goes only into a form that sends it to the new item's site over https.
-        let submission = try await callInVaultWorld(page, objectID, Self.submissionFunction)
+        let submission = try await callInVaultWorld(page, objectID, Self.submissionFunction, session: session)
         let targets = (submission["targets"]?.arrayValue ?? []).compactMap { target -> FormTarget? in
             guard let action = target["action"]?.stringValue, let method = target["method"]?.stringValue else { return nil }
             return FormTarget(action: action, method: method)
@@ -1491,7 +1687,7 @@ extension BrowserAgentTools {
         }
         let item: VaultItem
         do {
-            item = try vault.presaveMadePassword(password, origin: frame.origin, username: username, name: itemName,
+            item = try vault.presaveMadePassword(password, origin: origin, username: username, name: itemName,
                                                  taskID: sessionID)
         } catch {
             throw BrowserAgentToolError("Yardlet could not save a new password, so it filled none.")
@@ -1499,26 +1695,27 @@ extension BrowserAgentTools {
         let grant = VaultFillGrant(item: item, password: password, confirmedBy: confirmation)
         // Before the value goes in, as for a saved password (`fillCredential`).
         vaultScrub.add(password)
-        let record = BrowserAgentVaultFill(loaderID: frame.loaderID, eventMark: page.cdp.eventLog.count)
+        let record = BrowserAgentVaultFill(loaderID: frame.pageLoaderID, eventMark: page.cdp.eventLog.count,
+                                           frame: frame.recordedPlace)
         page.vaultFills.record(record)
         if password.count >= VaultScrubList.shortest {
             page.guardFilledValues(VaultScrubList.spellings(of: password))
         }
         let filled: JSONValue
         do {
-            filled = try await callInVaultWorld(page, objectID, Self.fillFunction, arguments: [
-                .string(VaultFillKind.newPassword.rawValue), .null, .string(password), .null, .string(frame.origin)
+            filled = try await callInVaultWorld(page, objectID, Self.fillFunction, session: session, arguments: [
+                .string(VaultFillKind.newPassword.rawValue), .null, .string(password), .null, .string(origin)
             ])
         } catch {
             // No answer: the field may hold the password, so the item and the page's record stay.
-            vault.logMadePassword(item, .saved, origin: frame.origin, taskID: sessionID,
+            vault.logMadePassword(item, .saved, origin: origin, taskID: sessionID,
                                   "The page gave no answer to the fill, so the item stays.")
             throw error
         }
         let kinds = filled["kinds"]?.arrayValue?.compactMap(\.stringValue) ?? []
         if let failure = filled["error"]?.stringValue {
             page.vaultFills.withdraw(record)
-            try? vault.deleteMadePassword(item.id, origin: frame.origin, taskID: sessionID,
+            try? vault.deleteMadePassword(item.id, origin: origin, taskID: sessionID,
                                           "The page took nothing (\(failure)).")
             let message = Self.fillFailure(failure, ref: ref)
             vault.record(grant, for: request, filled: [], failure: message)
@@ -1530,9 +1727,9 @@ extension BrowserAgentTools {
         // Submitted as a saved password's form is: a safe form unless the agent says not to, another never.
         var submitted = false
         var unsent = submission["form"]?.boolValue == true
-            ? Self.submissionRisk(targets, pageOrigin: frame.origin, password: true) : nil
+            ? Self.submissionRisk(targets, pageOrigin: origin, password: true) : nil
         if asked != false, unsent == nil {
-            switch try await callInVaultWorld(page, objectID, Self.submitFunction).stringValue {
+            switch try await callInVaultWorld(page, objectID, Self.submitFunction, session: session).stringValue {
             case "submitted":
                 submitted = true
             case "address":
@@ -1547,7 +1744,7 @@ extension BrowserAgentTools {
         let fields = kinds.contains("new_password_and_confirmation") ? "the new password and its confirmation"
             : "the new password field"
         let saved = "saved it as “\(item.name)”" + (item.username.isEmpty ? "" : " for \(item.username)")
-        let host = VaultSite.host(of: frame.origin)
+        let host = VaultSite.host(of: origin)
         if let unsent, asked != false {
             return .text("Made a new password, filled \(fields) on \(host) and \(saved), but did not submit the form: "
                 + "\(unsent) Click the page's button to create the account. The value is not shown to you.")
@@ -1587,23 +1784,35 @@ extension BrowserAgentTools {
     func vaultSecretNodes(on page: BrowserAgentPage) async -> Set<BrowserAgentSnapshot.Ref>? {
         guard vaultFilledDocument(page) else { return [] }
         let group = "yardlet-vault-secrets"
-        defer { Task { _ = try? await self.send(page, "Runtime.releaseObjectGroup", ["objectGroup": .string(group)]) } }
-        guard let frame = try? await mainFrame(of: page),
-              let context = try? await send(page, "Page.createIsolatedWorld", [
-                  "frameId": .string(frame.id), "worldName": .string(Self.vaultWorldName)
-              ])["executionContextId"]?.integerValue,
-              let list = try? await send(page, "Runtime.evaluate", [
-                  "expression": .string(Self.secretElements), "contextId": .integer(context), "objectGroup": .string(group)
-              ])["result"]?["objectId"]?.stringValue,
-              let items = try? await send(page, "Runtime.getProperties", [
-                  "objectId": .string(list), "ownProperties": .bool(true)
-              ])["result"]?.arrayValue else { return nil }
+        guard let frame = try? await mainFrame(of: page) else { return nil }
+        // The main frame's document, and that of each frame of the page a fill went into (design §6.2) still there.
+        var places = [VaultFrame.Place(id: frame.id, session: nil)]
+        let filled = Set(page.vaultFills.fills.compactMap(\.frame))
+        if !filled.isEmpty {
+            guard let present = try? await VaultPageScripts.frames(page.cdp, timeout: commandTimeout).map(\.place) else { return nil }
+            places += present.filter { filled.contains($0) && $0.id != frame.id }
+        }
+        defer {
+            let sessions = Set(places.map(\.session))
+            Task { for session in sessions { _ = try? await self.send(page, "Runtime.releaseObjectGroup", ["objectGroup": .string(group)], session: session) } }
+        }
         var nodes: Set<BrowserAgentSnapshot.Ref> = []
-        for item in items where Int(item["name"]?.stringValue ?? "") != nil {
-            guard let object = item["value"]?["objectId"]?.stringValue,
-                  let node = try? await send(page, "DOM.describeNode", ["objectId": .string(object)])["node"]?["backendNodeId"]?
-                    .integerValue else { return nil }
-            nodes.insert(BrowserAgentSnapshot.Ref(node: Int(node), session: nil))
+        for place in places {
+            guard let context = try? await send(page, "Page.createIsolatedWorld", [
+                      "frameId": .string(place.id), "worldName": .string(Self.vaultWorldName)
+                  ], session: place.session)["executionContextId"]?.integerValue,
+                  let list = try? await send(page, "Runtime.evaluate", [
+                      "expression": .string(Self.secretElements), "contextId": .integer(context), "objectGroup": .string(group)
+                  ], session: place.session)["result"]?["objectId"]?.stringValue,
+                  let items = try? await send(page, "Runtime.getProperties", [
+                      "objectId": .string(list), "ownProperties": .bool(true)
+                  ], session: place.session)["result"]?.arrayValue else { return nil }
+            for item in items where Int(item["name"]?.stringValue ?? "") != nil {
+                guard let object = item["value"]?["objectId"]?.stringValue,
+                      let node = try? await send(page, "DOM.describeNode", ["objectId": .string(object)],
+                                                 session: place.session)["node"]?["backendNodeId"]?.integerValue else { return nil }
+                nodes.insert(BrowserAgentSnapshot.Ref(node: Int(node), session: place.session))
+            }
         }
         return nodes
     }
@@ -1656,12 +1865,60 @@ extension BrowserAgentTools {
         return (id, frame?["loaderId"]?.stringValue ?? "", origin)
     }
 
-    private func callInVaultWorld(_ page: BrowserAgentPage, _ objectID: String, _ function: String,
+    /// The field `ref` names (its element, `element`), for a fill: the document that holds it, as the browser reports
+    /// it with the origins around it, and the field bound to that document's vault world. Of the documents on the
+    /// element's session, the session's own frame is looked in first (the main frame's, for the tab's session), then each
+    /// frame below it. Whether one item's sites hold them all is `authorize`'s to say (`VaultFillRequest.framedBy`), so
+    /// that a refusal of an item named on another site's page tells the person, whatever the frames are.
+    private func vaultField(_ ref: String, _ element: BrowserAgentSnapshot.Ref, on page: BrowserAgentPage) async throws
+        -> (frame: VaultFillFrame, objectID: String) {
+        let frames = try await VaultPageScripts.frames(page.cdp, sessions: VaultPageScripts.sessions(to: element.session, in: page.cdp),
+                                                       timeout: commandTimeout)
+        guard let main = frames.first, !main.id.isEmpty else { throw BrowserAgentToolError("The browser did not describe the page.") }
+        let refusal = BrowserAgentToolError("\(ref) is inside a frame the browser did not describe, so Yardlet did not fill "
+            + "it: it fills a field in a frame only when the frame and every page around it are https pages of one saved "
+            + "item's sites.")
+        let own = "function() { return this instanceof HTMLElement && this.ownerDocument === document; }"
+        let root = frames.first { $0.session == element.session }?.place
+        for frame in frames where frame.session == element.session {
+            let isRoot = frame.place == root
+            guard let around = VaultPageScripts.origins(around: frame, in: frames) else {
+                if isRoot { throw refusal }
+                continue
+            }
+            let place = VaultFillFrame(frame: frame, framedBy: around, pageLoaderID: main.loaderID)
+            // The session's own frame answers as the page did before frames: a field that is gone, or a document that
+            // went away meanwhile, reads as a stale reference. A frame below it that does not answer is passed over.
+            do {
+                let world = try await send(page, "Page.createIsolatedWorld", [
+                    "frameId": .string(frame.id), "worldName": .string(Self.vaultWorldName)
+                ], session: frame.session)
+                guard let contextID = world["executionContextId"]?.integerValue else {
+                    throw BrowserAgentToolError("The browser did not open a context to fill the page in.")
+                }
+                let resolved = try await send(page, "DOM.resolveNode", [
+                    "backendNodeId": .integer(Int64(element.node)), "executionContextId": .integer(contextID)
+                ], session: frame.session, ref: ref)
+                // A field of another document of the process resolves too, and one of another origin as null.
+                guard let objectID = resolved["object"]?["objectId"]?.stringValue,
+                      try await callInVaultWorld(page, objectID, own, session: frame.session, ref: ref).boolValue == true
+                else { continue }
+                return (place, objectID)
+            } catch let error as BrowserAgentDialogOpened {
+                throw error
+            } catch {
+                if isRoot { throw error }
+            }
+        }
+        throw refusal
+    }
+
+    private func callInVaultWorld(_ page: BrowserAgentPage, _ objectID: String, _ function: String, session: String? = nil,
                                   arguments: [JSONValue] = [], ref: String? = nil) async throws -> JSONValue {
         let result = try await send(page, "Runtime.callFunctionOn", [
             "functionDeclaration": .string(function), "objectId": .string(objectID),
             "arguments": .array(arguments.map { .object(["value": $0]) }), "returnByValue": .bool(true)
-        ], ref: ref)
+        ], session: session, ref: ref)
         if result["exceptionDetails"] != nil {
             throw BrowserAgentToolError("The fill did not run on this page.")
         }
@@ -1675,6 +1932,7 @@ extension BrowserAgentTools {
         case "not a code field": "\(ref) is not a one-time code field."
         case "not enough code boxes": "The code boxes after \(ref) are fewer than the code's digits."
         case "moved": "The page went to another site before Yardlet could fill it; nothing was filled."
+        case "left its document": "\(ref) left its document before Yardlet could fill it; nothing was filled. Call browser_snapshot again."
         case "not a password field": "\(ref) is not a password field."
         default: "The fill did not run on this page."
         }
@@ -1691,6 +1949,8 @@ extension BrowserAgentTools {
         function(kind, username, password, code, origin, fields, secrets) {
           const target = this;
           if (typeof origin === 'string' && location.origin !== origin) return { error: 'moved' };
+          // The field may have been moved into another document of the page since it was found.
+          if (!(target instanceof Node) || target.ownerDocument !== document) return { error: 'left its document' };
           const visible = e => { const r = e.getBoundingClientRect(); const s = getComputedStyle(e);
             return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; };
           const textTypes = ['text', 'email', 'tel', 'url', ''];

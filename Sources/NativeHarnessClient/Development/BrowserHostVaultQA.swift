@@ -67,6 +67,7 @@ final class BrowserHostVaultQA {
         await exerciseCodes()
         await exerciseReveal()
         await exerciseRefusals(strict: strict)
+        await exerciseFrames()
         await exerciseNewPasswords()
         await exerciseVirtualAuthenticator()
         await exercisePasskeys()
@@ -409,6 +410,158 @@ final class BrowserHostVaultQA {
         try? vault.delete(strict.id)
     }
 
+    // MARK: Frames
+
+    /// The same-site QA sign-in: a page and its sign-in frame on two hosts of one registrable domain, served at https
+    /// addresses under the reserved `.test` name (`serve`), and an item for that site.
+    private static let framesTop = "https://account.qa-frames.test/"
+    private static let framesSignIn = "https://idmsa.qa-frames.test/"
+    private static let framesPassword = "qa-frames-not-real"
+
+    /// `top`'s page holding the frame at `frame` (`/vault/frame`).
+    private static func framePage(_ top: String, _ frame: String) -> String {
+        top + "vault/frame?src=" + (frame.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? frame)
+    }
+
+    /// An agent's fill into a sign-in inside a frame (docs/BROWSER_VAULT_DESIGN.md, "Binding to sites"): a frame of the
+    /// item's site in a page of that site fills, and its password stays out of snapshots and the page's scripts. A
+    /// frame of the item's origin inside another site's page does not, nor does a chain with another site's frame in it
+    /// (localhost and 127.0.0.1 are two sites, so those frames render in processes of their own).
+    private func exerciseFrames() async {
+        guard let agentTab = client.tab(forSession: session) else { return check("frames: an agent's tab", false, "no tab") }
+        let item = VaultItem(name: "QA Frames", sites: ["qa-frames.test"], username: "frames@example.test", policy: .always)
+        try? vault.save(item, secret: VaultSecret(password: Self.framesPassword))
+        defer { try? vault.delete(item.id) }
+        let stopServing = await serve([Self.framesTop, Self.framesSignIn], on: agentTab)
+        defer { stopServing() }
+        func framed() async -> JSONValue? { await pageValue("window.qa ? window.qa.framed : null") }
+        func open(_ address: String) async -> String? {
+            let opened = await call(AgentToolCatalog.navigate, ["url": .string(address)])
+            if opened.isError { check("frames: load \(address)", false, opened.text) }
+            _ = await waitUntilAsync(.seconds(10)) {
+                Self.ref(in: await self.call(AgentToolCatalog.snapshot).text, role: "textbox", name: "Password") != nil
+            }
+            return Self.ref(in: await call(AgentToolCatalog.snapshot).text, role: "textbox", name: "Password")
+        }
+
+        guard let field = await open(Self.framePage(Self.framesTop, Self.framesSignIn + "vault/frame-signin")) else {
+            return check("frames: the snapshot reaches the sign-in frame's password field", false, "no field")
+        }
+        let filled = await call(VaultToolCatalog.fillCredential, ["ref": .string(field), "submit": .bool(true)])
+        let sent = await waitUntilAsync(.seconds(5)) { await framed()?["submitted"]?.boolValue == true }
+        let value = await framed()
+        check("frames: a sign-in in a frame of the item's site inside a page of that site fills and submits",
+              !filled.isError && sent && value?["origin"]?.stringValue == "https://idmsa.qa-frames.test"
+                && value?["user"]?.stringValue == item.username && value?["pass"]?.stringValue == Self.framesPassword
+                && !filled.text.contains(Self.framesPassword),
+              filled.text + " / user \(value?["user"]?.stringValue ?? "nil")")
+        let after = await call(AgentToolCatalog.snapshot)
+        let script = await call(AgentToolCatalog.evaluate, ["function": .string("() => document.title")])
+        check("frames: the filled frame's password stays out of snapshots and the page is closed to the agent's scripts",
+              after.text.contains("<redacted>") && !after.text.contains(Self.framesPassword) && script.isError, script.text)
+
+        // localhost's page holding a sign-in from 127.0.0.1, with an item for 127.0.0.1's origin named.
+        let loopback = base.replacingOccurrences(of: "localhost", with: "127.0.0.1")
+        let foreignItem = VaultItem(name: "QA Loopback", sites: [VaultSite.origin(of: loopback) ?? loopback],
+                                    username: "loopback@example.test", policy: .always)
+        try? vault.save(foreignItem, secret: VaultSecret(password: "qa-loopback-not-real"))
+        defer { try? vault.delete(foreignItem.id) }
+        if let foreign = await open(Self.framePage(base, loopback + "vault/frame-signin")) {
+            let refused = await call(VaultToolCatalog.fillCredential, ["ref": .string(foreign), "item": .string("QA Loopback")])
+            try? await Task.sleep(for: .milliseconds(500))
+            let left = await framed()
+            check("frames: an item's sign-in frame inside another site's page is refused and nothing goes in",
+                  refused.isError && refused.text.contains("frame") && left == .null, refused.text)
+        } else {
+            check("frames: the snapshot reaches the field of a frame from another site", false, "no field")
+        }
+
+        // localhost → 127.0.0.1 → localhost: the item's origin at both ends, another site between them.
+        if let nested = await open(Self.framePage(base, Self.framePage(loopback, base + "vault/frame-signin"))) {
+            let refused = await call(VaultToolCatalog.fillCredential, ["ref": .string(nested), "item": .string("QA sign-in")])
+            try? await Task.sleep(for: .milliseconds(500))
+            let left = await framed()
+            check("frames: a chain with another site's frame in it is refused and nothing goes in",
+                  refused.isError && refused.text.contains("frame") && left == .null, refused.text)
+        } else {
+            check("frames: the snapshot reaches the field of a frame inside another site's frame", false, "no field")
+        }
+        await navigate("vault/login")
+    }
+
+    /// The person's key button on a page whose sign-in is in a frame of its own site: the list knows the field takes a
+    /// sign-in, and the fill goes into the frame. A frame from another site in the item's page takes nothing.
+    private func exercisePanelFrames(_ controller: BrowserHostPaneController) async {
+        guard let tab = controller.tab else { return check("panel frames: a tab", false, "no tab") }
+        let item = VaultItem(name: "QA Frames", sites: ["qa-frames.test"], username: "frames@example.test")
+        try? vault.save(item, secret: VaultSecret(password: Self.framesPassword))
+        defer { try? vault.delete(item.id) }
+        let stopServing = await serve([Self.framesTop, Self.framesSignIn], on: tab)
+        defer { stopServing() }
+        func page(_ expression: String) async -> JSONValue? {
+            let result = try? await tab.devTools.send("Runtime.evaluate", ["expression": .string(expression), "returnByValue": .bool(true)],
+                                                      timeout: .seconds(10))
+            return result?["result"]?["value"]
+        }
+        func open(_ address: String) async -> Bool {
+            controller.addressInput = address
+            controller.submitAddress()
+            let loaded = await waitUntilAsync(.seconds(20)) {
+                controller.tab?.currentURL?.contains("vault/frame") == true && controller.tab?.isLoading == false
+            }
+            try? await Task.sleep(for: .seconds(1))
+            return loaded
+        }
+
+        let loaded = await open(Self.framePage(Self.framesTop, Self.framesSignIn + "vault/frame-signin"))
+        // The frame is another origin than the page's: the person's fill goes in once they click into its field.
+        controller.fillForPerson(item)
+        try? await Task.sleep(for: .seconds(2))
+        let unfocused = await page("window.qa.framed")
+        let focused = await focusFrameField(on: tab, id: "user")
+        let kind = await VaultPageScripts.personFieldKind(tab.devTools, sites: item.sites, timeout: .seconds(5))
+        controller.fillForPerson(item)
+        let filled = await waitUntilAsync(.seconds(5)) {
+            await page("window.qa.framed && window.qa.framed.pass")?.stringValue == Self.framesPassword
+        }
+        capture(controller, named: "vault-panel-frame-fill.png")
+        let user = await page("window.qa.framed && window.qa.framed.user")
+        check("panel frames: the key button fills a frame of another origin only once the person's focus is in it, its "
+                + "list reads the frame's field, and its fill goes into the frame",
+              loaded && unfocused == .null && focused && kind == .signIn && filled && user?.stringValue == item.username,
+              "loaded \(loaded), unfocused \(String(describing: unfocused)), focused \(focused), "
+                + "kind \(String(describing: kind)), filled \(filled)")
+
+        let loopback = base.replacingOccurrences(of: "localhost", with: "127.0.0.1")
+        let foreign = await open(Self.framePage(Self.framesTop, loopback + "vault/frame-signin"))
+        controller.fillForPerson(item)
+        try? await Task.sleep(for: .seconds(2))
+        let left = await page("window.qa.framed")
+        check("panel frames: a frame from another site in the item's page takes nothing",
+              foreign && left == .null, "loaded \(foreign), \(String(describing: left))")
+    }
+
+    /// Puts the focus in the field of id `id` of the page's frame (`/vault/frame`), as the person's click would.
+    private func focusFrameField(on tab: BrowserTab, id: String) async -> Bool {
+        guard let frame = try? await tab.devTools.send("Runtime.evaluate", [
+                  "expression": .string("document.getElementById('frame')")
+              ], timeout: .seconds(10))["result"]?["objectId"]?.stringValue,
+              let tree = try? await tab.devTools.send("DOM.describeNode", [
+                  "objectId": .string(frame), "depth": .integer(-1), "pierce": .bool(true)
+              ], timeout: .seconds(10))["node"] else { return false }
+        func find(_ node: JSONValue) -> Int64? {
+            let attributes = node["attributes"]?.arrayValue?.compactMap(\.stringValue) ?? []
+            if node["localName"]?.stringValue == "input",
+               stride(from: 0, to: attributes.count - 1, by: 2).contains(where: { attributes[$0] == "id" && attributes[$0 + 1] == id }) {
+                return node["backendNodeId"]?.integerValue
+            }
+            let inner = (node["children"]?.arrayValue ?? []) + [node["contentDocument"]].compactMap { $0 }
+            return inner.lazy.compactMap(find).first
+        }
+        guard let field = find(tree) else { return false }
+        return (try? await tab.devTools.send("DOM.focus", ["backendNodeId": .integer(field)], timeout: .seconds(10))) != nil
+    }
+
     // MARK: CDP's virtual authenticator in this CEF
 
     private func exerciseVirtualAuthenticator() async {
@@ -628,6 +781,7 @@ final class BrowserHostVaultQA {
         await exercisePanelSeveralSecrets(controller)
         await exercisePanelWallet(controller)
         await exercisePanelPicks(controller)
+        await exercisePanelFrames(controller)
     }
 
     /// The person's key-button fill holds the page's addresses too: a GET form's submission is refused before it is
