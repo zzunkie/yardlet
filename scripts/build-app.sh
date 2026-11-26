@@ -26,7 +26,8 @@ ARCHS=(${=YARDLET_ARCHS:-})
 
 # Chromium for the in-window browser (docs/BROWSER_HOST.md). Bundles carry a pinned CEF build of their
 # architecture, verified before use. Apple silicon: CEF's minimal distribution built from source with
-# Chromium's H.264 and AAC decoders, which CEF's own downloads leave out (scripts/build-cef.sh made it).
+# Chromium's H.264 and AAC decoders, which CEF's own downloads leave out, and with the keychain groups of
+# the team that signs releases, which Touch ID passkeys need (scripts/build-cef.sh made it).
 # Intel: CEF's own minimal distribution of the same version, from CEF's download site, so the browser
 # plays no H.264 or AAC on Intel Macs. YARDLET_WITHOUT_CEF=1 builds a debug bundle without CEF; its
 # browser panel falls back to the WebKit preview, like a plain `swift run`. YARDLET_DOWNLOAD_CEF=1
@@ -46,10 +47,10 @@ else
     fi
     case ${ARCHS[1]:-$(/usr/bin/uname -m)} in
         arm64)
-            CEF_NAME="cef_binary_${CEF_VERSION}_macosarm64_codecs_minimal"
-            CEF_ARCHIVE_URL="https://github.com/zzunkie/yardlet/releases/download/cef-154.0.28-codecs/cef_binary_154.0.28%2Bg564dd6c%2Bchromium-154.0.8037.58_macosarm64_codecs_minimal.tar.bz2"
-            CEF_ARCHIVE_SHA256="a44771fb3c5fbc3658320c3258f03e0b4d0ee7085d70c36d48c03ef08e44d0ad"
-            CEF_FRAMEWORK_SHA256="02b51a9be1f8e4a4b97410bd4144a4d8063e8aa6f3fcd0a87f16c9b111a708eb"
+            CEF_NAME="cef_binary_${CEF_VERSION}_macosarm64_yardlet_minimal"
+            CEF_ARCHIVE_URL="https://github.com/zzunkie/yardlet/releases/download/cef-154.0.28-yardlet/cef_binary_154.0.28%2Bg564dd6c%2Bchromium-154.0.8037.58_macosarm64_yardlet_minimal.tar.bz2"
+            CEF_ARCHIVE_SHA256="e5934e060d50c548e8a19247215f047a6d8cbe15414d61ecc4b7c3e74692fae3"
+            CEF_FRAMEWORK_SHA256="5b5913af6eb22b43c1c6ab4f7f7467a1a775fa4a2e7d99c6a4337bc7b122c994"
             ;;
         x86_64)
             CEF_NAME="cef_binary_${CEF_VERSION}_macosx64_minimal"

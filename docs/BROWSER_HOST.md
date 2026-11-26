@@ -423,13 +423,14 @@ and the agent does not take a dialog the person answered as still open.
 ## 7. Build and signing
 
 - `scripts/build-app.sh` uses a pinned CEF: `154.0.28+g564dd6c+chromium-154.0.8037.58`, macOS arm64 minimal, built with
-  Chromium's H.264 and AAC decoders by `scripts/build-cef.sh` (below). The archive
-  `cef_binary_154.0.28+g564dd6c+chromium-154.0.8037.58_macosarm64_codecs_minimal.tar.bz2` is an asset of this
-  repository's `cef-154.0.28-codecs` release, SHA-256 `a44771fb3c5fbc3658320c3258f03e0b4d0ee7085d70c36d48c03ef08e44d0ad`; the framework executable's SHA-256 is
-  `02b51a9be1f8e4a4b97410bd4144a4d8063e8aa6f3fcd0a87f16c9b111a708eb`. The script verifies and uses the unpacked distribution in `~/Library/Caches/Yardlet/CEF/`, and if
+  Chromium's H.264 and AAC decoders and the release team's keychain groups for Touch ID passkeys by
+  `scripts/build-cef.sh` (below). The archive
+  `cef_binary_154.0.28+g564dd6c+chromium-154.0.8037.58_macosarm64_yardlet_minimal.tar.bz2` is an asset of this
+  repository's `cef-154.0.28-yardlet` release, SHA-256 `e5934e060d50c548e8a19247215f047a6d8cbe15414d61ecc4b7c3e74692fae3`; the framework executable's SHA-256 is
+  `5b5913af6eb22b43c1c6ab4f7f7467a1a775fa4a2e7d99c6a4337bc7b122c994`. The script verifies and uses the unpacked distribution in `~/Library/Caches/Yardlet/CEF/`, and if
   only the archive is there, it checks the archive's SHA-256 and unpacks it. If neither is there, it shows the download
-  command and stops; `YARDLET_DOWNLOAD_CEF=1` downloads the pinned archive instead. The `_codecs` in the name keeps it
-  apart from CEF's own download of the same version in that folder.
+  command and stops; `YARDLET_DOWNLOAD_CEF=1` downloads the pinned archive instead. The `_yardlet` in the name keeps it
+  apart from CEF's own download of the same version, and from the earlier `_codecs` build, in that folder.
 - An Intel bundle (`YARDLET_ARCHS=x86_64`) uses CEF's own macOS x64 minimal distribution of the same version, downloaded
   from CEF's site: `https://cef-builds.spotifycdn.com/cef_binary_154.0.28%2Bg564dd6c%2Bchromium-154.0.8037.58_macosx64_minimal.tar.bz2`,
   138,668,823 bytes, SHA-256 `0a4269342ed049ad571133eae93f90466cae6fea881872a3383c991c2945da11` (its SHA-1 matches the one
@@ -444,7 +445,13 @@ and the agent does not take a dialog the person answered as still open.
   `make_distrib.py --minimal`. Its `GN_DEFINES` add `proprietary_codecs=true ffmpeg_branding=Chrome`, `symbol_level=1`
   (line tables only, enough for crash stacks, where an official build defaults to full symbols) and
   `treat_warnings_as_errors=false` (CEF names the macOS 26 SDK for this branch, and a warning from Xcode 27.1's newer
-  SDK must not stop a build of hours). The last two change no code. It needs Xcode's Metal Toolchain and git-lfs, and
+  SDK must not stop a build of hours). The last two change no code. One more,
+  `branding_file_path=//chrome/app/theme/yardlet/BRANDING`, points at a copy of Chromium's BRANDING that the script writes
+  with `MAC_TEAM_ID` set to the team that signs releases (`YARDLET_CEF_TEAM`) and `MAC_BUNDLE_ID` set so that the
+  group ends in `com.zzunkie.webauthn`. Chromium builds its keychain groups from these two, so the Touch ID
+  groups come out as `<team>.com.zzunkie.webauthn` and `…-uvk`, which the browser host's profile can grant, with no change to the binary afterwards; the cookie key's keychain service, data
+  paths and helper identifiers come from elsewhere and stay as they were. The script checks the framework's groups at
+  the end. It needs Xcode's Metal Toolchain and git-lfs, and
   takes hours and about 55 GB of disk for the work directory (about 34 GB of it the checkout). To check that a build has
   the decoders: its dSYM has `_ff_h264_decoder` and `_ff_aac_decoder`, and the decoders' class and option names
   (`H264 Decoder`, `AAC decoder`, `nal_length_size`, `dual_mono_mode`) are in the executable and not in CEF's own.
