@@ -776,6 +776,15 @@ struct ClaudeSubagentTranscriptReader: Sendable {
                 record(added(after: lastID), from: value)
                 continue
             }
+            // So does another task's message that waited for the turn to end: Claude saves it as a meta
+            // record under its framing, and it reads as that task's message (`relayedTaskMessage`).
+            if let message = Self.relayedTaskMessage(value) {
+                count += 1
+                let lastID = builder.entries.last?.id
+                builder.appendUser(message)
+                record(added(after: lastID), from: value)
+                continue
+            }
             if var failure = ClaudeLocalCommand.savedCompactionFailure(in: value) {
                 if let id = failure.providerID, idleCompactions.contains(id) { failure.whileIdle = true }
                 let lastID = builder.entries.last?.id
@@ -902,6 +911,7 @@ struct ClaudeSubagentTranscriptReader: Sendable {
     /// Whether a record leaves a compaction saved before it still waiting for its `/compact`: the summary
     /// and notes Claude saves after a compaction show nothing, and the command it ran shows before it.
     static func followsItsCompaction(_ value: JSONValue) -> Bool {
+        if relayedTaskMessage(value) != nil { return false }
         if value["isMeta"]?.boolValue == true || value["isCompactSummary"]?.boolValue == true
             || value["isVisibleInTranscriptOnly"]?.boolValue == true { return true }
         guard value["type"]?.stringValue == "user" else { return false }
@@ -926,6 +936,25 @@ struct ClaudeSubagentTranscriptReader: Sendable {
         }.joined(separator: "\n")
         guard let text, ClaudeTaskNotification.parse(text) != nil else { return nil }
         return text
+    }
+
+    /// How Claude Code 2.1.332 frames, for the model and in the record it saves, a message it files as
+    /// `{kind: "unclassified"}`: one a host sent `isSynthetic`.
+    static let nonUserSourceFraming = "[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT]\n"
+
+    /// Another task's message (`TaskMessage`) that Yardlet sent `isSynthetic` and that started a turn of its
+    /// own, because it arrived as the turn ended: Claude saves it as a `user` record with `isMeta`, origin
+    /// `{kind: "unclassified"}` and its framing (`nonUserSourceFraming`) before the text. Its text without
+    /// the framing, or nil for any other record.
+    static func relayedTaskMessage(_ value: JSONValue) -> String? {
+        guard value["type"]?.stringValue == "user", value["isSidechain"]?.boolValue != true,
+              value["origin"]?["kind"]?.stringValue == "unclassified" else { return nil }
+        let content = value["message"]?["content"]
+        var text = content?.stringValue ?? content?.arrayValue?.compactMap {
+            $0["type"]?.stringValue == "text" ? $0["text"]?.stringValue : nil
+        }.joined(separator: "\n") ?? ""
+        if text.hasPrefix(nonUserSourceFraming) { text.removeFirst(nonUserSourceFraming.count) }
+        return TaskMessage.parse(text) != nil ? text : nil
     }
 
     /// A `user` record Claude Code wrote itself to start a turn — the notice that a background
@@ -1006,18 +1035,25 @@ struct ClaudeSubagentTranscriptReader: Sendable {
         return ended
     }
 
-    /// The text of a message a person sent while a turn ran, from the `queued_command` record
-    /// Claude saves when it reads one into the turn. Commands Claude queued itself (a finished
-    /// background task's notice, a bash command) are not messages and return nil.
+    /// The text of a message sent while a turn ran, from the `queued_command` record Claude saves
+    /// when it reads one into the turn: the person's, or another task's (`TaskMessage`), which Yardlet
+    /// sends marked `isSynthetic` and Claude files as `{kind: "unclassified"}`. Commands Claude queued
+    /// itself (a finished background task's notice, a bash command, an earlier request it forwards, which
+    /// may be another task's message already shown) are not messages and return nil.
     static func messageReadIntoTurn(_ attachment: JSONValue?) -> String? {
         guard let attachment, attachment["type"]?.stringValue == "queued_command",
               (attachment["commandMode"]?.stringValue ?? "prompt") == "prompt",
-              (attachment["origin"]?["kind"]?.stringValue ?? "human") == "human" else { return nil }
+              (attachment["forwardedIntent"] ?? .null) == .null else { return nil }
         let prompt = attachment["prompt"]
         let text = prompt?.stringValue ?? prompt?.arrayValue?.compactMap {
             $0["type"]?.stringValue == "text" ? $0["text"]?.stringValue : nil
         }.joined(separator: "\n") ?? ""
-        return text.isEmpty ? nil : text
+        guard !text.isEmpty else { return nil }
+        switch attachment["origin"]?["kind"]?.stringValue ?? "human" {
+        case "human": return text
+        case "unclassified": return TaskMessage.parse(text) != nil ? text : nil
+        default: return nil
+        }
     }
 
     private func empty() -> HarnessSubtaskTranscript { .init(entries: [], isTruncated: false) }
