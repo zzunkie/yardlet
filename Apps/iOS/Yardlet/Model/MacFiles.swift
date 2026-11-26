@@ -120,11 +120,15 @@ enum ConversationLinks {
     /// The scheme of the links the phone puts on code spans that name a file.
     static let fileScheme = "yardlet-file"
 
-    /// The task a link `[title](#<task ID>)` names, in upper case as the Mac writes its IDs.
+    /// The task a link `[title](#<task ID>)` or `conversation://<ID>` (as Antigravity links a conversation) names,
+    /// in upper case as the Mac writes its IDs. No app opens a conversation link, so it never leaves the phone.
     static func task(_ url: URL) -> String? {
         let text = url.absoluteString
-        guard text.hasPrefix("#"), let id = UUID(uuidString: String(text.dropFirst())) else { return nil }
-        return id.uuidString
+        if text.hasPrefix("#") { return UUID(uuidString: String(text.dropFirst()))?.uuidString }
+        guard url.scheme?.lowercased() == "conversation", url.user == nil, url.password == nil, url.port == nil,
+              url.query == nil, url.fragment == nil, ["", "/"].contains(url.path(percentEncoded: false)),
+              let host = url.host(percentEncoded: false) else { return nil }
+        return UUID(uuidString: host)?.uuidString
     }
 
     /// The file a link names: a code span's (`fileLink`) or an answer's own link to a path.

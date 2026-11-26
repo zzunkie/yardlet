@@ -1058,11 +1058,22 @@ struct MainWindow: View {
 
     /// A conversation's link to another task (`TaskLink`): that task, in a new tab on ⌘-click as a
     /// sidebar row opens, or where the link's menu chose (`place`), as the row's menu opens it; the side
-    /// panel is that of `sidePanelOwnerID`, the task whose area shows the conversation. A Codex thread Yardlet
-    /// does not have opens in the Codex app; an anchor to a task Yardlet does not have only beeps.
-    private func openLinkedTask(_ link: TaskLink, url: URL, place: TaskLinkPlace? = nil, sidePanelOwnerID: UUID? = nil) {
+    /// panel is that of `sidePanelOwnerID`, the task whose area shows the conversation. A conversation link
+    /// (`conversation://<UUID>`) to one of `session`'s own Antigravity subagents opens it beside the task, as
+    /// its row in the Agents card does. A Codex thread Yardlet does not have opens in the Codex app; any other
+    /// link to a task Yardlet does not have only beeps.
+    private func openLinkedTask(_ link: TaskLink, url: URL, from session: SessionRecord, place: TaskLinkPlace? = nil,
+                                sidePanelOwnerID: UUID? = nil) {
         let place = place ?? (NSApp.currentEvent?.modifierFlags.contains(.command) == true ? .newTab : nil)
         Task {
+            if case let .conversation(id) = link,
+               let subagent = await model.antigravitySubagents(of: session).first(where: {
+                   UUID(uuidString: $0.conversationID) == id
+               }) {
+                model.taskWorkspaces.state(for: session.id)
+                    .showPanelDetail(.antigravitySubagent(subagent.conversationID, title: subagent.displayTitle))
+                return
+            }
             guard let task = await model.task(linkedBy: link) else {
                 if link.opensElsewhere { NSWorkspace.shared.open(url) } else { NSSound.beep() }
                 return
@@ -1593,7 +1604,7 @@ struct MainWindow: View {
         .environment(\.openURL, OpenURLAction { url in
             // A link to another task opens that task, as the Claude app and Codex open theirs.
             if let link = TaskLink(url) {
-                openLinkedTask(link, url: url)
+                openLinkedTask(link, url: url, from: session)
                 return .handled
             }
             // Any other anchor names a place in the message, not a file.
@@ -1620,7 +1631,7 @@ struct MainWindow: View {
         // The menu of a link to another task also opens it beside this one: in a new tab, a split view, or
         // the side panel of the task whose area shows the conversation.
         .environment(\.conversationLinkPlaces, ConversationLinkPlaces(task: { link, url, place in
-            openLinkedTask(link, url: url, place: place, sidePanelOwnerID: filePanelOwnerID ?? session.id)
+            openLinkedTask(link, url: url, from: session, place: place, sidePanelOwnerID: filePanelOwnerID ?? session.id)
         }))
         // A Codex suggested task's "Use suggestion" opens a new task holding its prompt.
         .environment(\.startSuggestedTask, { prompt in startSuggestedTask(prompt, from: session) })

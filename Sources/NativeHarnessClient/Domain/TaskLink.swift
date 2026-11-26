@@ -2,8 +2,9 @@ import Foundation
 
 /// A link in a conversation that names a task rather than a page or a file, in the forms agents
 /// write them: a Yardlet task ID as an anchor (`[title](#<UUID>)`, as Claude Code writes the Claude
-/// app's session links), the Claude app's own session anchor (`#local_<id>`), and the Codex app's
-/// thread link (`codex://threads/<id>`). Clicking one opens that task in Yardlet.
+/// app's session links), the Claude app's own session anchor (`#local_<id>`), the Codex app's
+/// thread link (`codex://threads/<id>`), and a conversation link (`conversation://<UUID>`), as
+/// Antigravity writes its subagents' and other conversations'. Clicking one opens that task in Yardlet.
 enum TaskLink: Equatable, Sendable {
     /// A Yardlet task ID, or a harness session ID that is a UUID (a Claude Code session, a Codex
     /// thread).
@@ -13,6 +14,9 @@ enum TaskLink: Equatable, Sendable {
     case claudeDesktopSession(String)
     /// A Codex thread by its ID.
     case codexThread(String)
+    /// A conversation by its ID (`conversation://<UUID>`): one of the task's own subagents, or a
+    /// task whose harness session has that ID. No app opens these, so they never leave Yardlet.
+    case conversation(UUID)
 
     init?(_ url: URL) {
         if url.scheme == nil {
@@ -26,6 +30,13 @@ enum TaskLink: Equatable, Sendable {
             } else {
                 return nil
             }
+            return
+        }
+        if url.scheme?.lowercased() == "conversation" {
+            guard url.user == nil, url.password == nil, url.port == nil, url.query == nil, url.fragment == nil,
+                  ["", "/"].contains(url.path(percentEncoded: false)),
+                  let host = url.host(percentEncoded: false), let id = UUID(uuidString: host) else { return nil }
+            self = .conversation(id)
             return
         }
         // The Codex app opens `codex://threads/<id>` in its own window (`codex-dev:` is its

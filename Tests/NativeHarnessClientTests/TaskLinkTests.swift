@@ -24,7 +24,15 @@ final class TaskLinkTests: XCTestCase {
         XCTAssertEqual(TaskLink(try XCTUnwrap(URL(string: "codex://threads/019a2b3c-4d5e-7f80-9a1b-2c3d4e5f6a7b"))),
                        .codexThread("019a2b3c-4d5e-7f80-9a1b-2c3d4e5f6a7b"))
         XCTAssertEqual(TaskLink(try XCTUnwrap(URL(string: "codex://threads/019a2b3c?view=review")))?.opensElsewhere, true)
-        for other in ["#what-changed", "#local_../../etc", "https://claude.ai/code/session_01abcdef",
+        // Antigravity links a conversation by its ID, in either case; no app opens one, so it stays in Yardlet.
+        for written in ["conversation://13242c33-725c-4ac5-a49b-ba5fa470ee9e",
+                        "conversation://13242C33-725C-4AC5-A49B-BA5FA470EE9E/", "CONVERSATION://13242c33-725c-4ac5-a49b-ba5fa470ee9e"] {
+            let link = TaskLink(try XCTUnwrap(URL(string: written)))
+            XCTAssertEqual(link, .conversation(Self.taskID), written)
+            XCTAssertEqual(link?.opensElsewhere, false, written)
+        }
+        for other in ["#what-changed", "conversation://not-a-uuid", "conversation://13242c33-725c-4ac5-a49b-ba5fa470ee9e/x",
+                      "conversation://13242c33-725c-4ac5-a49b-ba5fa470ee9e?x=1", "conversation://u@13242c33-725c-4ac5-a49b-ba5fa470ee9e", "#local_../../etc", "https://claude.ai/code/session_01abcdef",
                       "file:///tmp/a.swift#L3", "Sources/Parser.swift", "codex://threads/a/b", "codex://skills/x",
                       "mailto:someone@example.com"] {
             XCTAssertNil(TaskLink(try XCTUnwrap(URL(string: other))), other)
@@ -70,6 +78,8 @@ final class TaskLinkTests: XCTestCase {
         XCTAssertEqual(byID?.id, task.id)
         let bySession = await model.task(linkedBy: .task(UUID(uuidString: "6F0D8A52-3C3E-4F0E-9D55-0A5C9B1E2F30")!))
         XCTAssertEqual(bySession?.id, task.id, "A Claude Code session ID names its task")
+        let byConversation = await model.task(linkedBy: .conversation(UUID(uuidString: "6f0d8a52-3c3e-4f0e-9d55-0a5c9b1e2f30")!))
+        XCTAssertEqual(byConversation?.id, task.id, "A conversation link names the task whose session has its ID")
         let byThread = await model.task(linkedBy: .codexThread("019a2b3c-4d5e-7f80-9a1b-2c3d4e5f6a7b"))
         XCTAssertEqual(byThread?.id, thread.id)
         let missing = await model.task(linkedBy: .task(UUID()))

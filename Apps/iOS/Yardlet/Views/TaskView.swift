@@ -282,7 +282,10 @@ struct TaskView: View {
             if linked != taskID {
                 if session.task(linked) != nil {
                     openTask(linked)
-                } else {
+                } else if url.scheme == nil {
+                    // A conversation link (`conversation://`) that names no listed task is often a
+                    // subagent's, which the phone does not show: it does nothing rather than report a task
+                    // that went away.
                     session.commandError = String(localized: "\(session.name) no longer lists this task.")
                 }
             }

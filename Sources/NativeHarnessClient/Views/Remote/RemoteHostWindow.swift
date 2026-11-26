@@ -1596,7 +1596,7 @@ struct RemoteTaskView: View {
             guard model.offersTaskFiles else { return .discarded }
             open(url, .viewer)
             return .handled
-        case let .task(.task(id)):
+        case let .task(.task(id)), let .task(.conversation(id)):
             guard model.task(id.uuidString) != nil else { return .discarded }
             model.select(.task(id.uuidString))
             return .handled

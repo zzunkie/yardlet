@@ -166,6 +166,8 @@ final class ConversationConveniencesTests: XCTestCase {
         XCTAssertEqual(ConversationLinkKind(URL(string: "mailto:someone@example.com")!), .other)
         XCTAssertEqual(ConversationLinkKind(TaskLink.url(Self.otherTask)), .task(.task(Self.otherTask)))
         XCTAssertEqual(ConversationLinkKind(URL(string: "codex://threads/thread_1")!), .task(.codexThread("thread_1")))
+        XCTAssertEqual(ConversationLinkKind(URL(string: "conversation://\(Self.otherTask.uuidString.lowercased())")!),
+                       .task(.conversation(Self.otherTask)))
         // A heading's anchor names nothing outside the message, so its menu offers nothing of its own.
         let heading = URL(string: "#usage")!
         XCTAssertEqual(ConversationLinkKind(heading), .place)
