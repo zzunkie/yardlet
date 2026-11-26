@@ -1,17 +1,59 @@
 import Foundation
 import XCTest
 
-/// Keeps the conversation and composer views free of harness comparisons (plan M11, A1): what
-/// differs between harnesses is decided in their projections (`ComposerSessionOptionsProjection`
-/// for the composer) and read by the views. Existing comparisons are listed per file and may
-/// only shrink.
+/// Keeps the screens free of harness comparisons (docs/ARCHITECTURE.md, "Checks that only tighten"):
+/// the Mac views, the Windows app and the remote bridge read what differs between harnesses from a
+/// projection (`ComposerSessionOptionsProjection` for the composer), so a difference is decided once
+/// for all of them. A file named `…Projection.swift` is a projection and may compare. Existing
+/// comparisons are listed per file and may only shrink.
 final class HarnessBranchLintTests: XCTestCase {
-    /// The view folders that read projections instead of comparing harnesses.
-    private static let folders = ["Views/Composer/", "Views/Conversation/", "Views/HarnessSettings/"]
+    /// The folders that read projections instead of comparing harnesses.
+    private static let folders = ["Views/", "WinUI/", "Remote/"]
 
     /// Existing comparisons, by file and count. Lower a count or remove the entry when a file
     /// loses one; never add one.
-    private static let allowed: [String: Int] = [:]
+    private static let allowed: [String: Int] = [
+        "Remote/AppModelRemoteBridge+Accounts.swift": 1,
+        "Remote/AppModelRemoteBridge+FileRewind.swift": 1,
+        "Remote/AppModelRemoteBridge+NextSteps.swift": 2,
+        "Remote/AppModelRemoteBridge+Rail.swift": 2,
+        "Remote/AppModelRemoteBridge+Schedules.swift": 6,
+        "Remote/AppModelRemoteBridge+Settings.swift": 1,
+        "Remote/AppModelRemoteBridge+Subtasks.swift": 1,
+        "Remote/AppModelRemoteBridge+Suggestions.swift": 1,
+        "Remote/AppModelRemoteBridge+TaskActions.swift": 1,
+        "Remote/AppModelRemoteBridge+TaskControls.swift": 6,
+        "Remote/AppModelRemoteBridge+UsageReset.swift": 2,
+        "Remote/AppModelRemoteBridge.swift": 5,
+        "Remote/Client/RemoteNewTaskForm.swift": 1,
+        "Remote/Client/RemoteSuggestionOptions.swift": 1,
+        "Views/AccountCenterView.swift": 3,
+        "Views/AccountListView.swift": 2,
+        "Views/AppShell/HomeSurface.swift": 1,
+        "Views/AppShell/SidebarAccountMenu.swift": 1,
+        "Views/AppShell/TaskHeader.swift": 1,
+        "Views/AppShell/TaskSurface.swift": 6,
+        "Views/ImportConversationSheet.swift": 3,
+        "Views/MainWindow.swift": 6,
+        "Views/OtherAppImportSheet.swift": 1,
+        "Views/ProviderConnectionsView.swift": 4,
+        "Views/Remote/RemoteHostWindow.swift": 1,
+        "Views/Remote/RemoteNewTaskView.swift": 2,
+        "Views/Remote/RemoteSchedules+Editing.swift": 3,
+        "Views/Remote/RemoteTaskActionAlerts.swift": 2,
+        "Views/Schedules/ScheduledTaskEditor.swift": 2,
+        "Views/SessionRail/SessionRailHost.swift": 1,
+        "WinUI/HarnessSignIn.swift": 3,
+        "WinUI/ImportConversationPane.swift": 3,
+        "WinUI/MainWindow.swift": 1,
+        "WinUI/NewTaskPane.swift": 2,
+        "WinUI/NewTaskParts.swift": 1,
+        "WinUI/QAHarnessCheck.swift": 1,
+        "WinUI/SidebarRows.swift": 1,
+        "WinUI/TaskComposer.swift": 4,
+        "WinUI/TaskHeader.swift": 1,
+        "WinUI/TaskSource.swift": 1
+    ]
 
     private static let patterns = [
         // `harness == .codex`, `session.harness != .claudeCode`, `$0.harness == x`
@@ -22,7 +64,7 @@ final class HarnessBranchLintTests: XCTestCase {
         #"\bswitch\s+[\w.$]*\bharness\b"#
     ]
 
-    func testComposerAndConversationViewsDoNotCompareHarnesses() throws {
+    func testScreensDoNotCompareHarnesses() throws {
         let sources = try Self.sources()
         XCTAssertTrue(sources.keys.contains("Views/Composer/PromptComposer.swift"), "The composer was not scanned")
         for (path, text) in sources.sorted(by: { $0.key < $1.key }) {
@@ -81,7 +123,8 @@ final class HarnessBranchLintTests: XCTestCase {
             guard let enumerator = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: nil) else {
                 continue
             }
-            for case let url as URL in enumerator where url.pathExtension == "swift" {
+            for case let url as URL in enumerator
+            where url.pathExtension == "swift" && !url.lastPathComponent.hasSuffix("Projection.swift") {
                 let path = String(url.standardizedFileURL.path(percentEncoded: false).dropFirst(rootPath.count))
                 sources[path] = try String(contentsOf: url, encoding: .utf8)
             }

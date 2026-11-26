@@ -133,6 +133,22 @@ Yardlet reads and stores beside it.
 | Localization catalogs | `python3 -B scripts/l10n.py check` (`--strict` for full parity) |
 | Relay | `cd relay && npm ci && npm run typecheck && npm test` |
 
+### Checks that only tighten
+
+Some rules are kept by tests that read the source, so a change that breaks one fails the quick suite:
+
+| Test | Rule |
+| --- | --- |
+| `EnginePortabilityTests` | Engine code uses no macOS-only frameworks or APIs. |
+| `HarnessBranchLintTests` | The Mac views, the Windows app and the remote bridge compare no harnesses; what differs is decided in a projection (a file named `…Projection.swift`). |
+| `AppModelStateLintTests` | `AppModel` gains no stored properties and no dictionaries keyed by an ID; a feature's state gets an owner of its own. |
+| `TaskRuntimeLintTests` | Only `AppModel+TaskRuntime.swift` decides which CLI a task runs. |
+| `ViewSourceLintTests` | Every prominent button takes the accent. |
+
+Where a rule has existing exceptions, the test lists them with a count or a limit that may only fall. A change
+that removes some lowers the number in the same change; a change that must add some raises it and says why in
+its pull request.
+
 CI workflows are in `.github/workflows/`: `ci.yml` (build, warnings, quick suite), `linux-engine.yml` (engine-only build),
 `windows-engine.yml` (engine-only build, the Windows app build and `YardletWindowsTests`), `linux-host.yml`, `windows-app.yml`, `ios.yml`, `relay.yml` and the
 nightly `full-tests.yml`.
