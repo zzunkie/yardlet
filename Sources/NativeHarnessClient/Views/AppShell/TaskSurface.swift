@@ -277,6 +277,11 @@ struct TaskDetail: View {
             .transformEnvironment(\.conversationLinkPlaces) { $0.browserPanel = openInTaskBrowser }
             .environment(\.transcriptTerminalRun, codeBlockRun)
             .environment(\.transcriptComposerDraft, TranscriptComposerDraft(draft: { text in draftIntoComposer(text) }))
+            // Text scrolled up to the header fades out under it rather than being cut through a line of
+            // letters at the header's edge. At rest it covers the conversation's top margin only.
+            .overlay(alignment: .top) {
+                if !conversationOnly { ConversationTopEdgeFade() }
+            }
             .overlay(alignment: .topTrailing) {
                 ConversationFindBar(find: workspaceState.conversationFind)
                     .padding(.top, 8)
@@ -1172,5 +1177,15 @@ struct TaskTranscriptView<Content: View>: View {
 
     var body: some View {
         TaskObservationScope { content(transcript.read()) }
+    }
+}
+
+/// The conversation's top edge under the task area's header: the canvas fading into the text below it.
+private struct ConversationTopEdgeFade: View {
+    var body: some View {
+        LinearGradient(colors: [ParityTheme.canvas, ParityTheme.canvas.opacity(0)], startPoint: .top, endPoint: .bottom)
+            .frame(height: ParitySpace.s16)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }

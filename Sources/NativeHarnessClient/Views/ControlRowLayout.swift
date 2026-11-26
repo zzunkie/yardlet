@@ -49,11 +49,23 @@ struct ControlRowLayout: Layout {
     /// Nested provider controls may themselves wrap. Measure them at the same constrained
     /// width used for placement so narrow composers reserve their actual height.
     private func measuredSizes(_ subviews: Subviews, width: CGFloat) -> [CGSize] {
-        subviews.map { view in
+        var sizes = subviews.map { view in
             let ideal = view.sizeThatFits(.unspecified)
             return ideal.width > width
                 ? view.sizeThatFits(ProposedViewSize(width: width, height: nil)) : ideal
         }
+        // Actions that can shorten (the composer's model control drops its effort, then shortens its name)
+        // take the room the row leaves them before anything wraps: a wrap left the first control, the
+        // composer's "+", alone on a row of its own. Given less than half their width, they wrap instead.
+        if pinsTrailingActions, sizes.count > 1, let actions = sizes.last {
+            let leading = sizes.dropLast().reduce(0) { $0 + $1.width } + spacing * CGFloat(sizes.count - 1)
+            let room = width - leading
+            if leading + actions.width > width, room >= actions.width / 2 {
+                let shortened = subviews[subviews.count - 1].sizeThatFits(ProposedViewSize(width: room, height: nil))
+                if shortened.width <= room { sizes[sizes.count - 1] = shortened }
+            }
+        }
+        return sizes
     }
 
     private func rows(for sizes: [CGSize], width: CGFloat) -> [Row] {

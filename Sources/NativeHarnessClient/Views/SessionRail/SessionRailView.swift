@@ -213,10 +213,12 @@ struct SessionRailCard<HeaderMenu: View, Content: View>: View {
             }
         }
         .background(ParityTheme.canvas, in: RoundedRectangle(cornerRadius: ParityRadius.row))
+        // The hairline inside the card's edge, not across it, so it draws as one crisp line on the canvas
+        // rather than a softer, doubled one.
         .overlay {
             RoundedRectangle(cornerRadius: ParityRadius.row)
-                .stroke(isDropTarget ? ParityTheme.accent.opacity(0.6) : ParityTheme.separator,
-                        lineWidth: isDropTarget ? 1.5 : 1)
+                .strokeBorder(isDropTarget ? ParityTheme.accent.opacity(0.6) : ParityTheme.separator,
+                              lineWidth: isDropTarget ? 1.5 : 1)
         }
         .contentShape(RoundedRectangle(cornerRadius: ParityRadius.row))
         .accessibilityElement(children: .contain)

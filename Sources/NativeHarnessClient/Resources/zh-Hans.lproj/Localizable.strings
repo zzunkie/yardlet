@@ -1743,6 +1743,7 @@
 "Used a tool" = "已使用 1 个工具";
 "Used %lld tools" = "已使用 %lld 个工具";
 "Awaiting approval" = "等待批准";
+"%lld more waiting" = "另有 %lld 项等待中";
 "Needs input" = "需要输入";
 "Task encountered a system error" = "任务遇到系统错误";
 "Working" = "处理中";

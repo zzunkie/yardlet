@@ -762,6 +762,14 @@ extension View {
         buttonStyle(.borderedProminent).tint(ParityTheme.accent)
     }
 
+    /// The one answer a row of answers leads to, in the action fill Send is drawn in (`primaryActionFill`), as
+    /// the Claude app fills its "Allow". Drawn by Yardlet rather than AppKit, so it stays filled in a window
+    /// that is not key and under any accent, where a `.borderedProminent` button turned as gray as its
+    /// neighbours.
+    func parityPrimaryActionButton() -> some View {
+        buttonStyle(ParityPrimaryActionButtonStyle())
+    }
+
     /// A link keeps the native button behavior and follows the same accent as prose links.
     func parityLinkButton() -> some View {
         buttonStyle(.link).tint(ParityTheme.accentText)
@@ -773,6 +781,25 @@ extension View {
                 RoundedRectangle(cornerRadius: cornerRadius)
                     .stroke(ParityTheme.separator)
             }
+    }
+}
+
+/// `parityPrimaryActionButton()`: a native bordered button's size, filled with the action fill.
+struct ParityPrimaryActionButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
+
+    func makeBody(configuration: Configuration) -> some View {
+        let shape = RoundedRectangle(cornerRadius: ParityRadius.control, style: .continuous)
+        configuration.label
+            .font(.parity(.control, weight: .medium, scale: interfaceScale))
+            .foregroundStyle(isEnabled ? AnyShapeStyle(ParityTheme.primaryActionForeground) : AnyShapeStyle(.tertiary))
+            .padding(.horizontal, ParitySpace.s8)
+            .frame(minHeight: 22 * interfaceScale)
+            .background(isEnabled ? AnyShapeStyle(ParityTheme.primaryActionFill) : AnyShapeStyle(ParityTheme.subtleFill),
+                        in: shape)
+            .opacity(configuration.isPressed ? 0.85 : 1)
+            .contentShape(shape)
     }
 }
 

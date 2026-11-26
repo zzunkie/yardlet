@@ -4,6 +4,10 @@ private struct WorkSurfaceExpansionKey: EnvironmentKey {
     static let defaultValue: Binding<Bool>? = nil
 }
 
+private struct WorkSurfaceBelowAreaHeaderKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
 struct WorkSurfaceTab: Identifiable, Equatable, Sendable {
     let id: String
     let title: String
@@ -216,10 +220,17 @@ extension EnvironmentValues {
         get { self[WorkSurfaceNavigationKey.self] }
         set { self[WorkSurfaceNavigationKey.self] = newValue }
     }
+    /// The side panel sits below the task area's header, which then runs over it with the panel's own
+    /// toggle (`TaskWorkspaceLayout`): floating over the conversation's edge, as a sheet, or in its place.
+    var workSurfaceBelowAreaHeader: Bool {
+        get { self[WorkSurfaceBelowAreaHeaderKey.self] }
+        set { self[WorkSurfaceBelowAreaHeaderKey.self] = newValue }
+    }
 }
 
 struct WorkSurfacePanelControls: View {
     @Environment(\.workSurfaceExpansion) private var expansion
+    @Environment(\.workSurfaceBelowAreaHeader) private var isBelowAreaHeader
     /// The panel the close button hides; nil where the header has no panel around it and closes its own view.
     let kind: WorkSurfacePanelKind?
     let onClose: () -> Void
@@ -232,7 +243,11 @@ struct WorkSurfacePanelControls: View {
                     help: L10n.string(expansion.wrappedValue ? "Restore split view" : "Expand panel")
                 ) { expansion.wrappedValue.toggle() }
             }
-            if let kind {
+            // Below the area's header, the header's own toggle for the task's side panel sits right above
+            // this one; the panel does not draw it a second time.
+            if kind == .taskSidePanel && isBelowAreaHeader {
+                EmptyView()
+            } else if let kind {
                 ParityHeaderButton(systemName: kind.symbol, help: kind.title, shortcut: kind.shortcut, action: onClose)
             } else {
                 ParityHeaderButton(systemName: "xmark", help: L10n.string("Close panel"), action: onClose)

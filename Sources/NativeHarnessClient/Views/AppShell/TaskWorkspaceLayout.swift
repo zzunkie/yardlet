@@ -415,6 +415,7 @@ struct TaskWorkspaceLayout<Chat: View, Rail: View, Trailing: View, Bottom: View>
                                 }
                                 trailing()
                                     .environment(\.workSurfaceExpansion, $preferences.isExpanded)
+                                    .environment(\.workSurfaceBelowAreaHeader, header != nil && !panelInRow)
                                     .environment(\.workSurfaceHeaderRow, panelInRow ? header.map {
                                         WorkSurfaceHeaderRow(height: $0.height, isTitleBar: $0.isTitleBar)
                                     } : nil)
