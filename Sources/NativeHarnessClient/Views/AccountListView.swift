@@ -440,7 +440,7 @@ struct AccountRow: View {
             }
         }
         .padding(.horizontal, isManaged ? 0 : 12).padding(.vertical, isManaged ? 5 : 12)
-        .frame(minHeight: isManaged ? 56 : 68)
+        .frame(minHeight: isManaged ? 54 : 68)
         .background(selected && !isManaged ? ParityTheme.selectedFill : Color.clear, in: RoundedRectangle(cornerRadius: 10))
         .contextMenu { menuItems }
     }
@@ -495,7 +495,7 @@ struct AccountRow: View {
                 if showsHarness, let descriptor = HarnessCatalog.descriptor(for: choice.harness) {
                     HarnessLogoView(descriptor: descriptor, size: 24)
                 }
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: isManaged ? 1 : 3) {
                     AccountTitleLine(title: title, organization: organization, weight: .medium)
                     Text(subtitle).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(isManaged ? 2 : 1)
                         .accountDetailLine()
