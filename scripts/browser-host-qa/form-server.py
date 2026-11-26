@@ -30,7 +30,8 @@ recovery's new password form with no username), /vault/reset-dialog (VAULT_RESET
 below), /vault/iam (an account, username and password, VAULT_IAM below), /vault/org and /vault/plain-change (a sign-in
 with an organization's secrets beside the person's, and a change form that says nothing, VAULT_ORG and VAULT_PLAIN_CHANGE
 below), /vault/address and /vault/card (a checkout's
-address and card forms, VAULT_ADDRESS and VAULT_CARD below) and /vault/webauthn (a blank
+address and card forms, VAULT_ADDRESS and VAULT_CARD below), /vault/frame?src= and /vault/frame-signin (a page that
+holds the frame at src, and a sign-in form for a frame, VAULT_FRAME below) and /vault/webauthn (a blank
 page for WebAuthn on localhost), /passkey (a sign-in form with passkey autofill and the passkey requests sites
 make, started by window.passkey(kind)), for what ordinary sites ask of a browser /compat (window.compat(kind)
 starts each request and window.qa.compat says how it ended; links to other apps' addresses, mailto:, tel: and one
@@ -408,6 +409,27 @@ for (const id of ['user', 'pass']) document.getElementById(id).addEventListener(
 document.getElementById('form').addEventListener('submit', e => { e.preventDefault();
   window.qa.submitted = {user: user.value, pass: pass.value, note: note.value}; });
 </script>'''
+
+# A sign-in inside a frame (docs/BROWSER_VAULT_DESIGN.md, "Binding to sites"): /vault/frame?src=<address> holds the
+# frame at that address (which may be another /vault/frame, for a chain of frames), and /vault/frame-signin is a sign-in
+# form that tells the top page what its fields hold on each input and on its submission (window.qa.framed there), since
+# a page of another origin cannot read them.
+VAULT_FRAME = """<!doctype html><meta charset="utf-8"><title>Vault frame page</title><p>Frame page</p>
+<iframe id="frame" title="Sign-in frame" width="520" height="260"></iframe>
+<script>window.qa = {framed: null};
+addEventListener('message', e => { if (e.data && e.data.qaFrame) window.qa.framed = e.data; });
+document.getElementById('frame').src = new URLSearchParams(location.search).get('src') || '/vault/frame-signin';</script>"""
+
+VAULT_FRAME_SIGNIN = """<!doctype html><meta charset="utf-8"><title>Vault frame sign-in</title>
+<form id="form" method="post" action="/vault/landed"><label>Email <input id="user" name="user" autocomplete="username"></label>
+<label>Password <input id="pass" name="pass" type="password" autocomplete="current-password"></label>
+<button id="go">Sign in</button></form>
+<script>
+const tell = submitted => top.postMessage({qaFrame: true, origin: location.origin, user: user.value, pass: pass.value,
+  submitted}, '*');
+for (const field of [user, pass]) field.addEventListener('input', () => tell(false));
+document.getElementById('form').addEventListener('submit', e => { e.preventDefault(); tell(true); });
+</script>"""
 
 # Sign-ins that would send a filled password where it does not belong (docs/BROWSER_VAULT_DESIGN.md, "Filled values
 # and addresses"): /vault/get (a form without a method or a script of its own, so the browser puts its fields in the
@@ -1707,6 +1729,10 @@ class Handler(BaseHTTPRequestHandler):
             payload = ISOLATION.encode()
         elif self.path.startswith('/vault/login'):
             payload = VAULT_LOGIN.encode()
+        elif self.path.startswith('/vault/frame-signin'):
+            payload = VAULT_FRAME_SIGNIN.encode()
+        elif self.path.startswith('/vault/frame'):
+            payload = VAULT_FRAME.encode()
         elif self.path.startswith('/vault/get'):
             payload = VAULT_GET.encode()
         elif self.path.startswith('/vault/elsewhere'):

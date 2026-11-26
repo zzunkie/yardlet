@@ -213,7 +213,12 @@ struct VaultFillRequest: Sendable {
     var sessionID: UUID
     var itemName: String?
     var kind: VaultFillKind
+    /// The origin of the document the field is in.
     var origin: String
+    /// For a field inside a frame, the origins of the frames around it, from the one that holds it to the tab's main
+    /// frame; empty for a field of the main frame. A fill takes only an item whose sites hold each of these too (design
+    /// §6.2).
+    var framedBy: [String] = []
     /// The agent ran its own scripts in the document to fill, or in a tab linked to it by `window.opener`: a script
     /// set there before the fill could take the value, so the person confirms whatever the item's policy.
     var afterAgentScript = false
@@ -239,6 +244,9 @@ struct VaultFillGrant {
     /// The sign-in's other secrets beside its password (`VaultSecret.fields`), which fill with it.
     var secretFields: [VaultFormField]?
     var code: String?
+    /// The sites of the item `code` came from when it is another item of the same account (`valuesForPerson`): a frame
+    /// takes the code only where those sites hold it too (design §6.2).
+    var codeSites: [String]?
     var passkey: VaultPasskey?
     var confirmedBy: VaultUse.Confirmation
     /// Why Yardlet took this item of the site's several when the agent named none, and how many there were.
@@ -370,7 +378,9 @@ final class VaultCenter: ObservableObject {
         guard environment.isAllowedBuild, isEnabled else {
             return refuse(request, item: nil, "Yardlet's password manager is off in its settings.")
         }
-        let onSite = items.filter { item in item.sites.contains { VaultSite.matches($0, origin: request.origin) } }
+        // A field inside a frame takes only an item whose sites hold the page around the frame too (design §6.2).
+        let origins = [request.origin] + request.framedBy
+        let onSite = items.filter { VaultSite.matches($0.sites, origins: origins) }
         // A site's password and its two-factor code are often two items (a code brought over from an
         // authenticator app keeps an item of its own), so only the items that have what is asked for are
         // weighed, unless none has it.
@@ -417,7 +427,7 @@ final class VaultCenter: ObservableObject {
             // The password and the code of one account are often two items, so an item here or with no site that
             // lacks what is asked for gives way to the site's one item of the same username that has it.
             if !named.has(request.kind), named.sites.isEmpty || onSite.contains(where: { $0.id == named.id }),
-               let account = accountItem(of: named, having: request.kind, on: request.origin) {
+               let account = accountItem(of: named, having: request.kind, on: origins) {
                 named = account
             }
             guard onSite.contains(where: { $0.id == named.id }) else {
@@ -431,17 +441,29 @@ final class VaultCenter: ObservableObject {
                     return refuseUnlinked(request, item: named, "“\(named.name)” has no site saved yet, so Yardlet does not "
                         + "fill it for an agent.", codes: [named])
                 }
-                // An item named for another site: a page asking for it is a phishing sign, so the person hears of it.
+                // An item named for another site: a page asking for it is a phishing sign, so the person hears of it,
+                // with the page that is not the item's (a frame's own, or the page around it).
+                // A sandboxed frame has no host to name: the page the person sees around it is named instead.
+                let outside = origins.first { origin in !named.sites.contains { VaultSite.matches($0, origin: origin) } }
+                let place = [outside ?? request.origin, request.framedBy.last ?? request.origin].map(VaultSite.host(of:))
+                    .first { !$0.isEmpty } ?? host
                 let title = describeTask(request.sessionID)?.title ?? L10n.string("A task")
                 notify(L10n.string("Not filled on another site"),
-                                   L10n.format("“%@” asked for “%@” on %@, which is not one of its sites.", title, named.name, host),
+                                   L10n.format("“%@” asked for “%@” on %@, which is not one of its sites.", title, named.name, place),
                                    request.sessionID)
-                // Its own sites stay unsaid: a name guessed on one page would otherwise tell where it signs in.
-                return refuse(request, item: named, "“\(named.name)” is not saved for \(host), so Yardlet did not fill it.")
+                // Its own sites stay unsaid: a name guessed on one page would otherwise tell where it signs in. In a frame,
+                // which of the two pages is not the item's stays unsaid for the same reason.
+                guard !request.framedBy.isEmpty else {
+                    return refuse(request, item: named, "“\(named.name)” is not saved for \(host), so Yardlet did not fill it.")
+                }
+                return refuse(request, item: named, Self.framedRefusal(request) + " “\(named.name)” is not, so Yardlet did not fill it.")
             }
             item = named
         } else {
             guard let only = matching.first else {
+                if !request.framedBy.isEmpty {
+                    return refuseCode(request, item: nil, Self.framedRefusal(request) + " No saved item is.")
+                }
                 return refuseCode(request, item: nil, "No item is saved for \(host)."
                     + (request.kind == .login ? " If the page signs in through another site's account (a “Continue with "
                         + "Google” button, for one), that site's sign-in page may have one saved. Otherwise hand the tab to "
@@ -546,8 +568,14 @@ final class VaultCenter: ObservableObject {
         guard environment.isAllowedBuild, isEnabled else {
             return refuse(request, item: nil, "Yardlet's password manager is off in its settings.").map { _ in .always }
         }
-        guard VaultSite.suggestion(for: request.origin, suffixes: suffixes) != nil else {
+        guard let site = VaultSite.suggestion(for: request.origin, suffixes: suffixes) else {
             return refuse(request, item: nil, "Yardlet saves new passwords only for https sites, so it made none for \(host).")
+                .map { _ in .always }
+        }
+        // The new item keeps the field's site alone, so a field in a frame takes one only on a page of that site.
+        if !request.framedBy.isEmpty, !VaultSite.matches([site], origins: request.framedBy) {
+            return refuse(request, item: nil, "The field is in a frame from \(host) on a page that is not on \(site). Yardlet "
+                + "makes a password in a frame only when the pages around it are on the frame's site, so it made none.")
                 .map { _ in .always }
         }
         let here = items(for: request.origin)
@@ -652,12 +680,13 @@ final class VaultCenter: ObservableObject {
     }
 
     /// The page's one other item of `item`'s account that has what a fill of `kind` needs: a site's password and its
-    /// two-factor code are often two items of one account (design §14.3). Nil when there is none or more than one,
-    /// or the item has no username to tell its account by.
-    private func accountItem(of item: VaultItem, having kind: VaultFillKind, on origin: String) -> VaultItem? {
+    /// two-factor code are often two items of one account (design §14.3). `origins` are the field's document and, in a
+    /// frame, the pages around it, all of which the item's sites hold (`VaultSite.matches(_:origins:)`). Nil when there
+    /// is none or more than one, or the item has no username to tell its account by.
+    private func accountItem(of item: VaultItem, having kind: VaultFillKind, on origins: [String]) -> VaultItem? {
         let account = items.filter { other in
             other.id != item.id && other.has(kind) && other.isSameAccount(as: item)
-                && other.sites.contains { VaultSite.matches($0, origin: origin) }
+                && VaultSite.matches(other.sites, origins: origins)
         }
         return account.count == 1 ? account[0] : nil
     }
@@ -718,10 +747,14 @@ final class VaultCenter: ObservableObject {
         item.identity.isEmpty ? "“\(item.name)”" : "“\(item.name)” (\(item.identity))"
     }
 
-    /// A refused code, naming the codes with no site the code bar offers on this page, if any.
+    /// A refused code, naming the codes with no site the code bar offers on this page, if any. A field in a frame hears
+    /// of them only when the pages around it are the frame's site too (design §6.2): an agent on another site's page that
+    /// frames a sign-in would otherwise learn which codes the vault holds for that sign-in's site.
     private func refuseCode(_ request: VaultFillRequest, item: VaultItem?, _ message: String)
         -> Result<VaultFillGrant, VaultRefusal> {
-        let codes = request.kind == .oneTimeCode ? unlinkedCodeItems(for: request.origin) : []
+        let onItsSite = request.framedBy.isEmpty || VaultSite.suggestion(for: request.origin, suffixes: suffixes)
+            .map { VaultSite.matches([$0], origins: request.framedBy) } == true
+        let codes = request.kind == .oneTimeCode && onItsSite ? unlinkedCodeItems(for: request.origin) : []
         guard !codes.isEmpty else { return refuse(request, item: item, message) }
         return refuseUnlinked(request, item: item, message + " " + codes.map(Self.label).joined(separator: ", ")
             + " may be its two-factor code, saved with no site.", codes: codes)
@@ -736,6 +769,19 @@ final class VaultCenter: ObservableObject {
             + "\(site) in Yardlet's Settings → Passwords, under “Two-factor codes with no site”, or to fill it once from the "
             + "two-factor code bar in this task's browser panel; later fills here then work.",
             details: ["unlinkedCodes": .array(codes.map { .string($0.name) }), "site": .string(site)])
+    }
+
+    /// The start of a refusal of a field in a frame (design §6.2): the field's document and the pages around it, without
+    /// saying which of them an item is not saved for.
+    private static func framedRefusal(_ request: VaultFillRequest) -> String {
+        func name(_ origin: String) -> String {
+            let host = VaultSite.host(of: origin)
+            return host.isEmpty ? "a sandboxed document" : host
+        }
+        let around = request.framedBy.map(name)
+        return "The field is in a frame from \(name(request.origin)) inside "
+            + (around.count == 1 ? "a page of \(around[0])" : "pages of " + around.joined(separator: ", ")) + ". Yardlet "
+            + "fills a field in a frame only from an item saved for every one of them."
     }
 
     /// How a fill the person did not confirm after the agent's scripts goes without them: a script in a linked tab can
@@ -877,9 +923,10 @@ final class VaultCenter: ObservableObject {
         grant.username = item.username.isEmpty ? nil : item.username
         grant.password = codeOnly ? nil : secret.password
         grant.secretFields = codeOnly ? nil : secret.fields
-        let codeSecret = secret.oneTimeCode
-            ?? accountItem(of: item, having: .oneTimeCode, on: origin).flatMap { try? trustedSecret(of: $0) }?.oneTimeCode
+        let account = secret.oneTimeCode == nil ? accountItem(of: item, having: .oneTimeCode, on: [origin]) : nil
+        let codeSecret = secret.oneTimeCode ?? account.flatMap { try? trustedSecret(of: $0) }?.oneTimeCode
         grant.code = codeSecret.map { code(for: $0) }
+        grant.codeSites = account?.sites
         if grant.password != nil || grant.secretFields != nil, !item.sites.contains(where: { VaultSite.matches($0, origin: origin) }) {
             guard await environment.confirm(L10n.format("fill “%@” on %@, which is not one of its sites",
                                                         item.name, VaultSite.host(of: origin))) else { return nil }

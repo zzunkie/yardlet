@@ -370,11 +370,13 @@ extension BrowserHostPaneController {
         focusedPasswordPage = page
         guard isNew, vault.isAllowedBuild, vault.isEnabled, vaultPasswordOffer == nil, !offeredPasswordPages.contains(page) else { return }
         Task { @MainActor [weak self] in
+            // The field may be in a frame on the page's site, which the new item keeps (design §6.2).
             guard let self, let frame = try? await VaultPageScripts.mainFrame(tab.devTools, timeout: .seconds(10)),
-                  VaultSite.suggestion(for: frame.origin, suffixes: self.vault.suffixes) != nil, self.tab === tab,
-                  !self.offeredPasswordPages.contains(page), await VaultPageScripts.shows(page, tab.devTools) else { return }
+                  let site = VaultSite.suggestion(for: frame.origin, suffixes: self.vault.suffixes), self.tab === tab,
+                  !self.offeredPasswordPages.contains(page),
+                  let shown = await VaultPageScripts.showing(page, tab.devTools, sites: [[site]]) else { return }
             self.offeredPasswordPages.insert(page)
-            self.vaultPasswordOffer = BrowserVaultPasswordOffer(origin: frame.origin, page: page)
+            self.vaultPasswordOffer = BrowserVaultPasswordOffer(origin: frame.origin, page: shown)
         }
     }
 
@@ -387,7 +389,7 @@ extension BrowserHostPaneController {
         Task { @MainActor [weak self] in
             // The site is the one of the document the field is in, as the browser reports it.
             guard let self else { return }
-            guard let field = await VaultPageScripts.newPasswordField(tab.devTools) else {
+            guard let field = await VaultPageScripts.newPasswordField(tab.devTools, suffixes: self.vault.suffixes) else {
                 return self.showVaultNotice(L10n.string("This page has no password field to fill."))
             }
             let context = field.context
@@ -397,7 +399,7 @@ extension BrowserHostPaneController {
                 return self.showVaultNotice(L10n.string("Yardlet could not make a password."))
             }
             let earlier = self.madePassword.flatMap { $0.tab == tab.id && !$0.submitted ? $0.item : nil }
-            let origin = field.frame.origin
+            let origin = field.frame.frame.origin
             let item: VaultItem
             do {
                 item = try self.vault.presaveMadePassword(password, origin: origin, username: context["username"]?.stringValue ?? "",
@@ -589,7 +591,8 @@ extension BrowserHostPaneController {
             return
         }
         Task { @MainActor [weak self] in
-            let kind = await VaultPageScripts.personFieldKind(tab.devTools, timeout: .milliseconds(500))
+            let sites = self?.vaultItemsForPage(tab.currentURL).flatMap(\.sites) ?? []
+            let kind = await VaultPageScripts.personFieldKind(tab.devTools, sites: sites, timeout: .milliseconds(500))
             guard let self, self.tab === tab else { return }
             self.vaultPickerKind = kind
             self.isVaultPickerShown = true
@@ -654,7 +657,8 @@ extension BrowserHostPaneController {
             if !guarded.isEmpty {
                 tab.send(.guardFilledValues(tab: tab.id, values: guarded.flatMap(VaultScrubList.spellings(of:))))
             }
-            let filled = await VaultPageScripts.fillForPerson(tab.devTools, frame: frame, fills: tab.vaultFills,
+            let filled = await VaultPageScripts.fillForPerson(tab.devTools, frame: frame, sites: grant.item.sites,
+                                                              codeSites: grant.codeSites, fills: tab.vaultFills,
                                                               username: grant.username, password: grant.password,
                                                               code: grant.code, fields: grant.item.fields,
                                                               secretFields: grant.secretFields, codeOnly: codeOnly)
@@ -691,11 +695,12 @@ extension BrowserHostPaneController {
             let own = self.vault.items(for: frame.origin).filter(\.hasOneTimeCode)
             // Codes brought over from an authenticator app have no site until the person picks one here.
             let items = own.isEmpty ? self.vault.unlinkedCodeItems(for: frame.origin) : own
-            // On a setup page the field is for the new code, which saving the setup fills.
+            // On a setup page the field is for the new code, which saving the setup fills. The field may be in a frame
+            // one of the items may fill (design §6.2).
             guard !items.isEmpty, self.tab === tab, self.vaultSetupOffer == nil,
-                  await VaultPageScripts.shows(page, tab.devTools) else { return }
+                  let shown = await VaultPageScripts.showing(page, tab.devTools, sites: items.map(\.sites)) else { return }
             self.vaultCodeOffer = BrowserVaultCodeOffer(
-                origin: frame.origin, page: page, items: items,
+                origin: frame.origin, page: shown, items: items,
                 newSite: own.isEmpty ? VaultSite.suggestion(for: frame.origin, suffixes: self.vault.suffixes) : nil)
         }
     }

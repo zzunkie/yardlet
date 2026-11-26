@@ -22,8 +22,18 @@ final class ScriptedCDP: BrowserAgentCDP {
         suspended = []
         waiting.forEach { $0.resume() }
     }
+    /// Frames from other sites on sessions of their own, and how each answers (`send(_:_:session:timeout:)`); a session
+    /// with no answer is closed.
+    var frameSessions: [BrowserFrameSession] = []
+    var sessionResponder: (@MainActor (_ session: String, _ method: String, _ params: [String: JSONValue]) throws -> JSONValue)?
     var pageURL = "https://example.com/"
     var pageTitle = "Example Domain"
+
+    func send(_ method: String, _ params: [String: JSONValue], session: String?, timeout: Duration) async throws -> JSONValue {
+        guard let session else { return try await send(method, params, timeout: timeout) }
+        guard let sessionResponder else { throw BrowserDevToolsError.closed }
+        return try sessionResponder(session, method, params)
+    }
     var bodyTexts: [String] = [""]
     var pixelRatio: Double = 1
 
@@ -1585,6 +1595,242 @@ final class BrowserAgentToolsTests: XCTestCase {
         XCTAssertTrue(after.text.contains("password=[saved value]"), after.text)
         XCTAssertTrue(after.text.contains("%3Fp%3D[saved value]"), "encoded twice: \(after.text)")
         XCTAssertFalse(after.text.contains("%40ss") || after.text.contains("%2540ss"), after.text)
+    }
+
+    /// A field inside a frame fills only when the frame and every page around it are https pages of the item's sites
+    /// (docs/BROWSER_VAULT_DESIGN.md, "Binding to sites"), whether the frame renders in the page's process or on a
+    /// session of its own, for the agent's fill and the person's alike. Anything else is refused as before, and an item
+    /// named where the frame or a page around it is another site's tells the person. A filled frame keeps the tab's
+    /// document closed to the agent's scripts, and a snapshot leaves out its filled fields, or is refused while a filled
+    /// frame's session does not describe its frames. The person's fill goes into a frame of another origin than the page's
+    /// only once they put the focus in it, without a code from another item of the account whose sites do not hold the
+    /// frame, and an agent's code fill in a frame takes no two-factor setup from the tab's picture, which shows the pages
+    /// around the frame too.
+    func testAVaultFillGoesIntoAFrameOnlyWhenItAndThePagesAroundItAreTheItemsSites() async {
+        struct Frame { var id: String; var parent: String?; var origin: String; var session: String? = nil }
+        func layout(_ main: String, _ frames: Frame...) -> [Frame] { [Frame(id: "main", parent: nil, origin: main)] + frames }
+        let cases: [(name: String, frames: [Frame], field: String, fills: Bool, notifies: String?)] = [
+            ("the main frame", layout("https://www.example.com"), "main", true, nil),
+            ("a same-site frame in a same-site page",
+             layout("https://account.example.com", Frame(id: "signin", parent: "main", origin: "https://idmsa.example.com")),
+             "signin", true, nil),
+            ("a same-site frame on a session of its own in a same-site page",
+             layout("https://account.example.com",
+                  Frame(id: "signin", parent: "main", origin: "https://idmsa.example.com", session: "s1")),
+             "signin", true, nil),
+            ("a same-site frame in a foreign page",
+             layout("https://www.foreign.test",
+                  Frame(id: "signin", parent: "main", origin: "https://idmsa.example.com", session: "s1")),
+             "signin", false, "www.foreign.test"),
+            ("a foreign frame in the item's page",
+             layout("https://www.example.com",
+                  Frame(id: "signin", parent: "main", origin: "https://login.foreign.test", session: "s1")),
+             "signin", false, "login.foreign.test"),
+            ("a nested chain with one foreign hop",
+             layout("https://www.example.com",
+                  Frame(id: "ad", parent: "main", origin: "https://ads.foreign.test", session: "s1"),
+                  Frame(id: "signin", parent: "ad", origin: "https://idmsa.example.com", session: "s2")),
+             "signin", false, "ads.foreign.test"),
+            ("an http frame",
+             layout("https://www.example.com", Frame(id: "signin", parent: "main", origin: "http://idmsa.example.com")),
+             "signin", false, "idmsa.example.com"),
+            ("a sandboxed frame (an opaque origin)",
+             layout("https://www.example.com", Frame(id: "signin", parent: "main", origin: "null")),
+             "signin", false, "www.example.com")
+        ]
+        let item = VaultItem(name: "Example", sites: ["example.com"], username: "ada", hasPassword: true,
+                             hasOneTimeCode: true, policy: .always)
+        let vault = VaultCenter(environment: VaultCenter.Environment(
+            secrets: InMemoryVaultSecretStore([item.id: VaultSecret(password: "correct-horse-battery",
+                                                                    oneTimeCode: OneTimeCodeSecret(key: Data("12345678901234567890".utf8)))]),
+            repository: InMemoryVaultRepository(items: [item]), hmac: MacVault.hmac, isAllowedBuild: true,
+            defaults: .vaultTests()))
+        var notices: [String] = []
+        vault.notify = { _, body, _ in notices.append(body) }
+        tools.vault = vault
+        // A QR code of a setup the vault does not hold, wherever the tab's picture is read.
+        let pictured = OneTimeCodeSetup(secret: OneTimeCodeSecret(key: Data("qa-pictured-key-0000".utf8)), issuer: "Example",
+                                        account: "ada")
+        tools.setupsPictured = { _ in [pictured] }
+
+        for test in cases {
+            let frames = test.frames
+            let field = frames.first { $0.id == test.field }!
+            func url(_ frame: Frame) -> String {
+                (frame.origin == "null" ? "https://idmsa.example.com" : frame.origin) + (frame.id == "main" ? "/" : "/signin")
+            }
+            func tree(_ frame: Frame) -> JSONValue {
+                var description: [String: JSONValue] = [
+                    "id": .string(frame.id), "loaderId": .string("doc-\(frame.id)"), "url": .string(url(frame)),
+                    "securityOrigin": .string(frame.origin)]
+                if let parent = frame.parent { description["parentId"] = .string(parent) }
+                let children = frames.filter { $0.parent == frame.id && $0.session == frame.session }
+                return .object(["frame": .object(description), "childFrames": .array(children.map(tree))])
+            }
+            var filledInto: [(object: String, session: String?, origin: JSONValue?)] = []
+            var codesGiven: [JSONValue?] = []
+            // Where the page's keyboard focus is: each document's focused element is the iframe of the next frame down.
+            var focusChain: Set<String> = []
+            func owner(of frame: String) -> Int64 { Int64(500 + frames.firstIndex { $0.id == frame }!) }
+            var secretsReadIn: [String] = []
+            func frame(ofContext params: [String: JSONValue]) -> String {
+                frames[Int((params["contextId"] ?? params["executionContextId"])?.integerValue ?? 100) - 100].id
+            }
+            func answer(_ session: String?, _ method: String, _ params: [String: JSONValue]) throws -> JSONValue {
+                switch method {
+                case "Page.getFrameTree":
+                    // A session's own frame: the first of its frames whose parent answers on another session.
+                    let root = frames.first { frame in
+                        frame.session == session && (frame.parent == nil || frames.first { $0.id == frame.parent }?.session != session)
+                    }
+                    guard let root else { throw BrowserDevToolsError.closed }
+                    return .object(["frameTree": tree(root)])
+                case "Page.createIsolatedWorld":
+                    let index = frames.firstIndex { $0.id == params["frameId"]?.stringValue && $0.session == session }
+                    guard let index else { throw BrowserDevToolsError.protocolError(method, .object(["message": .string("No frame")])) }
+                    return .object(["executionContextId": .integer(Int64(100 + index))])
+                case "DOM.resolveNode":
+                    return .object(["object": .object(["objectId": .string("field@\(frame(ofContext: params))")])])
+                case "Runtime.evaluate":
+                    guard params["contextId"] != nil else { return ScriptedCDP.value(.array([.string(url(frames[0])), .string("Sign in")])) }
+                    let here = frame(ofContext: params)
+                    if params["expression"]?.stringValue == "document.activeElement" {
+                        return .object(["result": .object(["type": .string("object"), "objectId": .string("active@\(here)")])])
+                    }
+                    if params["objectGroup"] != nil {
+                        secretsReadIn.append(here)
+                        return .object(["result": .object(["type": .string("object"), "objectId": .string("secrets@\(here)")])])
+                    }
+                    // The person's target: the field, in its own document only.
+                    return here == field.id
+                        ? .object(["result": .object(["type": .string("object"), "objectId": .string("field@\(here)")])])
+                        : .object(["result": .object(["type": .string("object"), "subtype": .string("null"), "value": .null])])
+                case "Runtime.getProperties":
+                    let here = String(params["objectId"]?.stringValue?.split(separator: "@").last ?? "")
+                    return .object(["result": .array([.object(["name": .string("0"),
+                                                                "value": .object(["objectId": .string("node@\(here)")])])])])
+                case "DOM.describeNode":
+                    let object = params["objectId"]?.stringValue ?? ""
+                    guard object.hasPrefix("active@") else { return .object(["node": .object(["backendNodeId": .integer(900)])]) }
+                    let here = String(object.dropFirst("active@".count))
+                    let focused = frames.first { $0.parent == here && focusChain.contains($0.id) }
+                    return .object(["node": .object(["backendNodeId": .integer(focused.map { owner(of: $0.id) } ?? 1)])])
+                case "DOM.getFrameOwner":
+                    return .object(["backendNodeId": .integer(owner(of: params["frameId"]?.stringValue ?? ""))])
+                case "Runtime.callFunctionOn":
+                    let function = params["functionDeclaration"]?.stringValue ?? ""
+                    let object = params["objectId"]?.stringValue ?? ""
+                    if function == VaultPageScripts.personFillFunction { codesGiven.append(params["arguments"]?.arrayValue?[2]["value"]) }
+                    if function == BrowserAgentTools.fillFunction || function == VaultPageScripts.personFillFunction {
+                        filledInto.append((object, session, params["arguments"]?.arrayValue?[function == BrowserAgentTools.fillFunction ? 4 : 3]["value"]))
+                        return ScriptedCDP.value(.object(["kinds": .array([.string("password"), .string("username")])]))
+                    }
+                    if function.contains("ownerDocument === document") { return ScriptedCDP.value(.bool(object == "field@\(field.id)")) }
+                    if function.contains("=== document.activeElement") { return ScriptedCDP.value(.bool(false)) }
+                    if function == BrowserAgentTools.submissionFunction {
+                        return ScriptedCDP.value(.object(["form": .bool(true), "targets": .array([.object([
+                            "action": .string(field.origin + "/session"), "method": .string("post")])])]))
+                    }
+                    if function == BrowserAgentTools.submitFunction { return ScriptedCDP.value(.string("submitted")) }
+                    if function == BrowserAgentTools.setupLookFunction {
+                        return ScriptedCDP.value(.object(["links": .array([]), "square": .bool(true)]))
+                    }
+                    return ScriptedCDP.value(.null)
+                default:
+                    return .object([:])
+                }
+            }
+            for method in ["Page.getFrameTree", "Page.createIsolatedWorld", "DOM.resolveNode", "Runtime.evaluate",
+                           "Runtime.getProperties", "DOM.describeNode", "DOM.getFrameOwner", "Runtime.callFunctionOn"] {
+                cdp.responders[method] = { try answer(nil, method, $0) }
+            }
+            cdp.sessionResponder = { try answer($0, $1, $2) }
+            cdp.frameSessions = frames.compactMap { frame in
+                guard let session = frame.session else { return nil }
+                return BrowserFrameSession(id: session, frameID: frame.id,
+                                           parent: frames.first { $0.id == frame.parent }?.session)
+            }
+            page.replaceRefs(["@e5": .init(node: 42, session: field.session)], eventMark: cdp.eventLog.count)
+            let place = test.field == "main" ? nil : VaultFrame.Place(id: field.id, session: field.session)
+
+            let agent = await run(VaultToolCatalog.fillCredential, ["ref": .string("@e5")])
+            XCTAssertEqual(!agent.isError, test.fills, "\(test.name): \(agent.text)")
+            if test.fills {
+                XCTAssertEqual(filledInto.map(\.object), ["field@\(field.id)"], test.name)
+                XCTAssertEqual(filledInto.first?.session, field.session, test.name)
+                XCTAssertEqual(filledInto.first?.origin, .string(field.origin), "\(test.name): the fill checks the frame's own origin")
+                XCTAssertTrue(agent.text.contains("on \(VaultSite.host(of: field.origin)) and submitted it"), agent.text)
+                XCTAssertEqual(page.vaultFills.fills.last, BrowserAgentVaultFill(loaderID: "doc-main", eventMark: cdp.eventLog.count,
+                                                                                  frame: place), test.name)
+                let refused = await run(AgentToolCatalog.evaluate, ["function": .string("() => 1")])
+                XCTAssertTrue(refused.isError, "\(test.name): the tab's document is closed to scripts: \(refused.text)")
+                let hidden = await tools.vaultSecretNodes(on: page)
+                XCTAssertEqual(Set(secretsReadIn), Set(["main", field.id]), "\(test.name): a snapshot reads the filled frame too")
+                XCTAssertTrue(hidden?.contains(.init(node: 900, session: field.session)) == true, test.name)
+                if let session = field.session {
+                    cdp.sessionResponder = { asked, method, params in
+                        guard asked != session || method != "Page.getFrameTree" else { throw BrowserDevToolsError.timedOut(method) }
+                        return try answer(asked, method, params)
+                    }
+                    let unread = await tools.vaultSecretNodes(on: page)
+                    XCTAssertNil(unread, "\(test.name): a filled frame that is not described leaves the snapshot refused")
+                    cdp.sessionResponder = { try answer($0, $1, $2) }
+                }
+                if place != nil {
+                    let code = await run(VaultToolCatalog.fillCredential, ["ref": .string("@e5"), "kind": .string("one_time_code")])
+                    XCTAssertFalse(code.isError, "\(test.name): \(code.text)")
+                    XCTAssertFalse(cdp.methods.contains("Page.captureScreenshot"), "\(test.name): no picture of the tab is read")
+                    XCTAssertEqual(filledInto.last?.object, "field@\(field.id)", test.name)
+                }
+            } else {
+                XCTAssertTrue(filledInto.isEmpty, "\(test.name): nothing went in")
+                XCTAssertTrue(agent.text.contains("frame"), "\(test.name): \(agent.text)")
+                let named = await run(VaultToolCatalog.fillCredential, ["ref": .string("@e5"), "item": .string("Example")])
+                XCTAssertTrue(named.isError && filledInto.isEmpty, "\(test.name): \(named.text)")
+                XCTAssertEqual(notices.popLast().map { $0.contains(test.notifies ?? "") }, test.notifies.map { _ in true },
+                               "\(test.name): the person hears of a named item asked for on another site's page")
+                XCTAssertTrue(notices.isEmpty)
+            }
+
+            // The person's key button, with the same item: the main frame has no field here but in the first case. A
+            // frame of another origin than the page's takes the fill once the person put the focus in it.
+            func personFills() async -> Bool {
+                filledInto = []
+                return await VaultPageScripts.fillForPerson(
+                    cdp, frame: (id: "main", loaderID: "doc-main", origin: frames[0].origin), sites: item.sites,
+                    fills: page.vaultFills, username: "ada", password: "correct-horse-battery", code: nil)
+            }
+            let unfocused = await personFills()
+            XCTAssertEqual(unfocused, test.fills && field.origin == frames[0].origin, "\(test.name): without the focus in the frame")
+            var chain = field
+            while let parent = chain.parent { focusChain.insert(chain.id); chain = frames.first { $0.id == parent }! }
+            let byPerson = await personFills()
+            XCTAssertEqual(byPerson, test.fills, test.name)
+            XCTAssertEqual(filledInto.map(\.object), test.fills ? ["field@\(field.id)"] : [], test.name)
+            if test.fills {
+                XCTAssertEqual(filledInto.first?.origin, .string(field.origin), test.name)
+                XCTAssertEqual(page.vaultFills.fills.last?.frame, place, test.name)
+            }
+            page.vaultFills.withdraw(page.vaultFills.fills.last ?? BrowserAgentVaultFill(loaderID: "", eventMark: 0))
+            if test.fills {
+                // A code from another item of the account saved for another site stays out of a frame; the sign-in goes in.
+                let recorded = page.vaultFills.fills.count
+                func personFillsCode(only codeOnly: Bool) async -> Bool {
+                    await VaultPageScripts.fillForPerson(
+                        cdp, frame: (id: "main", loaderID: "doc-main", origin: frames[0].origin), sites: item.sites,
+                        codeSites: ["foreign.test"], fills: page.vaultFills, username: "ada", password: "correct-horse-battery",
+                        code: "123456", codeOnly: codeOnly)
+                }
+                let withCode = await personFillsCode(only: false)
+                XCTAssertTrue(withCode, test.name)
+                XCTAssertEqual(codesGiven.last, place == nil ? .string("123456") : .null, test.name)
+                let codeOnly = await personFillsCode(only: true)
+                XCTAssertEqual(codeOnly, place == nil, "\(test.name): the code alone goes into no frame its item does not hold")
+                for fill in page.vaultFills.fills.dropFirst(recorded) { page.vaultFills.withdraw(fill) }
+            }
+            cdp.eventLog.append(("Page.frameNavigated", .object(["frame": .object([
+                "id": .string("main"), "loaderId": .string("doc-next"), "url": .string("https://www.example.com/next")])])))
+        }
     }
 
     /// A code fill on a page that shows a two-factor setup the vault does not hold (docs/BROWSER_VAULT_DESIGN.md §20)
