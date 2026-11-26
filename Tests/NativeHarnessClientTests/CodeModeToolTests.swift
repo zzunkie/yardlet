@@ -336,6 +336,59 @@ final class CodeModeToolTests: XCTestCase {
         XCTAssertFalse(names.contains("gmail_search_threads"))
     }
 
+    /// The search matches whole characters, as Foundation's `contains` did, and a summary shows the first line that
+    /// is not empty, whichever line break ends it.
+    func testSearchMatchesWholeCharactersAndSummarizesTheFirstLine() throws {
+        func tool(_ name: String, _ description: String) -> ToolJSON {
+            .object(["name": .string(name), "description": .string(description)])
+        }
+        func search(_ tools: [ToolJSON], query: String? = nil, category: String? = nil) throws -> [[String: Any]] {
+            let found = try json(of: CodeModeToolCatalog.formatSearch(tools: tools, query: query, category: category,
+                                                                       exactTool: nil))
+            return found["tools"] as? [[String: Any]] ?? []
+        }
+        func names(_ tools: [ToolJSON], query: String? = nil, category: String? = nil) throws -> [String] {
+            try search(tools, query: query, category: category).compactMap { $0["name"] as? String }
+        }
+
+        let tools = [
+            tool("x_nfd", "cafe\u{301}"),
+            tool("x_dot", "\u{130}"),
+            tool("y_hangul", "[custom] 한글 일정"),
+            tool("y_tag", "[Custom] Sync"),
+            tool("z_cut", "Sync")
+        ]
+        // An ASCII query matches only on character boundaries: not `e` under a combining accent, nor `i` of `İ` lowercased.
+        XCTAssertEqual(try names(tools, query: "e"), [])
+        XCTAssertEqual(try names(tools, query: "i"), [])
+        XCTAssertEqual(try names(tools, query: "caf"), ["x_nfd"])
+        // Other queries are compared by character: a composed `é` matches a decomposed one.
+        XCTAssertEqual(try names(tools, query: "caf\u{E9}"), ["x_nfd"])
+        XCTAssertEqual(try names(tools, query: "한글"), ["y_hangul"])
+        // A description's tag stands for a category, and a query narrows it further.
+        XCTAssertEqual(try names(tools, category: "Custom"), ["y_hangul", "y_tag"])
+        XCTAssertEqual(try names(tools, query: "sync", category: "custom"), ["y_tag"])
+        XCTAssertEqual(try names(tools, query: "  ", category: " "), tools.map { $0["name"]?.stringValue ?? "" })
+
+        let long = String(repeating: "a", count: 120)
+        let lines = [
+            ("\r\nFirst A\nsecond", "First A"),
+            ("\nFirst B", "First B"),
+            ("Line C\r\nmore", "Line C"),
+            ("Line D\rmore", "Line D"),
+            ("Line E\u{2028}more", "Line E"),
+            ("Line F\u{85}more", "Line F"),
+            ("   \nsecond", ""),
+            ("\n\r\n", ""),
+            ("  Padded G \t\nmore", "Padded G"),
+            (long + "\nmore", String(repeating: "a", count: 100) + "…"),
+            ("Plain", "Plain")
+        ]
+        XCTAssertGreaterThan(lines.count, CodeModeToolCatalog.detailedSchemaLimit)
+        let summaries = try search(lines.enumerated().map { tool("t_\($0.offset)", $0.element.0) })
+        XCTAssertEqual(summaries.compactMap { $0["description"] as? String }, lines.map(\.1))
+    }
+
     private func json(of result: AgentToolResult) throws -> [String: Any] {
         try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text(of: result).utf8)) as? [String: Any])
     }

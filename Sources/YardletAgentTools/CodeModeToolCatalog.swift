@@ -175,7 +175,8 @@ package enum CodeModeToolCatalog {
     /// starts and ends on a character boundary (not `e` in `é` written with a combining accent).
     private static func contains(_ text: String, _ part: String) -> Bool {
         let needle = Array(part.utf8)
-        guard let first = needle.first, needle.allSatisfy({ $0 < 0x80 && $0 != 0x0D }) else {
+        guard let first = needle.first else { return false }
+        guard needle.allSatisfy({ $0 < 0x80 && $0 != 0x0D }) else {
             return text.firstRange(of: part) != nil
         }
         let bytes = text.utf8
