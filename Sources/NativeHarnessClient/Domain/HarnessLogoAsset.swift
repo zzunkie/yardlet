@@ -21,4 +21,13 @@ enum HarnessLogoAsset {
         default: nil
         }
     }
+
+    /// The mark the harness's own app shows in dark mode, where the light one would stand out as a bright
+    /// tile. A harness without one keeps its single mark in both appearances.
+    static func darkName(for harness: HarnessKind) -> String? {
+        switch harness {
+        case .codex: "codex-dark"
+        default: nil
+        }
+    }
 }

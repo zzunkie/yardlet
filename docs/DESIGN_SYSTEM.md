@@ -96,7 +96,7 @@ The RGB figures below are the current default sRGB surface values from `ParityDe
 | Border / `separator`, `strongSeparator` | Black × 9.5% / 16% | White × 10.5% / 18% | Noninteractive dividers; not a focus indicator |
 | Fill / `subtleFill`, `hoverFill`, `selectedFill` | Primary × 3.5% / 6.2% / 9.5% | Primary × 3.5% / 6.2% / 9.5% | Rest, hover, selection |
 | Request panel / `requestPanelFill` | Elevated + primary × 4.5% (drawn ≈ #F4F4F4) | Elevated + primary × 4.5% (drawn ≈ #323337) | A waiting request's panel, a shade off the canvas and the composer |
-| Status / proposed `status.success`, `warning`, `danger` | Native system green/orange/red | Native system green/orange/red | Alias scattered status colors; always pair with text or an icon |
+| Status / `statusSuccess`, `statusWarning`, proposed `danger` | #248A3D / #C75C00 (deeper green/orange, 3:1 on the sidebar); native system red | Native system green/orange/red | The sidebar's status marks use the two tokens; alias the remaining scattered status colors to them; always pair with text or an icon |
 | Focus / proposed `focus` | Native focus indicator | Native focus indicator | Keep native focus rings; never substitute a faint border. A waiting request's panel draws none: its question shows the focused choice by the selection fill, a field its caret, an answer button the key that gives it. Nor does the turn rail beside a conversation, which a click on a mark gives the arrow keys: the turn it marks shows where it is |
 
 Secondary is not disabled. Essential instructions use primary or secondary text, never tertiary text

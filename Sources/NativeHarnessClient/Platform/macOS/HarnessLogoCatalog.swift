@@ -6,9 +6,24 @@ import SwiftUI
 enum HarnessLogoCatalog {
     private static var cache: [HarnessKind: NSImage] = [:]
 
+    /// The harness's mark for the appearance it is drawn in. A harness whose app has a dark mark draws it on a
+    /// dark appearance, so AppKit menus and SwiftUI views follow the appearance without choosing themselves.
     static func image(for harness: HarnessKind) -> NSImage? {
         if let cached = cache[harness] { return cached }
-        guard let name = HarnessLogoAsset.name(for: harness) else { return nil }
+        guard let name = HarnessLogoAsset.name(for: harness), let light = packagedImage(named: name) else { return nil }
+        var image = light
+        if let darkName = HarnessLogoAsset.darkName(for: harness), let dark = packagedImage(named: darkName) {
+            image = NSImage(size: light.size, flipped: false) { rect in
+                let isDark = NSAppearance.currentDrawing().bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                (isDark ? dark : light).draw(in: rect)
+                return true
+            }
+        }
+        cache[harness] = image
+        return image
+    }
+
+    private static func packagedImage(named name: String) -> NSImage? {
         // Do not evaluate Bundle.module until the packaged resources have been tried.
         // Its SwiftPM fallback points into the developer's build directory.
         func load(from bundle: Bundle) -> NSImage? {
@@ -22,9 +37,7 @@ enum HarnessLogoCatalog {
             }
             return nil
         }
-        let image = load(from: .main) ?? load(from: .module)
-        if let image { cache[harness] = image }
-        return image
+        return load(from: .main) ?? load(from: .module)
     }
 
     /// `image(for:)` with a logical size of `size` points.
@@ -41,6 +54,7 @@ enum HarnessLogoCatalog {
 struct HarnessIdentityIcon: View {
     let harness: HarnessKind
     var size: CGFloat = 16
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         Group {
@@ -57,6 +71,8 @@ struct HarnessIdentityIcon: View {
             }
         }
         .frame(width: size, height: size)
+        // The mark draws for the appearance it is drawn in; a new identity redraws it when the appearance changes.
+        .id(colorScheme)
         .accessibilityHidden(true)
     }
 }
