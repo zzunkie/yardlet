@@ -1,3 +1,4 @@
+import AuthenticationServices
 import CryptoKit
 import Foundation
 import XCTest
@@ -259,6 +260,123 @@ final class RemoteAccountTests: XCTestCase {
                                                   hello: RemoteHandshakeHello(name: "Pixel 11", link: true),
                                                   targetKey: identity.noise.publicKey, expectsReply: true)
         XCTAssertEqual(refused.reply.error?.code, .linkUnavailable)
+    }
+
+    /// The sheet can't be shown (another default browser failed to take it, or the session would not start):
+    /// the sign-in opens in the default browser and finishes from the `yardlet-remote://auth` link the app gets,
+    /// taking only the return for the sign-in in progress. A long computer name is cut to what the relay keeps.
+    func testSignInFallsBackToTheDefaultBrowserAndTakesOnlyItsOwnReturn() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteAccountBrowser")))
+        defaults.set("wss://relay.example.test", forKey: RemoteControlService.relayURLKey)
+        let token = RemoteMemorySecret()
+        var opened: URL?
+        let longName = String(repeating: "가", count: 40) + " MacBook Pro 👩‍💻"
+        let service = RemoteControlService(
+            bridge: FakeBridge(), deviceStore: RemoteDeviceStore(fileURL: nil), audit: nil,
+            identityStore: RemoteMemoryIdentityStore(.generate()), accountToken: token,
+            webSignIn: { _, _ in throw RemoteWebSignInUnavailable(code: "asweb_2") },
+            openInBrowser: { opened = $0 },
+            defaults: defaults, environment: [:], interfaces: { [] }, resolveName: { _ in nil }, listens: false,
+            macName: longName, appVersion: "test")
+        await service.signIn(with: "github")
+        let start = try XCTUnwrap(opened)
+        XCTAssertTrue(service.awaitsBrowserSignIn)
+        XCTAssertFalse(service.isSigningIn, "Signing in again stays possible while the browser is open")
+        XCTAssertNil(service.accountError)
+        let items = URLComponents(url: start, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        StubRelay.challenge = items.first { $0.name == "code_challenge" }?.value
+        let state = try XCTUnwrap(items.first { $0.name == "state" }?.value)
+
+        // A pairing link, another sign-in's return, or one for a different host are not this sign-in's.
+        let pairing = try XCTUnwrap(URL(string: "yardlet-remote://pair?k=x"))
+        XCTAssertFalse(RemoteAccountClient.isSignInCallback(pairing))
+        XCTAssertFalse(service.receiveSignInCallback(pairing))
+        XCTAssertFalse(service.receiveSignInCallback(URL(string: "yardlet-remote://auth?code=C1&state=other")!))
+        XCTAssertTrue(service.awaitsBrowserSignIn)
+
+        let callback = try XCTUnwrap(URL(string: "YARDLET-REMOTE://Auth?code=C1&state=\(state)"))
+        XCTAssertTrue(RemoteAccountClient.isSignInCallback(callback))
+        XCTAssertTrue(service.receiveSignInCallback(callback))
+        XCTAssertFalse(service.receiveSignInCallback(callback), "A return is taken once")
+        try await waitUntil { service.account != nil }
+        XCTAssertEqual(token.load(), "ACC.secret")
+        XCTAssertFalse(service.awaitsBrowserSignIn)
+        let name = try XCTUnwrap(StubRelay.registered?.name)
+        XCTAssertTrue(StubRelay.registered?.signatureValid == true, "The signature covers the name the relay keeps")
+        XCTAssertLessThanOrEqual(name.utf16.count, RemoteAccountClient.maxNameLength)
+        XCTAssertTrue(longName.hasPrefix(name))
+        XCTAssertEqual(RemoteAccountClient.relayName("  Mac  "), "Mac")
+    }
+
+    /// What Settings shows and a problem report carries when signing in fails: a sentence instead of
+    /// "Failure error 1", and a code naming the step and the error without the code, token or state.
+    func testSignInFailuresReadAsSentencesAndReportOnlyTheirCode() async throws {
+        XCTAssertEqual(RemoteAccountClient.Failure(status: 401, code: "unauthorized").localizedDescription,
+                       L10n.string("Your Yardlet sign-in has expired. Sign in again."))
+        XCTAssertEqual(RemoteAccountClient.Failure(status: 0, code: "noResponse").localizedDescription,
+                       L10n.string("Can't reach the Yardlet server"))
+        XCTAssertFalse(RemoteAccountClient.Failure(status: 400, code: "badRequest").localizedDescription.contains("Failure"))
+        XCTAssertEqual(RemoteControlService.failureCode(RemoteAccountClient.Failure(status: 400, code: "badRequest")),
+                       "http_400_badRequest")
+        XCTAssertEqual(RemoteControlService.failureCode(NSError(domain: NSCocoaErrorDomain, code: 4097)), "xpc_4097")
+        XCTAssertEqual(RemoteControlService.failureCode(URLError(.notConnectedToInternet)), "url_-1009")
+        XCTAssertNil(RemoteControlService.failureCode(RemoteAccountClient.Failure(status: 400, code: "token ACC.secret")),
+                     "A relay's error text that isn't a code is left out")
+
+        // The session's own outcomes: a quick "cancel" is a sheet that never showed, a later one the person.
+        let quick = RemoteAccountSignIn.outcome(callback: nil, error: NSError(
+            domain: ASWebAuthenticationSessionErrorDomain, code: ASWebAuthenticationSessionError.canceledLogin.rawValue), after: 0.2)
+        XCTAssertEqual((quick.failureValue as? RemoteWebSignInUnavailable)?.code, "asweb_1")
+        let closed = RemoteAccountSignIn.outcome(callback: nil, error: NSError(
+            domain: ASWebAuthenticationSessionErrorDomain, code: ASWebAuthenticationSessionError.canceledLogin.rawValue), after: 5)
+        XCTAssertTrue(closed.failureValue is CancellationError)
+        let invalid = RemoteAccountSignIn.outcome(callback: nil, error: NSError(
+            domain: ASWebAuthenticationSessionErrorDomain, code: 2), after: 0.1)
+        XCTAssertEqual((invalid.failureValue as? RemoteWebSignInUnavailable)?.code, "asweb_2")
+
+        // The relay sent its error back instead of a code.
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteAccountFailure")))
+        defaults.set("wss://relay.example.test", forKey: RemoteControlService.relayURLKey)
+        let service = RemoteControlService(
+            bridge: FakeBridge(), deviceStore: RemoteDeviceStore(fileURL: nil), audit: nil,
+            identityStore: RemoteMemoryIdentityStore(.generate()),
+            webSignIn: { url, _ in
+                let state = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "state" }?.value ?? ""
+                return URL(string: "yardlet-remote://auth?error=providerFailed&state=\(state)")!
+            },
+            defaults: defaults, environment: [:], interfaces: { [] }, resolveName: { _ in nil }, listens: false,
+            macName: "Mac", appVersion: "test")
+        await service.signIn(with: "github")
+        XCTAssertEqual(service.accountError, L10n.string("The sign-in did not finish."))
+        XCTAssertEqual(service.accountErrorCode, "relay_providerFailed")
+    }
+
+    /// The session's completion, a failed start and the task's cancellation may each resume the sign-in;
+    /// only the first does, and a cancellation that comes first still ends it.
+    func testTheSignInContinuationResumesOnce() async throws {
+        let once = SignInResumeOnce<Int>()
+        let value = try await withCheckedThrowingContinuation { continuation in
+            once.set(continuation)
+            once.resume(with: .success(1))
+            once.resume(throwing: CancellationError())
+            once.resume(with: .success(2))
+        }
+        XCTAssertEqual(value, 1)
+        let early = SignInResumeOnce<Int>()
+        early.resume(throwing: CancellationError())
+        do {
+            _ = try await withCheckedThrowingContinuation { early.set($0) }
+            XCTFail("An early cancellation ends the wait")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+    }
+}
+
+private extension Result {
+    var failureValue: Failure? {
+        if case let .failure(error) = self { return error }
+        return nil
     }
 }
 

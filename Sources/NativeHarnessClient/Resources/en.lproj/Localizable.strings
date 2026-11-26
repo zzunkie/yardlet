@@ -2080,6 +2080,10 @@
 "Allow it if the phone shows the same number." = "Allow it if the phone shows the same number.";
 "Sign in with %@" = "Sign in with %@";
 "The sign-in did not finish." = "The sign-in did not finish.";
+"Finish signing in in your browser." = "Finish signing in in your browser.";
+"Your Yardlet sign-in has expired. Sign in again." = "Your Yardlet sign-in has expired. Sign in again.";
+"The Yardlet server couldn't finish the request. Try again later." = "The Yardlet server couldn't finish the request. Try again later.";
+"The Yardlet server couldn't finish the request. Try again." = "The Yardlet server couldn't finish the request. Try again.";
 "Starting…" = "Starting…";
 "Can't listen for connections: %@" = "Can't listen for connections: %@";
 "Pair a device" = "Pair a device";
