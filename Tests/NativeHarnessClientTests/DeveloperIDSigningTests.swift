@@ -4,7 +4,7 @@ import XCTest
 
 /// Signing for Developer ID (README "Signing and notarization", docs/BROWSER_HOST.md §7): the ad-hoc
 /// path stays as it was, each part's entitlements follow Chrome's, and the Touch ID keychain group
-/// prototype rewrites only CEF's two constants.
+/// patch rewrites only CEF's two constants.
 final class DeveloperIDSigningTests: XCTestCase {
     private let root = URL(filePath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     private var work: URL!
@@ -118,7 +118,7 @@ final class DeveloperIDSigningTests: XCTestCase {
         XCTAssertFalse(checked.output.contains("Dry run; would run"), checked.output)
     }
 
-    func testTheWebAuthnGroupPrototypeRewritesOnlyCEFsTwoConstants() throws {
+    func testTheWebAuthnGroupPatchRewritesOnlyCEFsTwoConstants() throws {
         let binary = work.appending(path: "Chromium Embedded Framework")
         var bytes = Data([0x7f, 0x45])
         for text in ["Autofill", ".org.chromium.Chromium.webauthn", "https://domain.com/.well-known/webauthn",

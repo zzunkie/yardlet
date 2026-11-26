@@ -28,6 +28,10 @@
 #   YARDLET_RELEASE_DOWNLOADS   Where the images are downloaded from, followed by v<version>/.
 #                               Default https://github.com/zzunkie/yardlet/releases/download.
 #   YARDLET_NOTARY_PROFILE      notarize.sh's keychain profile (default yardlet-notary).
+#   YARDLET_PROVISIONING_PROFILE The browser host's Developer ID provisioning profile (README "Signing and
+#                               notarization"), required unless --skip-notarize. With it the release
+#                               turns on Touch ID passkeys: sign-app.sh embeds it and gives CEF's
+#                               keychain groups this team (YARDLET_PATCH_CEF_WEBAUTHN_GROUP=1).
 #
 # The version is Packaging/Info.plist's: CFBundleShortVersionString names the release and the tag
 # v<version>, and Sparkle orders updates by CFBundleVersion, so raise both and commit first.
@@ -56,7 +60,7 @@ while (( $# > 0 )); do
         --ed-key-file) ed_key_file=${2:?--ed-key-file needs a file}; shift 2 ;;
         --skip-notarize) skip_notarize=1; shift ;;
         --output|-o) output=${2:?--output needs a folder}; shift 2 ;;
-        -h|--help) /usr/bin/sed -n '2,31p' "$0" | /usr/bin/sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) /usr/bin/sed -n '2,35p' "$0" | /usr/bin/sed 's/^# \{0,1\}//'; exit 0 ;;
         *) print -u2 "error: unknown argument $1"; exit 2 ;;
     esac
 done
@@ -65,9 +69,14 @@ for file in ${(v)current_appcast} $notes $ed_key_file; do
 done
 [[ -z "$notes" || "$notes" == *.(md|html) ]] || { print -u2 "error: release notes must be a .md or .html file"; exit 1; }
 identity=${YARDLET_SIGNING_IDENTITY:--}
+profile=${YARDLET_PROVISIONING_PROFILE:-}
 if (( ! skip_notarize )); then
     [[ "$identity" != "-" ]] || {
         print -u2 "error: a release is signed with Developer ID: set YARDLET_SIGNING_IDENTITY (README \"Signing and notarization\")"
+        exit 1
+    }
+    [[ -f "$profile" ]] || {
+        print -u2 "error: a release's browser host carries its Developer ID profile, for Touch ID passkeys: set YARDLET_PROVISIONING_PROFILE (README \"Signing and notarization\")"
         exit 1
     }
     # What is published must be a commit anyone can build again.
@@ -108,11 +117,24 @@ for arch in arm64 x86_64; do
     /bin/mkdir -p "$folder"
 
     YARDLET_ARCHS=$arch YARDLET_SIGNING_IDENTITY=$identity YARDLET_SPARKLE_FEED_URL=$arch_feed \
-        YARDLET_SPARKLE_PUBLIC_KEY=$public_key YARDLET_RELAY_URL=$relay "$SCRIPTS/build-app.sh" release
+        YARDLET_SPARKLE_PUBLIC_KEY=$public_key YARDLET_RELAY_URL=$relay \
+        YARDLET_PROVISIONING_PROFILE=$profile YARDLET_PATCH_CEF_WEBAUTHN_GROUP=${profile:+1} \
+        "$SCRIPTS/build-app.sh" release
     [[ "$(plist_value CFBundleShortVersionString) $(plist_value CFBundleVersion)" == "$version $build" ]] || {
         print -u2 "error: $app is not version $version (build $build)"; exit 1; }
     [[ "$(plist_value SUPublicEDKey)" == "$public_key" ]] || { print -u2 "error: $app does not carry the public key"; exit 1; }
     [[ "$(plist_value SUFeedURL)" == "$arch_feed" ]] || { print -u2 "error: $app does not read $arch_feed"; exit 1; }
+    # Touch ID passkeys: the host holds the profile and exactly the keychain groups passkeys were made
+    # under (scripts/cef-webauthn-group.sh). Without them it still runs, with Touch ID quietly off.
+    if [[ -n "$profile" ]]; then
+        host="$app/Contents/Frameworks/Yardlet Browser Host.app"
+        team=$(/usr/bin/codesign -dv "$host" 2>&1 | /usr/bin/sed -n 's/^TeamIdentifier=//p')
+        groups=$(/usr/bin/codesign -d --entitlements - --xml "$host" 2>/dev/null \
+            | /usr/bin/plutil -extract keychain-access-groups json -o - - 2>/dev/null) || groups=none
+        [[ -f "$host/Contents/embedded.provisionprofile" \
+            && "$groups" == "[\"$team.com.zzunkie.webauthn\",\"$team.com.zzunkie.webauthn-uvk\"]" ]] || {
+            print -u2 "error: the browser host lacks its profile or Touch ID's keychain groups (it has $groups)"; exit 1; }
+    fi
     # Each image holds one architecture: every executable in the bundle is that architecture alone.
     for file in "$app"/**/*(.); do
         archs=$(/usr/bin/lipo -archs "$file" 2>/dev/null) || continue
@@ -166,10 +188,15 @@ SWIFT
 done
 
 repository=${${downloads#https://github.com/}%/releases/download}
+# A draft's tag is made when it is published, at its target: the commit these images were built from.
+commit=$(/usr/bin/git -C "$PROJECT_ROOT" rev-parse HEAD)
 cat <<EOF
 
 Ready, not published. To publish $version, in this order (the appcasts point at the release):
-  gh release create v$version "${images[arm64]}" "${images[x86_64]}" --repo $repository --title "Yardlet $version"
+  gh release create v$version "${images[arm64]}" "${images[x86_64]}" --repo $repository --title "Yardlet $version" --draft --target $commit
+  gh workflow run release-check.yml --repo $repository -f release=v$version
+    (macOS 15 and 26 open the draft's images and start the app and its browser host; publish only when it passes)
+  gh release edit v$version --repo $repository --draft=false
   cp "${appcasts[arm64]}" "${appcasts[x86_64]}" <yardlet-site checkout>/, then commit and push the site.
   Homebrew cask: version "$version"
     sha256 arm:   "$(/usr/bin/shasum -a 256 "${images[arm64]}" | cut -d' ' -f1)",

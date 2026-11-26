@@ -15,8 +15,9 @@
 #   YARDLET_PROVISIONING_PROFILE      A Developer ID provisioning profile for the browser host's App
 #                                     ID (<team>.<host identifier>), embedded as the host's
 #                                     embedded.provisionprofile with the entitlements it grants.
-#   YARDLET_PATCH_CEF_WEBAUTHN_GROUP  1 tries Touch ID passkeys (prototype, off by default; needs
-#                                     the profile): see scripts/cef-webauthn-group.sh.
+#   YARDLET_PATCH_CEF_WEBAUTHN_GROUP  1 turns on Touch ID passkeys with a CEF build whose keychain
+#                                     groups have no team (off by default; needs the profile; release.sh
+#                                     sets it): see scripts/cef-webauthn-group.sh.
 #
 # usage: sign-app.sh <Yardlet.app>
 set -euo pipefail
@@ -141,6 +142,21 @@ if [[ -d "$HOST_APP" ]]; then
         [[ "$expires" > "$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ)" ]] || { print -u2 "error: the profile expired on $expires"; exit 1; }
         [[ "$(plist_value ProvisionsAllDevices "$WORK/profile.plist")" == true ]] \
             || print -u2 "note: the profile is not a Developer ID profile; macOS runs this build only on its listed Macs"
+        # macOS (AMFI) runs the host only when the certificate that signs it is one the profile lists;
+        # a profile made for an earlier certificate would stop the browser host on every Mac.
+        /usr/bin/codesign -d --extract-certificates="$WORK/signer" "$WORK/team-probe" 2>/dev/null
+        signer=$(/usr/bin/base64 -i "$WORK/signer0")
+        listed=0
+        certificates=$(/usr/bin/plutil -extract DeveloperCertificates raw -o - "$WORK/profile.plist" 2>/dev/null) || certificates=0
+        for (( index = 0; index < certificates; index++ )); do
+            if [[ "$(/usr/bin/plutil -extract DeveloperCertificates.$index raw -o - "$WORK/profile.plist")" == "$signer" ]]; then
+                listed=1
+            fi
+        done
+        (( listed )) || {
+            print -u2 "error: the profile does not list $IDENTITY_NAME's certificate; edit the profile in the developer portal to choose it and download it again"
+            exit 1
+        }
         /usr/libexec/PlistBuddy -c "Add :com.apple.application-identifier string $profile_app_id" \
             -c "Add :com.apple.developer.team-identifier string $TEAM" "$HOST_ENTITLEMENTS" >/dev/null
 
@@ -156,7 +172,7 @@ if [[ -d "$HOST_APP" ]]; then
         added=0
         for group in ${groups:#}; do
             if [[ "$group" != "$TEAM."* ]]; then
-                print -u2 "note: Touch ID passkeys stay off: CEF expects keychain group \"$group\", which no profile grants (YARDLET_PATCH_CEF_WEBAUTHN_GROUP=1 tries the prototype)"
+                print -u2 "note: Touch ID passkeys stay off: CEF expects keychain group \"$group\", which no profile grants (YARDLET_PATCH_CEF_WEBAUTHN_GROUP=1 gives it this team's)"
                 continue
             fi
             [[ ${granted[(Ie)$TEAM.*]} -gt 0 || ${granted[(Ie)$group]} -gt 0 ]] || {

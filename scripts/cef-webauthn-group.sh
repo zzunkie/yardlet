@@ -8,11 +8,15 @@
 # ".org.chromium.Chromium.webauthn" and "…-uvk", which no provisioning profile can grant.
 #
 #   list <binary>          prints the groups the binary expects, one per line
-#   patch <binary> <team>  PROTOTYPE, off unless YARDLET_PATCH_CEF_WEBAUTHN_GROUP=1 in sign-app.sh:
+#   patch <binary> <team>  with YARDLET_PATCH_CEF_WEBAUTHN_GROUP=1 in sign-app.sh (release.sh sets it):
 #                          rewrites the two constants in place, same length, to
 #                          "<team>.com.zzunkie.webauthn" and "<team>.com.zzunkie.webauthn-uvk".
 #                          Run on the bundle's copy (the pinned download is never changed) before
-#                          the framework is signed. Running it again is a no-op.
+#                          the framework is signed. Running it again, or on a CEF built with these
+#                          groups already, is a no-op.
+#
+# These names are permanent: the passkeys people make are keychain items of this group, and Chromium
+# looks for none outside it, so a build that names another group loses every passkey made before.
 set -euo pipefail
 mode=${1:?usage: cef-webauthn-group.sh list <binary> | patch <binary> <team>}
 binary=${2:?usage: cef-webauthn-group.sh list <binary> | patch <binary> <team>}
