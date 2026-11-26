@@ -74,8 +74,6 @@ struct NewTaskHome: View {
     /// next task that needs them replaces.
     @State private var replyTaskID: UUID?
     @State private var answeredTaskID: UUID?
-    /// The desk is shown only while its development switch is on (`DeskPreview`).
-    @AppStorage(DeskPreview.key, store: .yardlet) private var showsDeskPreview = false
     /// The view the person chose last, kept for the next home (`NewTaskHomeView.key`).
     @AppStorage(NewTaskHomeView.key, store: .yardlet) private var homeView = NewTaskHomeView.now
     /// What the projects count, for the header over them.
@@ -93,8 +91,8 @@ struct NewTaskHome: View {
     /// No project and no task yet: the title and the composer alone, with no view to switch to.
     private var isFirstRun: Bool { projects.isEmpty && activity.sessions.isEmpty }
 
-    /// The header with "Now | Projects" shows while the desk's development switch is on.
-    private var showsViewSwitch: Bool { showsDeskPreview && !isFirstRun }
+    /// The header with "Now | Projects" shows once there is a project or a task.
+    private var showsViewSwitch: Bool { !isFirstRun }
 
     private var showsDesk: Bool { showsViewSwitch && homeView == .now }
 
@@ -169,8 +167,8 @@ struct NewTaskHome: View {
         }
     }
 
-    /// The projects in their columns over the composer, the header with the view switch over them while
-    /// the desk can be chosen.
+    /// The projects in their columns over the composer, the header with the view switch over them once
+    /// there is a project or a task.
     private func projectsView(viewport: GeometryProxy) -> some View {
         let columns = NewTaskHomeLayout.columns(width: viewport.size.width)
         return VStack(spacing: 0) {
@@ -206,7 +204,9 @@ struct NewTaskHome: View {
     /// composer answering a task.
     @ViewBuilder
     private func bottom(viewport: GeometryProxy) -> some View {
-        NewTaskHomeNoticeLine(accounts: activity.notices, showsUsage: activity.usage == nil, conditions: macConditions)
+        // The usage band stands over the projects only: on the desk this line names the limits nearly spent.
+        NewTaskHomeNoticeLine(accounts: activity.notices, showsUsage: activity.usage == nil || showsDesk,
+                              conditions: macConditions)
         if let session = replyingSession, let reply {
             replyPane(session, reply: reply, height: NewTaskHomeLayout.replyHeight(viewport.size.height))
         } else {

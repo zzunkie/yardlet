@@ -26,8 +26,7 @@ struct RemoteNewTaskView: View {
     @FocusState private var isFocused: Bool
     @State private var listKeyboard = NewTaskHomeListKeyboard()
     @FocusState private var listFocus: NewTaskHomeLists.Part?
-    /// The desk and the remembered view, as the local home's (`DeskPreview`, `NewTaskHomeView.key`).
-    @AppStorage(DeskPreview.key, store: .yardlet) private var showsDeskPreview = false
+    /// The remembered view, as the local home's (`NewTaskHomeView.key`).
     @AppStorage(NewTaskHomeView.key, store: .yardlet) private var homeView = NewTaskHomeView.now
     /// What the host's projects count, for the header over them.
     @State private var projectFacts = NewTaskHomeProjectFacts()
@@ -47,7 +46,7 @@ struct RemoteNewTaskView: View {
     /// No project and no task on the host yet: the title and the composer alone, with no view to switch to.
     private var isFirstRun: Bool { model.sidebar.sessions.isEmpty && !projects.contains { $0.kind != .chats } }
 
-    private var showsViewSwitch: Bool { showsDeskPreview && !isFirstRun }
+    private var showsViewSwitch: Bool { !isFirstRun }
 
     private var showsDesk: Bool { showsViewSwitch && homeView == .now }
 

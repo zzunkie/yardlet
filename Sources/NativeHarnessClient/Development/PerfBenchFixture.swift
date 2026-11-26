@@ -444,6 +444,8 @@ private final class PerfBenchRunner {
 
     /// The home shown while three answers stream: its projects, then its desk.
     private func homeViews() async {
+        UserDefaults.yardlet.set(NewTaskHomeView.projects.rawValue, forKey: NewTaskHomeView.key)
+        defer { UserDefaults.yardlet.removeObject(forKey: NewTaskHomeView.key) }
         model.splits.activate(.home)
         let published = model.publicationCounts
         let streaming = [PerfBenchFixture.shownTaskID, PerfBenchFixture.otherRunningTaskID, PerfBenchFixture.thirdRunningTaskID]
@@ -455,8 +457,7 @@ private final class PerfBenchRunner {
         note("streaming started: \(started)")
         try? await Task.sleep(for: .seconds(3))
         await phase("projects", seconds: 15, frames: true)
-        UserDefaults.yardlet.set(true, forKey: DeskPreview.key)
-        defer { UserDefaults.yardlet.removeObject(forKey: DeskPreview.key) }
+        UserDefaults.yardlet.set(NewTaskHomeView.now.rawValue, forKey: NewTaskHomeView.key)
         // The memory the projects' views let go settles before the desk is measured.
         try? await Task.sleep(for: .seconds(10))
         await phase("desk", seconds: 15, frames: true)

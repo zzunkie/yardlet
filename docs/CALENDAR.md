@@ -122,8 +122,8 @@ Choosing an event shows it beside the days:
 
 ## On the desk
 
-The home's desk (its Now view, shown while the development switch `YardletDeskPreview` is on) takes today from the
-calendar while the calendar is on.
+The home's desk (its Now view, the one it opens on until the person chooses Projects) takes today from the calendar
+while the calendar is on.
 
 - While the desk shows, it asks the calendar to read today (`DeskProjection.today`), under the same rules as a window
   showing the calendar: the day held by a range already read is not read again, and nothing is read once the desk goes,
