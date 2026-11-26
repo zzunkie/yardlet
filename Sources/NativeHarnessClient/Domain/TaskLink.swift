@@ -32,7 +32,7 @@ enum TaskLink: Equatable, Sendable {
             }
             return
         }
-        if url.scheme?.lowercased() == "conversation" {
+        if Self.isConversation(url) {
             guard url.user == nil, url.password == nil, url.port == nil, url.query == nil, url.fragment == nil,
                   ["", "/"].contains(url.path(percentEncoded: false)),
                   let host = url.host(percentEncoded: false), let id = UUID(uuidString: host) else { return nil }
@@ -47,6 +47,12 @@ enum TaskLink: Equatable, Sendable {
         guard parts.count == 1, let id = parts.first.map(String.init),
               id.wholeMatch(of: /[A-Za-z0-9_-]{1,128}/) != nil else { return nil }
         self = .codexThread(id)
+    }
+
+    /// Whether `url` is a conversation link (`conversation:`), read as one or not: no app opens these, so
+    /// one Yardlet cannot read stays in the conversation rather than going to the system.
+    static func isConversation(_ url: URL) -> Bool {
+        url.scheme?.lowercased() == "conversation"
     }
 
     /// The anchor that links to a Yardlet task, as agents write one (`[title](#<UUID>)`).

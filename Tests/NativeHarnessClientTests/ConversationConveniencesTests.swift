@@ -168,6 +168,11 @@ final class ConversationConveniencesTests: XCTestCase {
         XCTAssertEqual(ConversationLinkKind(URL(string: "codex://threads/thread_1")!), .task(.codexThread("thread_1")))
         XCTAssertEqual(ConversationLinkKind(URL(string: "conversation://\(Self.otherTask.uuidString.lowercased())")!),
                        .task(.conversation(Self.otherTask)))
+        // One Yardlet cannot read names nothing another app opens, so it is not handed to the system.
+        for malformed in ["conversation://not-a-uuid", "conversation:\(Self.otherTask.uuidString)",
+                          "conversation://\(Self.otherTask.uuidString)#section"] {
+            XCTAssertEqual(ConversationLinkKind(URL(string: malformed)!), .place, malformed)
+        }
         // A heading's anchor names nothing outside the message, so its menu offers nothing of its own.
         let heading = URL(string: "#usage")!
         XCTAssertEqual(ConversationLinkKind(heading), .place)

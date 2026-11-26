@@ -291,6 +291,8 @@ struct TaskView: View {
             }
             return .handled
         }
+        // A conversation link the phone cannot read names nothing another app opens either.
+        if url.scheme?.lowercased() == "conversation" { return .handled }
         if session.taskFiles, let path = ConversationLinks.file(url) {
             openFile(path)
             return .handled

@@ -10,7 +10,8 @@ enum ConversationLinkKind: Equatable {
     case web
     /// A file or folder, which a click opens in the task's files or Finder.
     case file
-    /// An anchor to a place in the message, such as a heading: nothing outside the message.
+    /// An anchor to a place in the message, such as a heading, or a conversation link Yardlet cannot read:
+    /// nothing outside the message.
     case place
     /// Mail and other apps' links, which go where the system sends them.
     case other
@@ -20,7 +21,7 @@ enum ConversationLinkKind: Equatable {
             self = .task(link)
         } else if ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
             self = .web
-        } else if url.scheme == nil, url.path(percentEncoded: false).isEmpty {
+        } else if url.scheme == nil && url.path(percentEncoded: false).isEmpty || TaskLink.isConversation(url) {
             self = .place
         } else if url.isFileURL || url.scheme == nil || RemoteConversationFileLink.path(url) != nil {
             self = .file

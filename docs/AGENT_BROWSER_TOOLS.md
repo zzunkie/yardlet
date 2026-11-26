@@ -373,7 +373,9 @@ above, and the agent passes `harness` itself. `read_task` does not repeat it, be
 
 Links to tasks: a reply opens another task when it links to it, as the Claude app and the Codex app open
 theirs (`TaskLink`): `[title](#<task id>)` with the task ID in either case, or a harness session ID that is a UUID; the
-Claude app's `#local_<id>`; and the Codex app's `codex://threads/<id>`. A click opens the task in the window, ⌘-click in a
+Claude app's `#local_<id>`; the Codex app's `codex://threads/<id>`; and `conversation://<UUID>`, as Antigravity links its
+subagents and other conversations, which opens the task's own subagent with that ID beside it, or a task as above, and
+never goes to another app. A click opens the task in the window, ⌘-click in a
 new tab; the link's menu also opens it in a new tab, a split view or the side panel, as the task's sidebar row's menu
 does, and copies it as the Markdown it was written in. Yardlet has no URL scheme of its own. Every
 session tool result that names an open task carries that link ready to write, so an agent copies a value rather than
