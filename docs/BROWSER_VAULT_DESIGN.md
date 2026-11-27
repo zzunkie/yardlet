@@ -47,9 +47,9 @@ model, site binding and field kinds.
 - **UI:** Settings → Passwords, the item sheet, a save bar when the person signs in, a key button beside the address
   field, code, setup and strong password bars, and "Add to Password Manager…" and "Make a Yardlet Passkey" in the page's
   right-click menu. No new shortcuts or explanatory text (section 8).
-- **Turning off and removing:** turning it off drops the tool from the list and refuses calls. "Export CSV…" takes the
-  sign-ins and codes to another password manager after Touch ID. "Delete all passwords…" deletes keychain items, the
-  usage log and virtual authenticators too (section 9).
+- **Turning off and removing:** turning it off drops the tool from the list and refuses calls. "Export", after Touch
+  ID, writes an encrypted backup Yardlet imports again or a CSV file for another password manager. "Delete all
+  passwords…" deletes keychain items, the usage log and virtual authenticators too (section 9).
 
 ## 3. Non-goals
 
@@ -88,7 +88,7 @@ authenticator, and there is nothing to install. The vault holds only the items t
 list. Yardlet does not open a 1Password (`op`) or Bitwarden (`bw`) vault: without the person they need a service account
 token or a session key that Yardlet would keep in the keychain anyway, they cannot sign with a passkey, and a whole
 personal vault would give an injected agent a wide range to misuse. Backup is the login keychain file in Time Machine;
-there is no sync. The way out is the person's own CSV export (section 8.1). The store sits behind an engine-side
+there is no sync. The way out is the person's own encrypted backup or CSV export (section 8.1). The store sits behind an engine-side
 protocol (`VaultSecretStoring`; the keychain store is `KeychainVaultSecretStore`, and tests and QA runs use an
 in-memory one), so another store could sit under the same protocol.
 
@@ -223,9 +223,9 @@ the username unmasked in screenshots. When a script the agent ran (`browser_eval
 | Yardlet and host logs | CDP messages are not logged (even now the DEBUG host writes only a dialog's ID and whether it was accepted). Fill commands carry a "sensitive" mark so future logs leave them out too, and the usage log has no values. The DEBUG raw accessibility dump (`accessibilityRecordPath`, QA only) runs only in QA homes where the vault is off |
 | Clipboard | Agents get no tool that copies a value. A password copied from the key button's list, a code the person copies in Settings → Passwords or chooses from the key button's list on a page with no code field (section 16), and a shown password or setup key the person copies out of the item sheet, are marked `org.nspasteboard.ConcealedType` and cleared after 90 seconds unless something else was copied since (1Password's default); Universal Clipboard still carries them to the person's devices. The agent's paste key does not paste a clipboard marked concealed. Any process of the person's can still read the clipboard during those 90 seconds |
 | Chromium autofill and session restore | Password fields are left out of Blink's form state saving, and the host turns off Chrome's address and card autofill (which also stops form history) and Chrome's password saving (`credentials_enable_service`, `credentials_enable_autosignin`) in every profile, so usernames and code digits the person or the vault enters are not kept in form history. Entries a profile kept before the setting are left in place |
-| `items.json` | The item list is a plain file any process of the person's can write. Each secret in the keychain keeps the item's sites and agent policy as Yardlet saved them; a fill (the agent's or the key button's) of an item whose `items.json` entry differs is refused and the person is notified ("A password item changed outside Yardlet") to open the item in Settings → Passwords and save it again. A secret that does not yet keep them takes the item's values at its first use |
+| `items.json` | The item list is a plain file any process of the person's can write. Each secret in the keychain keeps the item's sites and agent policy as Yardlet saved them; a fill (the agent's or the key button's) of an item whose `items.json` entry differs is refused, an import, a restored backup or a new two-factor code leaves that item as it is, and the person is notified ("A password item changed outside Yardlet") to open the item in Settings → Passwords and save it again. A secret that does not yet keep them takes the item's values at its first use |
 | `browser_press_key` editing commands | Paste (`Meta+V`) is refused while the clipboard is marked concealed |
-| The CSV export (section 8.1) | Only the person's Export button in Settings → Passwords starts it, after Touch ID or the login password ("export all saved passwords to a file"): no agent tool, settings tool (`update_setting`), remote or URL reaches it. Secrets are read only once the person has chosen the file, and written where they chose, readable by their account only (0600 from the moment it exists, through `StateFile.write`: a new file renamed into place, so a file already there or a process holding one open never sees the values; a volume without POSIX permissions, such as exFAT or a network share, does not keep them). Nothing about it goes into the usage log, tool results or `items.json`. Once written it is plaintext any process of the person's account can read, as an export from Chrome or the Passwords app is; the save panel says so |
+| The backup and the CSV export (section 8.1) | Only the person's Export menu in Settings → Passwords starts them, after Touch ID or the login password ("back up all saved passwords to an encrypted file", "export all saved passwords to a file"): no agent tool, settings tool (`update_setting`), remote or URL reaches it. Secrets are read only once the person has chosen the file, and written where they chose, readable by their account only (0600 from the moment it exists, through `StateFile.write`: a new file renamed into place, so a file already there or a process holding one open never sees the values; a volume without POSIX permissions, such as exFAT or a network share, does not keep them). Nothing about it goes into the usage log, tool results or `items.json`. A backup is sealed under a recovery key Yardlet does not keep, shown once in a sheet kept out of screenshots, recordings and screen sharing (`NSWindow.sharingType`; a ScreenCaptureKit capture of such a window comes back empty), not selectable, not read out by accessibility, and copied only as the vault's concealed copies are and to this Mac's clipboard alone, not Universal Clipboard; the sheet asking for it on import is kept out of capture too, with a secure field. A CSV, once written, is plaintext any process of the person's account can read, as an export from Chrome or the Passwords app is; the save panel says so |
 | The site's own scripts | Not blocked. The point is to give that site the password, so the exposure is the same as with every password manager. Instead, filling is bound to the registrable domain |
 
 ### 5.4 Filled values and addresses
@@ -332,7 +332,7 @@ section 5.3).
 | Injection: harmful actions on a legitimate site | Transferring money or deleting things after sign-in | The harness's approvals and permission modes, the step, the usage log | The vault helps only up to sign-in. Permission for what follows belongs to the harness and the user's permission settings |
 | Other apps on the same Mac | A program running as the same user reads the keychain | Items open only for the Developer ID requirement, vault off in ad-hoc builds | A program of the same user can read the `yardlet-mcp` token, but a call must come from under the task's harness process (AGENT_BROWSER_TOOLS sections 4 and 6). It cannot get values |
 | Child tasks and other harnesses | Tasks made with `create_task`, Codex and ACP tasks, `run_agent` | The same rules (the tool goes to every harness that gets the browser tools), task and harness in the log | An injected parent can direct a child task. The step and site binding are the same whatever the task |
-| Backup and sync | Time Machine, moving to another Mac | The login keychain file is encrypted with the login password, and even when restored it opens only to Yardlet's signature. No iCloud sync | Yardlet passkeys exist only on this Mac, so if the Mac is lost, another sign-in method for the site is needed |
+| Backup and sync | Time Machine, moving to another Mac | The login keychain file is encrypted with the login password, and even when restored it opens only to Yardlet's signature. No iCloud sync. The person's encrypted backup opens only with its recovery key (section 8.1) | Yardlet passkeys exist only on this Mac, so if the Mac is lost, another sign-in method for the site is needed. A backup file and its key kept together, or stolen together, open the whole vault |
 | Tricking the person into using Touch ID | Confirming for the wrong site | Yardlet writes the Touch ID prompt: task title, site and item name. No page text goes into it | — |
 | Sites that block automated sign-in | New-device email checks, CAPTCHA, bot detection, terms that restrict automated sign-in | Not blocked by the vault: the agent hands the tab to the person (`browser_handoff`) | Which sites go into the vault is the person's call |
 | A stale Public Suffix List | A new public suffix not yet in the bundled list | The list is bundled and updates with the app | Two sites under a new suffix may match each other until the app updates |
@@ -353,7 +353,7 @@ Passwords
   GitHub (work)  ada     github.com · Password, code    Always        Yesterday   >
   Vercel                 vercel.com · Passkey           Always        3 days ago  >
   Hana Bank      ada     kebhana.com · Password         Every time    —           >
-                     [Import QR Code…]  [Import CSV…]  [Export CSV…]  [+]
+                    [Import QR Code…]  [Import File…]  [Export ▾]  [+]
   Delete all passwords…
   Addresses and cards             (section 18)
 ```
@@ -367,29 +367,49 @@ Passwords
 - Under the switch, a search field narrows all three lists to the items whose name, username or sites hold each word
   of the search, apart from case and accents, as the search of Chrome's password manager and the Passwords app does
   (section 16).
-- CSV import takes the `name,url,username,password` shape that Chrome, 1Password and Bitwarden export, and their code
-  columns (section 14.3). "Import QR Code…" reads authenticator app exports (section 14.3). Imported items also
-  default to "Always". Rows of one sign-in one after another (the same name, username, password and code) become one
-  item with each row's site, as Yardlet's export writes them; such rows apart from each other stay two items, as two
-  accounts that share a password are. A row with a code but no site Yardlet fills on keeps only the code, as a code
-  with no site (section 14.3). The file is read by Unicode scalar, as other managers read it, so a comma or quote
-  followed by a combining mark still separates or quotes. After an import, Yardlet asks whether to move the source
-  files to the Trash, since they hold secrets in the clear.
-- "Export CSV…" (while the vault holds an item) is the way out: Touch ID or the login password ("export all saved
-  passwords to a file"), then a save panel that says passkeys are not included and that anyone who can open the file
-  can read the passwords; only then are the secrets read, into a file only the person's account may read (section
-  5.3). One confirmation reads every item, "Every time" ones too: that step is Yardlet's check before it reads the
-  keychain (section 4.3). The switch being off does not hide it, since turning off is not removing; a build that is
-  not team-signed cannot use it. The columns are those of the Passwords app's export,
-  `Title,URL,Username,Password,Notes,OTPAuth`. Chrome reads URL, Username, Password and Notes and passes over the
-  rest; Bitwarden ("Safari and macOS") reads the code too; 1Password takes it as a Safari export; Import CSV reads it
-  back. A sign-in saved for several sites gets a row for each (`https://github.com/`, or a development server's
-  origin), its other fields (section 17) go into Notes as `label: value` lines, which Import CSV does not read back,
-  and a two-factor code with no site gets a row with no URL (Chrome, which keeps no codes, does not take that row).
-  Sites are written as the keychain keeps them with each secret, not as `items.json` says; a secret saved before
-  Yardlet kept them takes the item's, as at its first fill (section 5.3). A site saved as a subdomain comes back from
-  Import CSV as its registrable domain, as from any manager's export. Passkeys (no CSV carries one), previous
-  passwords, addresses and cards are left out, as Chrome's export leaves out cards and addresses.
+- "Import File…" takes a CSV or Yardlet's encrypted backup. CSV import takes the `name,url,username,password` shape
+  that Chrome, 1Password and Bitwarden export, and their code columns (section 14.3). "Import QR Code…" reads
+  authenticator app exports (section 14.3). Imported items also default to "Always". Rows of one sign-in one after
+  another (the same name, username, password and code) become one item with each row's site, as Yardlet's export
+  writes them; such rows apart from each other stay two items, as two accounts that share a password are. A row with a
+  code but no site Yardlet fills on keeps only the code, as a code with no site (section 14.3). The file is read by
+  Unicode scalar, as other managers read it, so a comma or quote followed by a combining mark still separates or
+  quotes. After an import, Yardlet asks whether to move the source files to the Trash, since they hold secrets in the
+  clear.
+- "Export" (a menu, while the vault holds an item) is the way out, in two kinds. "CSV for Another Password Manager…":
+  Touch ID or the login password ("export all saved passwords to a file"), then a save panel that says passkeys are
+  not included and that anyone who can open the file can read the passwords; only then are the secrets read, into a
+  file only the person's account may read (section 5.3). One confirmation reads every item, "Every time" ones too:
+  that step is Yardlet's check before it reads the keychain (section 4.3). The switch being off does not hide it,
+  since turning off is not removing; a build that is not team-signed cannot use it. The columns are those of the
+  Passwords app's export, `Title,URL,Username,Password,Notes,OTPAuth`. Chrome reads URL, Username, Password and Notes
+  and passes over the rest; Bitwarden ("Safari and macOS") reads the code too; 1Password takes it as a Safari export;
+  Import CSV reads it back. A sign-in saved for several sites gets a row for each (`https://github.com/`, or a
+  development server's origin), its other fields (section 17) go into Notes as `label: value` lines, which Import CSV
+  does not read back, and a two-factor code with no site gets a row with no URL (Chrome, which keeps no codes, does
+  not take that row). Sites are written as the keychain keeps them with each secret, not as `items.json` says; a
+  secret saved before Yardlet kept them takes the item's, as at its first fill (section 5.3). A site saved as a
+  subdomain comes back from Import CSV as its registrable domain, as from any manager's export. Passkeys (no CSV
+  carries one), previous passwords, addresses and cards are left out, as Chrome's export leaves out cards and
+  addresses.
+- "Encrypted Backup…" is for Yardlet itself (a Mac set up without Migration Assistant, a copy kept apart from Time
+  Machine): the same Touch ID ("back up all saved passwords to an encrypted file"), then a save panel with "Include
+  addresses and cards" (on, while there are any), then a `.yardletbackup` file only the person's account may read. It
+  holds each item's name, sites, username, other fields, agent use and creation date, its password, other secrets,
+  previous passwords and two-factor key, and the addresses and cards when kept in; not passkeys, which stay on the Mac
+  that made them (a copy elsewhere is a second authenticator for a credential the site counts as on one device), nor
+  the usage log, last use or settings. Each backup has a new recovery key, 30 Crockford base32 characters (150 random
+  bits) in groups of five, shown once (section 5.3) and kept nowhere by Yardlet; the file is sealed with AES-256-GCM
+  under a key HKDF-SHA256 derives from it and a random salt, with the format, version and salt in the clear and bound
+  to the contents. The key's randomness, not a password the person chose, protects the file, so no slow derivation is
+  needed. "Import File…" tells a backup by its contents and asks for its key (any case, spaces and hyphens ignored, O
+  read as 0 and I or L as 1); a wrong key says so and stays open. Restoring replaces nothing: sites are read as
+  Yardlet keeps them, and one no page could match is dropped (an item left with none keeps only its code); an item
+  already here for the same site and username keeps its values and takes only what it lacks (a password, a code), a
+  backup password that differs from its own joins its previous passwords while they have room, and an item that
+  changed outside Yardlet takes nothing; other items come back with their agent use, a code with no site already kept
+  and an address or card already saved are left out, and the result names each item whose passkey did not come along,
+  to be made again on its site.
 - In a build that is not team-signed, the switch shows off and cannot be turned on ("Available in team-signed builds of
   Yardlet."; section 4.3).
 
@@ -460,8 +480,8 @@ No new shortcuts, explanatory text or onboarding screens.
 - **Deleting an item**: that item's keychain entry and metadata. For a passkey, the same notice.
 - **Effect on harnesses**: nothing is written to harness settings files. The conversation history keeps only the call
   line (item name), as with other MCP tools. No values.
-- **If Yardlet is moved to the Trash**: the keychain items remain, like connector tokens. "Export CSV…" first takes
-  the sign-ins and codes to another password manager (section 8.1); running "Delete all passwords…" and "Delete All
+- **If Yardlet is moved to the Trash**: the keychain items remain, like connector tokens. "Export" first keeps them in
+  an encrypted backup or takes them to another password manager (section 8.1); running "Delete all passwords…" and "Delete All
   Addresses and Cards…" before removing Yardlet leaves nothing behind.
 
 ## 14. Two-step verification for the person: a built-in authenticator
@@ -635,7 +655,7 @@ person links them.
   [help](https://support.microsoft.com/en-us/authenticator/how-to-add-your-accounts-to-microsoft-authenticator)) → when
   the QR appears, [Save] on the setup bar → Yardlet fills the first code the page asks for → confirm. Once the new key
   is registered, delete that entry from the old app (depending on the site, the old key stops working right away).
-- **1Password, Bitwarden and the Apple Passwords app:** export to CSV, then Settings → Passwords "Import CSV…". The code
+- **1Password, Bitwarden and the Apple Passwords app:** export to CSV, then Settings → Passwords "Import File…". The code
   column comes along.
 
 ## 15. Strong password suggestions

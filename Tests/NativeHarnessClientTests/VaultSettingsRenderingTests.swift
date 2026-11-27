@@ -20,6 +20,8 @@ import XCTest
 /// - `vault-save-bar-*`: the browser panel's save, update and add-username bars.
 /// - `vault-setup-bar-*`: the browser panel's two-factor setup bars, the page's and the ones the agent asks with.
 /// - `settings-vault-wallet-*`, `vault-card-*`, `vault-address-*`, `vault-wallet-bars-*`: addresses and cards.
+/// - `vault-backup-key-<language>-*`, `vault-backup-import-<language>-*`, `vault-export-menu-<language>-*`: an encrypted
+///   backup's recovery key shown once, the prompt for it on import, and the Export menu.
 /// - `vault-picker-*`, `vault-picker-search-*`, `vault-picker-codes-*`, `vault-picker-empty-*`: the browser panel's
 ///   key button list on a site's page, searched, searched for a code from the code bar, and on a site with nothing.
 /// - `vault-picker-aws-passwords-*`, `-codes-*`, `-any-*`, `-search-*`: the list on a cloud console's sign-in at a
@@ -99,7 +101,7 @@ final class VaultSettingsRenderingTests: XCTestCase {
         let spoken = host.accessibilityElements().map { "\($0.label) \($0.value)" }
         for text in ["GitHub (work)", "Vercel", "Example Bank", "github.com", L10n.string("Password manager for agents"),
                      L10n.string("Every time"), L10n.string("While unlocked"), Self.github.kindsTitle,
-                     L10n.string("Import CSV…"), L10n.string("Export CSV…"), L10n.string("Add sign-in"),
+                     L10n.string("Import File…"), L10n.string("Export"), L10n.string("Add sign-in"),
                      L10n.string("Delete all passwords…"),
                      L10n.string("Two-factor codes"), L10n.string("Import QR Code…"), L10n.string("Copy Code"),
                      L10n.string("Import from Another Browser…")] {
@@ -820,6 +822,141 @@ final class VaultSettingsRenderingTests: XCTestCase {
         let apart = "Title,URL,Username,Password\nLogin,https://a.example,ada,same\nOther,https://c.example,ada,x\n"
             + "Login,https://b.example,ada,same\n"
         XCTAssertEqual(VaultCSVImport.entries(apart).map(\.sites), [["a.example"], ["c.example"], ["b.example"]])
+    }
+
+    /// Yardlet's encrypted backup (design §8.1): nothing is chosen or read before the person confirms; the file is the
+    /// owner's alone and holds nothing in the clear; only its own key opens it, typed in any case with spaces, and a
+    /// changed file opens with none. A restore replaces nothing: a saved item keeps its password and agent use, takes
+    /// the code it lacked and keeps the backup's other password among its previous ones; the rest come back with
+    /// their agent use and previous passwords; each item whose passkey stayed behind is named; restoring again adds
+    /// nothing. Then the key's sheet and the prompt for it, and the Export menu.
+    func testAnEncryptedBackupOpensOnlyWithItsKeyAndRestoresWithoutReplacing() async throws {
+        let codeOnly = VaultItem(name: "Example Code", sites: [], username: "grace", hasOneTimeCode: true)
+        let githubCode = OneTimeCodeSecret(key: Data("12345678901234567890".utf8))
+        let eightDigits = OneTimeCodeSecret(key: Data("an-eight-digit-key!!".utf8), digits: 8, period: 60, algorithm: .sha256)
+        let older = VaultPreviousPassword(password: "an-older-password", replacedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        let address = VaultAddress(name: "Ada Lovelace", street: "12 Example Street", city: "Seoul", country: "KR")
+        let card = VaultCard(name: "Ada Lovelace", number: "4242424242424242", expiryMonth: 7, expiryYear: 2034)
+        var answer = false
+        var reasons: [String] = []
+        let source = VaultCenter(environment: VaultCenter.Environment(
+            secrets: InMemoryVaultSecretStore([
+                Self.github.id: VaultSecret(password: "not-a-real-password", oneTimeCode: githubCode, passkey: Self.passkey,
+                                            previousPasswords: [older]),
+                Self.vercel.id: VaultSecret(passkey: Self.passkey),
+                Self.bank.id: VaultSecret(password: "not-a-real-bank-password"),
+                codeOnly.id: VaultSecret(oneTimeCode: eightDigits)
+            ], wallet: VaultWallet(addresses: [address], cards: [card])),
+            repository: InMemoryVaultRepository(items: [Self.github, Self.vercel, Self.bank, codeOnly]),
+            hmac: MacVault.hmac, isAllowedBuild: true, confirm: { reasons.append($0); return answer },
+            defaults: .vaultTests()))
+        let folder = FileManager.default.temporaryDirectory.appending(path: "vault-backup-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appending(path: "Yardlet Passwords Backup.\(VaultBackup.fileExtension)")
+        var chosen = 0
+        let refused = try await source.exportBackup { _ in chosen += 1; return (file, true) }
+        XCTAssertNil(refused)
+        XCTAssertEqual(chosen, 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+        answer = true
+        var offered: Bool?
+        let written = try await source.exportBackup { offersWallet in offered = offersWallet; return (file, true) }
+        let export = try XCTUnwrap(written)
+        XCTAssertEqual(reasons, Array(repeating: L10n.string("back up all saved passwords to an encrypted file"), count: 2))
+        XCTAssertEqual(offered, true)
+        XCTAssertEqual([export.count, export.unreadable], [3, 0])
+        XCTAssertNotNil(export.recoveryKey.range(of: #"^[0-9A-HJKMNP-TV-Z]{5}(-[0-9A-HJKMNP-TV-Z]{5}){5}$"#,
+                                                 options: .regularExpression), export.recoveryKey)
+        let data = try Data(contentsOf: file)
+        let text = String(decoding: data, as: UTF8.self)
+        XCTAssertEqual((try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+        for clear in ["not-a-real-password", "not-a-real-bank-password", "an-older-password", "Example Bank", "github.com",
+                      "4242424242424242", "Seoul", Base32.encode(githubCode.key), export.recoveryKey] {
+            XCTAssertFalse(text.contains(clear), "\(clear) is in the clear")
+        }
+        XCTAssertTrue(VaultBackup.isBackup(data))
+        XCTAssertFalse(VaultBackup.isBackup(Data("Title,URL,Username,Password\n".utf8)))
+
+        let other = try XCTUnwrap(VaultBackup.makeRecoveryKey(randomBytes: VaultPasswordGenerator.systemRandomBytes))
+        XCTAssertThrowsError(try VaultBackup.open(data, recoveryKey: other)) { XCTAssertEqual($0 as? VaultBackup.Failure, .wrongKey) }
+        var changed = data
+        changed[changed.count / 2] ^= 1
+        XCTAssertThrowsError(try VaultBackup.open(changed, recoveryKey: export.recoveryKey))
+        XCTAssertThrowsError(try VaultBackup.open(Data("not a backup".utf8), recoveryKey: export.recoveryKey)) {
+            XCTAssertEqual($0 as? VaultBackup.Failure, .notABackup)
+        }
+        let typed = export.recoveryKey.lowercased().replacingOccurrences(of: "-", with: " ")
+        let contents = try VaultBackup.open(data, recoveryKey: typed)
+        XCTAssertEqual(contents.items.map(\.name), ["GitHub (work)", "Vercel", "Example Bank", "Example Code"])
+        XCTAssertEqual(contents.items.map(\.hadPasskey), [true, true, false, false])
+        XCTAssertEqual(contents.wallet, VaultWallet(addresses: [address], cards: [card]))
+
+        // A saved GitHub sign-in with a newer password and no code.
+        let saved = VaultItem(name: "GitHub", sites: ["github.com"], username: "ada@example.test", hasPassword: true,
+                              policy: .whileUnlocked)
+        let target = VaultCenter(environment: VaultCenter.Environment(
+            secrets: InMemoryVaultSecretStore([saved.id: VaultSecret(password: "a-newer-password")]),
+            repository: InMemoryVaultRepository(items: [saved]), hmac: MacVault.hmac, isAllowedBuild: true,
+            defaults: .vaultTests()))
+        let restored = target.restoreBackup(contents)
+        XCTAssertEqual(restored, VaultCenter.BackupRestore(count: 3, walletCount: 2,
+                                                           passkeys: ["GitHub (work) · github.com", "Vercel · vercel.com"]))
+        XCTAssertEqual(target.items.map(\.name), ["GitHub", "Example Bank", "Example Code"])
+        XCTAssertEqual(target.items.map(\.policy), [.whileUnlocked, .everyTime, .always])
+        XCTAssertEqual(target.items.map(\.sites), [["github.com"], ["examplebank.test", "http://localhost:3000"], []])
+        let github = try XCTUnwrap(target.secret(of: saved.id))
+        XCTAssertEqual(github.password, "a-newer-password")
+        XCTAssertEqual(github.oneTimeCode, githubCode)
+        XCTAssertEqual(github.previousPasswords?.map(\.password), ["not-a-real-password"])
+        XCTAssertNil(github.passkey)
+        let bank = try XCTUnwrap(target.items.first { $0.name == "Example Bank" })
+        XCTAssertEqual(target.secret(of: bank.id)?.password, "not-a-real-bank-password")
+        XCTAssertEqual(target.items.last.flatMap { target.secret(of: $0.id)?.oneTimeCode }, eightDigits)
+        XCTAssertEqual(target.wallet.addresses.map(\.street), ["12 Example Street"])
+        XCTAssertEqual(target.wallet.cards.map(\.number), ["4242424242424242"])
+        XCTAssertEqual(target.restoreBackup(contents).count, 0)
+        XCTAssertEqual(target.restoreBackup(contents).walletCount, 0)
+        XCTAssertEqual(target.items.count, 3)
+
+        // An item whose sites changed outside Yardlet takes nothing from a backup or a CSV, and keeps what the keychain
+        // saved with it; a file's site no page could match brings nothing.
+        let tampered = VaultItem(name: "Bank", sites: ["examplebank.test", "evil.example"], username: "ada", hasPassword: true)
+        var kept = VaultSecret(password: "a-saved-password")
+        kept.savedSites = ["examplebank.test"]
+        kept.savedPolicy = .always
+        let guarded = VaultCenter(environment: VaultCenter.Environment(
+            secrets: InMemoryVaultSecretStore([tampered.id: kept]), repository: InMemoryVaultRepository(items: [tampered]),
+            hmac: MacVault.hmac, isAllowedBuild: true, defaults: .vaultTests()))
+        XCTAssertEqual(guarded.restoreBackup(contents).count, 2)
+        XCTAssertEqual(guarded.importSignIns(VaultCSVImport.entries("name,url,username,password\nBank,https://examplebank.test,ada,new\n")), 0)
+        XCTAssertEqual(guarded.secret(of: tampered.id), kept)
+        let crafted = VaultBackup.Contents(items: [.init(name: "Wide", sites: ["com", "http://example.com"], username: "x",
+                                                         policy: .always, createdAt: Date(), password: "p", hadPasskey: false)])
+        XCTAssertEqual(guarded.restoreBackup(crafted).count, 0)
+        XCTAssertFalse(guarded.items.contains { $0.name == "Wide" })
+
+        let directory = try WindowlessRender.directory("vault-qa")
+        let shown = VaultCenter.BackupExport(recoveryKey: "7K3QD-M9VXA-2B8RT-C4HZN-0PW6E-JS1YF", count: 3, unreadable: 0)
+        try WindowlessRender.hostedInBothAppearances("vault-backup-key-\(Self.language)", in: directory,
+                                                     size: NSSize(width: 480, height: 300)) { appearance in
+            VaultRecoveryKeySheet(export: shown) {}.environment(\.colorScheme, appearance.colorScheme)
+        }
+        try WindowlessRender.hostedInBothAppearances("vault-backup-import-\(Self.language)", in: directory,
+                                                     size: NSSize(width: 480, height: 230)) { appearance in
+            VaultBackupKeySheet(fileName: file.lastPathComponent, onImport: { _ in nil }, onCancel: {})
+                .environment(\.colorScheme, appearance.colorScheme)
+        }
+        let lines = MenuLine.lines([NSMenuItem(title: L10n.string("Encrypted Backup…"), action: nil, keyEquivalent: ""),
+                                    NSMenuItem(title: L10n.string("CSV for Another Password Manager…"), action: nil,
+                                               keyEquivalent: "")])
+        let size = NSSize(width: 320, height: MenuPanel.height(lines) + 40)
+        try WindowlessRender.hostedInBothAppearances("vault-export-menu-\(Self.language)", in: directory, size: size) { appearance in
+            MenuPanel(lines: lines, width: 280, highlighted: 0)
+                .frame(width: size.width, height: size.height)
+                .background(appearance == .dark ? Color(white: 0.1) : Color(white: 0.85))
+                .environment(\.colorScheme, appearance.colorScheme)
+        }
     }
 }
 
