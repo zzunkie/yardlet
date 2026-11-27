@@ -1998,6 +1998,10 @@
 "Allow it if the phone shows the same number." = "スマートフォンに同じ番号が表示されている場合は許可してください。";
 "Sign in with %@" = "%@ でサインイン";
 "The sign-in did not finish." = "サインインが完了しませんでした。";
+"Finish signing in in your browser." = "ブラウザでサインインを完了してください。";
+"Your Yardlet sign-in has expired. Sign in again." = "Yardlet のサインインの有効期限が切れました。もう一度サインインしてください。";
+"The Yardlet server couldn't finish the request. Try again later." = "Yardlet のサーバーがリクエストを完了できませんでした。しばらくしてからもう一度お試しください。";
+"The Yardlet server couldn't finish the request. Try again." = "Yardlet のサーバーがリクエストを完了できませんでした。もう一度お試しください。";
 "Starting…" = "開始中…";
 "Can't listen for connections: %@" = "接続の待機を開始できません: %@";
 "Pair a device" = "デバイスをペアリング";

@@ -1998,6 +1998,10 @@
 "Allow it if the phone shows the same number." = "휴대폰에 같은 숫자가 보이면 허용하세요.";
 "Sign in with %@" = "%@로 로그인";
 "The sign-in did not finish." = "로그인이 끝나지 않았습니다.";
+"Finish signing in in your browser." = "브라우저에서 로그인을 완료하세요.";
+"Your Yardlet sign-in has expired. Sign in again." = "Yardlet 로그인이 만료되었습니다. 다시 로그인하세요.";
+"The Yardlet server couldn't finish the request. Try again later." = "Yardlet 서버가 요청을 처리하지 못했습니다. 잠시 뒤 다시 시도하세요.";
+"The Yardlet server couldn't finish the request. Try again." = "Yardlet 서버가 요청을 처리하지 못했습니다. 다시 시도하세요.";
 "Starting…" = "시작 중…";
 "Can't listen for connections: %@" = "연결을 받을 수 없습니다: %@";
 "Pair a device" = "기기 연결";
