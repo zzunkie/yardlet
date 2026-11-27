@@ -5,7 +5,8 @@ import XCTest
 
 /// Yardlet's scheduled-task tools (docs/AGENT_BROWSER_TOOLS.md, "Scheduled-task tools", after the Claude app's `scheduled-tasks`
 /// server): the schemas the MCP server lists, create, list, update, delete and run-now through the
-/// broker, the defaults a schedule takes from the task that made it, continuing that task, the file
+/// broker, the defaults a schedule takes from the task that made it, continuing that task and running on
+/// mail from a sender, the file
 /// the schedules live in, who asks before a change (the harness, as each app has its harness ask),
 /// and the conversation reading the call as the schedule it made. No harness runs and no model is
 /// contacted: adapters are doubles, every store and preference is in memory, and the only files are
@@ -67,8 +68,8 @@ final class ScheduleToolTests: XCTestCase {
         }
         let create = try XCTUnwrap(ScheduleToolCatalog.definition(named: "create_scheduled_task")?.json)
         let properties = Set(create["inputSchema"]?["properties"]?.objectValue?.keys.map { $0 } ?? [])
-        XCTAssertEqual(properties, ["name", "prompt", "cronExpression", "fireAt", "continueTaskId", "harness", "project",
-                                    "chat", "useWorktree", "topLevel", "model", "effort", "permissionMode"])
+        XCTAssertEqual(properties, ["name", "prompt", "cronExpression", "fireAt", "continueTaskId", "mailFrom", "harness",
+                                    "project", "chat", "useWorktree", "topLevel", "model", "effort", "permissionMode"])
         XCTAssertEqual(create["inputSchema"]?["properties"]?["permissionMode"]?["enum"],
                        .array(["default", "plan", "acceptEdits", "auto", "dontAsk", "bypassPermissions", "askForApproval",
                                "approveForMe", "dangerFullAccess", "custom", "readOnly", "accept-edits", "bypass"]
@@ -169,6 +170,16 @@ final class ScheduleToolTests: XCTestCase {
                             "harness": .string("codex"), "permissionMode": .string("dangerFullAccess")])))
         XCTAssertTrue(onCodex.detail.contains(L10n.format("Its runs will use %@ mode.", L10n.string("Full access"))),
                       "In the words of Codex's own control: \(onCodex.detail)")
+        // The sender whose mail runs it too, and its end.
+        let onMail = try XCTUnwrap(ScheduleToolApproval.request(
+            toolName: "mcp__yardlet__create_scheduled_task",
+            input: .object(["prompt": .string("Did the reply come?"), "cronExpression": .string("0 9 * * *"),
+                            "continueTaskId": .string("self"), "mailFrom": .string("prof@school.example")])))
+        XCTAssertTrue(onMail.detail.contains(L10n.format("When mail from %@ arrives", "prof@school.example")), onMail.detail)
+        let offMail = try XCTUnwrap(ScheduleToolApproval.request(
+            toolName: "mcp__yardlet__update_scheduled_task",
+            input: .object(["scheduleId": .string(id.uuidString), "mailFrom": .string("")]), name: names))
+        XCTAssertTrue(offMail.detail.contains(L10n.string("No longer runs on new mail.")), offMail.detail)
         XCTAssertNil(ScheduleToolApproval.request(toolName: "mcp__scheduled-tasks__create_scheduled_task",
                                                   input: .object([:])), "The Claude app's own tool is its own")
         XCTAssertNil(ScheduleToolApproval.request(toolName: "mcp__yardlet__list_task_runs", input: .object([:])))
@@ -888,6 +899,51 @@ final class ScheduleToolTests: XCTestCase {
         await model.shutdown()
     }
 
+    /// A schedule that continues the calling task waits for mail from the sender the call names: the answer and the
+    /// listing say so, mail from that sender runs it as the task's own scheduled message with the sender and the account
+    /// after the prompt, and `mailFrom: ""` stops it.
+    func testAScheduleThatContinuesThisTaskRunsOnMailFromTheSenderItNames() async throws {
+        let fixture = try Fixture(root: root, calendar: seoul, now: date(17, 20))
+        let model = fixture.model
+        let created = await call(model, "create_scheduled_task", [
+            "name": "Reply check", "prompt": "Did the reply come?", "cronExpression": "0 9 * * *",
+            "continueTaskId": "self", "mailFrom": "Prof. Kim <prof@school.example>"
+        ], from: fixture.caller)
+        XCTAssertFalse(created.isError, created.text)
+        XCTAssertTrue(created.text.contains("**Also runs:** when new mail from prof@school.example reaches Yardlet's Mailbox "
+            + "(the Mailbox is off in Settings › General, so not until it is on)"), created.text)
+        let schedule = try XCTUnwrap(model.scheduledTasks.schedules.first)
+        XCTAssertEqual(schedule.mailFrom, "prof@school.example", "The address, without the name")
+        let listed = try JSONDecoder().decode(Listing.self, from: Data(
+            await call(model, "list_scheduled_tasks", [:], from: fixture.caller).text.utf8))
+        XCTAssertEqual(listed.scheduledTasks.map(\.mailFrom), ["prof@school.example"])
+
+        let account = MailFixture.work
+        model.mailbox.setAccounts([(account, FixtureMailTransport(account: account, threads: []))])
+        model.runSchedulesWaitingForMail([MailThreadSummary(
+            id: MailThreadKey(accountID: account.id, threadID: "thread-reply"), subject: "Re: Office hours",
+            senders: [MailAddress(name: "Prof. Kim", address: "prof@school.example")], snippet: "Thursday works.",
+            date: fixture.clock.now, messageCount: 2, isUnread: true, isStarred: false, hasAttachments: false,
+            hasDraft: false)])
+        await model.scheduledTasks.checkDue()
+        let runs = try JSONDecoder().decode(Runs.self, from: Data(
+            await call(model, "list_task_runs", ["scheduleId": schedule.id.uuidString], from: fixture.caller).text.utf8))
+        XCTAssertEqual(runs.runs.map(\.trigger), ["mail"])
+        XCTAssertEqual(runs.runs.first?.taskId, fixture.caller.id.uuidString)
+        let prompts = await fixture.adapter.prompts
+        XCTAssertEqual(prompts, [TaskMessage(senderID: fixture.caller.id.uuidString, senderName: "Deploy watch",
+                                             body: "Did the reply come?\n\n" + MailText.scheduledRun(from: "prof@school.example",
+                                                                                                    in: account),
+                                             relation: .itself).text(in: .yardlet)],
+                       "The task's own scheduled message, with the mail named after the prompt")
+
+        let stopped = await call(model, "update_scheduled_task", ["scheduleId": schedule.id.uuidString, "mailFrom": ""],
+                                 from: fixture.caller)
+        XCTAssertTrue(stopped.text.contains("updated: no longer runs on mail."), stopped.text)
+        XCTAssertNil(model.scheduledTasks.schedule(id: schedule.id)?.mailFrom)
+        await model.shutdown()
+    }
+
     func testCallsThatCannotBeScheduledAreRefusedAndChangeNothing() async throws {
         let fixture = try Fixture(root: root, calendar: seoul, now: date(17, 20))
         let model = fixture.model
@@ -908,6 +964,10 @@ final class ScheduleToolTests: XCTestCase {
              "no repository for a worktree"),
             (["prompt": "Go.", "fireAt": "2026-10-18T09:00:00+09:00", "continueTaskId": "self", "topLevel": true],
              "is for a new task each run"),
+            (["prompt": "Go.", "fireAt": "2026-10-18T09:00:00+09:00", "mailFrom": "prof@school.example"],
+             "mail starts no new task"),
+            (["prompt": "Go.", "fireAt": "2026-10-18T09:00:00+09:00", "continueTaskId": "self", "mailFrom": "the professor"],
+             "takes one mail address"),
             (["prompt": String(repeating: "a", count: 32_001), "fireAt": "2026-10-18T09:00:00+09:00"], "longer than")
         ]
         for (arguments, words) in cases {
@@ -1044,6 +1104,7 @@ final class ScheduleToolTests: XCTestCase {
         var nextRunAt: String?
         var enabled: Bool
         var stoppedBecause: String?
+        var mailFrom: String?
         var prompt: String?
     }
 

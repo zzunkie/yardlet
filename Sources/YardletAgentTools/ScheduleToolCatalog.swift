@@ -5,8 +5,9 @@ import Foundation
 /// the same `cronExpression` and `fireAt`, and `prompt`, `enabled` and `limit` as there, answered by
 /// the app against Yardlet's own scheduler (docs/AGENT_BROWSER_TOOLS.md, "Scheduled-task tools"). The rest is Yardlet's schedule: a
 /// name, where each run goes (a new task of a harness in a project or a chat, nested under the task
-/// that made it or a top-level task, or the next message of a task), and the model and permission
-/// mode of each new task, with the choices Scheduled tasks' own editor has.
+/// that made it or a top-level task, or the next message of a task), the model and permission
+/// mode of each new task, with the choices Scheduled tasks' own editor has, and the sender whose mail
+/// also runs a schedule that continues a task (`mailFrom`).
 ///
 /// As there, a tool carries no `anthropic/alwaysLoad`, so Claude Code keeps them behind its tool
 /// search. Unlike there, a description says what a tool does and not when to call it.
@@ -39,6 +40,7 @@ package enum ScheduleToolCatalog {
         package static let cronExpression = "cronExpression"
         package static let fireAt = "fireAt"
         package static let continueTaskID = "continueTaskId"
+        package static let mailFrom = "mailFrom"
         package static let harness = "harness"
         package static let project = "project"
         package static let chat = "chat"
@@ -148,6 +150,9 @@ package enum ScheduleToolCatalog {
             + "\"2026-10-18T09:00:00+09:00\". Not with cronExpression."),
         Key.continueTaskID: property("string", "Each run is the next message of this task, \"self\" or a task id "
             + "from list_tasks, instead of a new task. Left out, each run is a new task."),
+        Key.mailFrom: property("string", "With continueTaskId: a mail address whose new mail in Yardlet's Mailbox "
+            + "also runs it, besides its times. The run names the sender and account, not the mail's words. \"\" "
+            + "stops it."),
         Key.harness: property("string", "Each new task's harness: an id such as claude-code, codex or "
             + "antigravity-cli, or its name; list_accounts lists the ones set up in Yardlet. Defaults to this task's."),
         Key.project: property("string", "A project name or folder path for each new task. Defaults to this "

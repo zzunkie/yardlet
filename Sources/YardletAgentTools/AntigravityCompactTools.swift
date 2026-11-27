@@ -104,6 +104,7 @@ package enum AntigravityCompactTools {
         "cronExpression": "5-field local cron: daily/weekdays (\"30 8 * * 1-5\") or every N hours dividing 24 (\"0 */6 * * *\"). Not with fireAt.",
         "fireAt": "One-off ISO 8601 time with offset (e.g. \"2026-10-18T09:00:00+09:00\"). Not with cronExpression.",
         "continueTaskId": "Continue this task (\"self\" or task id) instead of starting a new task.",
+        "mailFrom": "With continueTaskId: sender address whose new Mailbox mail also runs it (\"\" stops).",
         "useWorktree": "Start new task in a fresh Git worktree.",
         "topLevel": "true for top-level sidebar task; false nests under this task."
     ]

@@ -91,12 +91,17 @@ extension AppModel: ScheduleToolHandling {
         case let .success(value): destination = value
         case let .failure(error): return error.result("Nothing was created")
         }
+        let mailFrom: String?
+        switch Self.scheduleMailFrom(arguments, mode: destination.mode) {
+        case let .success(value): mailFrom = value.flatMap { $0.isEmpty ? nil : $0 }
+        case let .failure(error): return error.result("Nothing was created")
+        }
         let name = Self.scheduleName(arguments[Key.name]?.stringValue, prompt: prompt)
         if let refusal = await scheduleAgentRefusal(destination, previous: nil, promptChanged: true, caller: caller) {
             return .failure("Nothing was created: \(refusal)", .refused, retry: .no)
         }
         scheduledTasks.create(ScheduledTask(name: name, prompt: prompt, trigger: trigger, destination: destination,
-                                            createdAt: now, agentTaskID: caller.hostTaskID))
+                                            createdAt: now, agentTaskID: caller.hostTaskID, mailFrom: mailFrom))
         guard let schedule = scheduledTasks.schedules.last else {
             return .error("Nothing was created: Yardlet could not keep the schedule.")
         }
@@ -340,10 +345,18 @@ extension AppModel: ScheduleToolHandling {
             case let .failure(error): return error.result("Nothing was updated")
             }
         }
+        switch Self.scheduleMailFrom(arguments, mode: edited.destination.mode) {
+        case let .success(given?):
+            let mailFrom = given.isEmpty ? nil : given
+            if mailFrom != edited.mailFrom { parts.append(mailFrom.map { "runs on mail from \($0)" } ?? "no longer runs on mail") }
+            edited.mailFrom = mailFrom
+        case .success(nil): break
+        case let .failure(error): return error.result("Nothing was updated")
+        }
         let enabled = Self.bool(arguments[Key.enabled])
         guard !parts.isEmpty || enabled != nil else {
             return .error("Nothing was updated for scheduled task \(schedule.id.uuidString): give at least one of "
-                + "name, prompt, cronExpression, fireAt, enabled, or where each run goes.")
+                + "name, prompt, cronExpression, fireAt, mailFrom, enabled, or where each run goes.")
         }
         // A prompt the agent wrote runs as this task's message; one the person wrote stays theirs wherever it goes.
         let promptChanged = edited.prompt != schedule.prompt
@@ -464,6 +477,8 @@ extension AppModel: ScheduleToolHandling {
         var stoppedBecause: String?
         var eachRun: String
         var continuesTaskId: String?
+        /// The sender whose new mail also runs a schedule that continues a task.
+        var mailFrom: String?
         var harness: String
         var folder: String?
         var project: String?
@@ -519,6 +534,7 @@ extension AppModel: ScheduleToolHandling {
             stoppedBecause: Self.stopWords(schedule.state.stopReason),
             eachRun: isNew ? "new task" : "continues a task",
             continuesTaskId: isNew ? nil : destination.targetTaskID?.uuidString,
+            mailFrom: isNew ? nil : schedule.mailFrom,
             harness: destination.harness.rawValue,
             folder: isNew ? destination.workspacePath ?? "(a new chat folder)" : nil,
             project: isNew ? projects.project(id: destination.projectID)?.name : nil,
@@ -555,6 +571,10 @@ extension AppModel: ScheduleToolHandling {
             let title = destination.targetTaskID.flatMap { id in store.sessions.first { $0.id == id }?.title }
             lines.append("**Each run:** the next message of task \(destination.targetTaskID?.uuidString ?? "")"
                 + (title.map { " (\(ScheduleToolCatalog.oneLine($0)))" } ?? ""))
+            if let from = schedule.mailFrom {
+                lines.append("**Also runs:** when new mail from \(from) reaches Yardlet's Mailbox"
+                    + (mailbox.isEnabled ? "" : " (the Mailbox is off in Settings › General, so not until it is on)"))
+            }
         case .newTask:
             var place = destination.workspacePath.map { "in \($0)" } ?? "in a new chat folder"
             if destination.startsInNewWorktree { place += ", in a new worktree" }
@@ -632,6 +652,23 @@ extension AppModel: ScheduleToolHandling {
             }
             return .success(.once(moment))
         }
+    }
+
+    /// The sender a call has the schedule wait for (`ScheduledTask.mailFrom`): one address, for a schedule whose runs
+    /// continue a task, or "" to wait for none. Nil when the call leaves it out.
+    static func scheduleMailFrom(_ arguments: JSONValue, mode: ScheduleDestination.Mode) -> Result<String?, SessionToolError> {
+        guard let text = arguments[ScheduleToolCatalog.Key.mailFrom]?.stringValue?
+            .trimmingCharacters(in: .whitespacesAndNewlines) else { return .success(nil) }
+        guard !text.isEmpty else { return .success("") }
+        let addresses = MailAddressList.parse(text)
+        guard addresses.count == 1, let address = addresses.first?.address else {
+            return .failure(SessionToolError(message: "mailFrom takes one mail address, such as \"name@example.com\"."))
+        }
+        guard mode == .continueTask else {
+            return .failure(SessionToolError(message: "mailFrom is for a schedule whose runs continue a task "
+                + "(continueTaskId); mail starts no new task."))
+        }
+        return .success(address)
     }
 
     /// Where each run goes: the call's choices over `base` (the schedule being changed) or, for a new

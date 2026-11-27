@@ -2574,6 +2574,7 @@
 "On new mail" = "On new mail";
 "When mail from %@ arrives" = "When mail from %@ arrives";
 "Also runs" = "Also runs";
+"No longer runs on new mail." = "No longer runs on new mail.";
 "Its prompt could not be read." = "Its prompt could not be read.";
 "Yardlet cannot repeat it on this rule." = "Yardlet cannot repeat it on this rule.";
 "The Codex task it continues is not in Yardlet, so each run starts a new chat." = "The Codex task it continues is not in Yardlet, so each run starts a new chat.";

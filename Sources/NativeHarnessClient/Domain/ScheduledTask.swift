@@ -34,7 +34,7 @@ struct ScheduledTask: Codable, Identifiable, Equatable, Sendable {
 
     init(id: UUID = UUID(), name: String, prompt: String, trigger: ScheduleTrigger,
          destination: ScheduleDestination, isEnabled: Bool = true, createdAt: Date = Date(),
-         origin: ScheduleOrigin? = nil, agentTaskID: UUID? = nil) {
+         origin: ScheduleOrigin? = nil, agentTaskID: UUID? = nil, mailFrom: String? = nil) {
         self.id = id
         self.name = name
         self.prompt = prompt
@@ -45,6 +45,7 @@ struct ScheduledTask: Codable, Identifiable, Equatable, Sendable {
         self.updatedAt = createdAt
         self.origin = origin
         self.agentTaskID = agentTaskID
+        self.mailFrom = mailFrom
         state = ScheduleRunState(scanFloor: createdAt)
     }
 

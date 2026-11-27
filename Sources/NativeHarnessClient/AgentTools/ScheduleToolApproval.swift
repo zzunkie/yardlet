@@ -60,6 +60,14 @@ enum ScheduleToolApproval {
         let prompt = input[Key.prompt]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
         var lines: [String] = []
         if let schedule = scheduleLine(input, calendar: calendar, now: now) { lines.append(schedule) }
+        // The sender whose mail runs it too, or that it stops waiting for mail.
+        if let from = input[Key.mailFrom]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) {
+            if !from.isEmpty {
+                lines.append(L10n.format("When mail from %@ arrives", from))
+            } else if tool == ScheduleToolCatalog.update {
+                lines.append(L10n.string("No longer runs on new mail."))
+            }
+        }
         let title: String
         switch tool {
         case ScheduleToolCatalog.create:
