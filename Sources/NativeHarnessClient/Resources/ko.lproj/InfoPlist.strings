@@ -1,13 +1,13 @@
 /* 휴대폰 패스키(WebAuthn 하이브리드)를 위한 시스템 블루투스 권한 창. */
 "NSBluetoothAlwaysUsageDescription" = "Yardlet 내장 브라우저가 휴대폰이나 태블릿의 패스키로 로그인할 때 블루투스를 사용합니다.";
 "NSBluetoothPeripheralUsageDescription" = "Yardlet 내장 브라우저가 휴대폰이나 태블릿의 패스키로 로그인할 때 블루투스를 사용합니다.";
-/* Yardlet이 실행하는 명령(하네스, 그 도구, 터미널)과 내장 브라우저의 브라우저 호스트의 개인정보 권한 창. macOS는 이를 Yardlet의 요청으로 본다. */
-"NSAppleEventsUsageDescription" = "Yardlet에서 실행 중인 명령(하네스의 도구나 터미널의 프로그램)이 다른 앱을 제어하려고 합니다.";
-"NSMicrophoneUsageDescription" = "Yardlet 내장 브라우저에서 사이트에 마이크를 허용했거나, Yardlet에서 실행 중인 명령(하네스의 음성 받아쓰기나 터미널의 프로그램)이 마이크를 사용하려고 합니다.";
-"NSCameraUsageDescription" = "Yardlet 내장 브라우저에서 사이트에 카메라를 허용했거나, Yardlet에서 실행 중인 명령(하네스의 도구나 터미널의 프로그램)이 카메라를 사용하려고 합니다.";
-/* Apple 캘린더·미리 알림·연락처 커넥터(사람이 켤 때 한 번 묻는다)와 Yardlet이 실행하는 명령의 개인정보 권한 창. macOS는 명령의 요청도 Yardlet의 요청으로 본다. */
-"NSCalendarsFullAccessUsageDescription" = "Apple 캘린더 커넥터를 켜면 Yardlet의 작업이 캘린더를 읽고 바꿀 수 있습니다. 또는 Yardlet에서 실행 중인 명령이 캘린더를 사용하려고 합니다.";
-"NSRemindersFullAccessUsageDescription" = "Apple 미리 알림 커넥터를 켜면 Yardlet의 작업이 미리 알림을 읽고 추가할 수 있습니다. 또는 Yardlet에서 실행 중인 명령이 미리 알림을 사용하려고 합니다.";
-"NSContactsUsageDescription" = "Apple 연락처 커넥터를 켜면 Yardlet의 작업이 연락처를 찾아볼 수 있습니다. 또는 Yardlet에서 실행 중인 명령이 연락처를 사용하려고 합니다.";
+/* Yardlet 터미널의 프로그램과 내장 브라우저의 브라우저 호스트의 개인정보 권한 창. macOS는 이를 Yardlet의 요청으로 본다. 에이전트는 Yardlet Agents나 자기 이름으로 묻는다. */
+"NSAppleEventsUsageDescription" = "Yardlet 터미널의 프로그램이 다른 앱을 제어하려고 합니다.";
+"NSMicrophoneUsageDescription" = "Yardlet 내장 브라우저에서 사이트에 마이크를 허용했거나, Yardlet 터미널의 프로그램이 마이크를 사용하려고 합니다.";
+"NSCameraUsageDescription" = "Yardlet 내장 브라우저에서 사이트에 카메라를 허용했거나, Yardlet 터미널의 프로그램이 카메라를 사용하려고 합니다.";
+/* Apple 캘린더·미리 알림·연락처 커넥터(사람이 켤 때 한 번 묻는다)와 Yardlet 터미널 프로그램의 개인정보 권한 창. macOS는 터미널 프로그램의 요청도 Yardlet의 요청으로 본다. */
+"NSCalendarsFullAccessUsageDescription" = "Apple 캘린더 커넥터를 켜면 Yardlet의 작업이 캘린더를 읽고 바꿀 수 있습니다. 또는 Yardlet 터미널의 프로그램이 캘린더를 사용하려고 합니다.";
+"NSRemindersFullAccessUsageDescription" = "Apple 미리 알림 커넥터를 켜면 Yardlet의 작업이 미리 알림을 읽고 추가할 수 있습니다. 또는 Yardlet 터미널의 프로그램이 미리 알림을 사용하려고 합니다.";
+"NSContactsUsageDescription" = "Apple 연락처 커넥터를 켜면 Yardlet의 작업이 연락처를 찾아볼 수 있습니다. 또는 Yardlet 터미널의 프로그램이 연락처를 사용하려고 합니다.";
 /* 로컬 네트워크 권한 창: 휴대폰이나 다른 Mac이 이 Mac을 찾고, 이 Mac이 연결할 호스트를 찾는 Bonjour. */
 "NSLocalNetworkUsageDescription" = "원격 연결을 켜 두면 휴대폰이나 다른 Mac이 같은 네트워크에서 이 Mac을 찾을 수 있습니다. 이 Mac에서 다른 Mac에 연결할 때도 Yardlet이 같은 네트워크에서 그 Mac을 찾습니다.";

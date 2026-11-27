@@ -26,6 +26,8 @@ final class DeveloperIDSigningTests: XCTestCase {
         let expected = [
             "": "com.zzunkie.yardlet",
             "Contents/Helpers/yardlet-mcp": "com.zzunkie.yardlet.mcp",
+            // The helper reads which app may start it from this identifier.
+            "Contents/Helpers/Yardlet Agents.app": "com.zzunkie.yardlet.agents",
             host: "com.zzunkie.yardlet.browser-host",
             "\(host)/Contents/Frameworks/Yardlet Helper.app": "com.zzunkie.yardlet.helper",
             "\(host)/Contents/Frameworks/Yardlet Helper (GPU).app": "com.zzunkie.yardlet.helper.gpu",
@@ -73,6 +75,8 @@ final class DeveloperIDSigningTests: XCTestCase {
         XCTAssertEqual(try keys("BrowserHost"), ["com.apple.security.device.bluetooth", "com.apple.security.device.usb",
                                                  "com.apple.security.device.camera", "com.apple.security.device.audio-input"])
         XCTAssertEqual(try keys("Yardlet"), Set(["com.apple.security.device.bluetooth"]).union(Self.commandPermissions.keys))
+        // The agents it starts ask as Yardlet Agents for what commands asked Yardlet for.
+        XCTAssertEqual(try keys("AgentHost"), Set(Self.commandPermissions.keys))
         let script = try String(contentsOf: root.appending(path: "scripts/sign-app.sh"), encoding: .utf8)
         XCTAssertTrue(script.contains(#"*"(Renderer).app"|*"(GPU).app") sign_runtime --entitlements "$ENTITLEMENTS/BrowserHelperJIT.entitlements""#))
     }
@@ -91,14 +95,17 @@ final class DeveloperIDSigningTests: XCTestCase {
     ]
 
     func testEachPermissionACommandMayAskForHasTheAppsReason() throws {
-        let data = try Data(contentsOf: root.appending(path: "Packaging/Info.plist"))
-        let info = try XCTUnwrap(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
-        for language in ["en", "ko", "ja", "zh-Hans"] {
-            let strings = try XCTUnwrap(NSDictionary(contentsOf: root.appending(
-                path: "Sources/NativeHarnessClient/Resources/\(language).lproj/InfoPlist.strings")) as? [String: String])
-            for key in Self.commandPermissions.values.joined() {
-                XCTAssertNotNil(info[key] as? String, key)
-                XCTAssertFalse(strings[key, default: ""].isEmpty, "\(language) \(key)")
+        for (plist, localizations) in [("Packaging/Info.plist", "Sources/NativeHarnessClient/Resources"),
+                                       ("Packaging/AgentHost/Info.plist", "Packaging/AgentHost")] {
+            let data = try Data(contentsOf: root.appending(path: plist))
+            let info = try XCTUnwrap(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+            for language in ["en", "ko", "ja", "zh-Hans"] {
+                let strings = try XCTUnwrap(NSDictionary(contentsOf: root.appending(
+                    path: "\(localizations)/\(language).lproj/InfoPlist.strings")) as? [String: String])
+                for key in Self.commandPermissions.values.joined() {
+                    XCTAssertNotNil(info[key] as? String, "\(plist) \(key)")
+                    XCTAssertFalse(strings[key, default: ""].isEmpty, "\(localizations) \(language) \(key)")
+                }
             }
         }
     }
@@ -172,6 +179,9 @@ final class DeveloperIDSigningTests: XCTestCase {
         try info(["CFBundleIdentifier": "com.zzunkie.yardlet", "CFBundleExecutable": "Yardlet", "CFBundlePackageType": "APPL"],
                  at: contents.appending(path: "Info.plist"))
         guard withBrowser else { return app }
+        try executable(at: contents.appending(path: "Helpers/Yardlet Agents.app/Contents/MacOS/Yardlet Agents"))
+        try info(["CFBundleIdentifier": "com.zzunkie.yardlet.agents", "CFBundleExecutable": "Yardlet Agents", "CFBundlePackageType": "APPL"],
+                 at: contents.appending(path: "Helpers/Yardlet Agents.app/Contents/Info.plist"))
         let host = contents.appending(path: "Frameworks/Yardlet Browser Host.app/Contents")
         try executable(at: host.appending(path: "MacOS/Yardlet Browser Host"))
         try info(["CFBundleIdentifier": "com.zzunkie.yardlet.browser-host", "CFBundleExecutable": "Yardlet Browser Host",

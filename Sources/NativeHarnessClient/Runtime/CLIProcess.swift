@@ -26,7 +26,7 @@ enum CLIProcess {
             process.environment = RuntimeProcessEnvironment.values(executableURL: command.executable,
                 overrides: ["NO_COLOR": "1", "PAGER": "cat"].merging(command.environment) { _, new in new })
             let exit: ProcessExit
-            do { exit = try ProcessExit(running: process) } catch {
+            do { exit = try ProcessExit(running: process, asAgent: command.asAgent) } catch {
                 return (-1, Data(), error.localizedDescription)
             }
             if let input, let data = command.standardInput {
@@ -90,7 +90,8 @@ enum CLIProcess {
             process.standardError = FileHandle.childNullDevice()
             process.environment = environment
             let exit: ProcessExit
-            do { exit = try ProcessExit(running: process) } catch { return .failed(error.localizedDescription) }
+            // A verification runs the harness itself.
+            do { exit = try ProcessExit(running: process, asAgent: true) } catch { return .failed(error.localizedDescription) }
             let timer = Task {
                 do { try await Task.sleep(for: timeout) } catch { return false }
                 guard process.isRunning else { return false }

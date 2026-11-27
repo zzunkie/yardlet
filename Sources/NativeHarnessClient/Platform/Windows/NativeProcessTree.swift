@@ -12,7 +12,8 @@ import WinSDK
 /// `run(_:)` also names each environment variable once (`ExecutableLookup.normalized`) and starts what npm's
 /// shim would rather than the shim, refusing any other batch file (`NPMCommandShim`).
 enum NativeProcessTree {
-    static func run(_ process: Process) throws {
+    /// `asAgent` matters on the Mac alone, where an agent asks for macOS's privacy permissions in its own name.
+    static func run(_ process: Process, asAgent: Bool = false) throws {
         let lookup = ExecutableLookup.current
         let environment = lookup.normalized(process.environment ?? ProcessInfo.processInfo.environment)
         if process.environment != nil { process.environment = environment }

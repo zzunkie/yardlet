@@ -26,6 +26,7 @@ targets, and `YARDLET_WINDOWS_TESTS=1` for the Windows tests.
 | `YardletBrowserHost`, `YardletCEFBridge`, `YardletCEFHelper` | The Chromium (CEF) browser host process and its helper | Built only when `YARDLET_CEF_DIR` names a CEF distribution (`scripts/build-app.sh` sets it); Yardlet itself never loads CEF ([BROWSER_HOST](BROWSER_HOST.md)) |
 | `YardletSurfacePort`, `YardletCEFAccessibility` | IOSurface hand-off between the browser host and the app; CEF accessibility output in the host contract's shape | Mac only; `YardletCEFAccessibility` is Foundation only so tests run without CEF |
 | `YardletSimulatorHost`, `YardletSimulatorHostProtocol` | The helper that shows and drives iOS simulators, and the typed protocol Yardlet speaks to it | Mac only ([SIMULATOR](SIMULATOR.md)) |
+| `YardletAgentHost` | Yardlet Agents, the helper that starts agents so macOS asks for their privacy permissions in their own name (`Platform/macOS/AgentLaunch.swift` decides how) | Mac only ([README › Permissions](../README.md#permissions)) |
 | `YardletLidSleep`, `YardletLidHelper` | The lid helper's state, its XPC interface and the privileged helper | Mac only ([SLEEP_PREVENTION](SLEEP_PREVENTION.md)) |
 | `CSQLite` | SQLite: the system library on macOS and Linux, `winsqlite3` on Windows (`Sources/CSQLiteWindows`) | |
 | `Apps/iOS/` | The iPhone remote, a SwiftUI app built with Xcode on `YardletRemote` | [Apps/iOS/README.md](../Apps/iOS/README.md) |

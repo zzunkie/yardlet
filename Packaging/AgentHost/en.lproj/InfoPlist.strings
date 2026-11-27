@@ -1,0 +1,9 @@
+/* Privacy prompts for the agents Yardlet runs (harnesses and the commands they run), which macOS attributes to
+   Yardlet Agents rather than to Yardlet. */
+"NSAppleEventsUsageDescription" = "An agent running in Yardlet, or a command it runs, wants to control another app.";
+"NSMicrophoneUsageDescription" = "An agent running in Yardlet, or a command it runs, wants to use the microphone.";
+"NSCameraUsageDescription" = "An agent running in Yardlet, or a command it runs, wants to use the camera.";
+"NSCalendarsFullAccessUsageDescription" = "An agent running in Yardlet, or a command it runs, wants to use your calendars.";
+"NSRemindersFullAccessUsageDescription" = "An agent running in Yardlet, or a command it runs, wants to use your reminders.";
+"NSContactsUsageDescription" = "An agent running in Yardlet, or a command it runs, wants to use your contacts.";
+"NSLocalNetworkUsageDescription" = "An agent running in Yardlet, or a command it runs, wants to connect to a device on your local network.";

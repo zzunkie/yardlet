@@ -109,17 +109,17 @@
     <key>NSBluetoothPeripheralUsageDescription</key>
     <string>Yardlet's built-in browser uses Bluetooth to sign in with a passkey from your phone or tablet.</string>
     <key>NSAppleEventsUsageDescription</key>
-    <string>A command running in Yardlet, such as a harness's tool or a program in the terminal, wants to control another app.</string>
+    <string>A program in Yardlet's terminal wants to control another app.</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Yardlet's built-in browser, when you allow a site to use the microphone, or a command running in Yardlet, such as a harness's voice dictation or a program in the terminal, wants to use the microphone.</string>
+    <string>Yardlet's built-in browser, when you allow a site to use the microphone, or a program in Yardlet's terminal wants to use the microphone.</string>
     <key>NSCameraUsageDescription</key>
-    <string>Yardlet's built-in browser, when you allow a site to use the camera, or a command running in Yardlet, such as a harness's tool or a program in the terminal, wants to use the camera.</string>
+    <string>Yardlet's built-in browser, when you allow a site to use the camera, or a program in Yardlet's terminal wants to use the camera.</string>
     <key>NSCalendarsFullAccessUsageDescription</key>
-    <string>Yardlet's Apple Calendar connector, when you turn it on, lets your tasks read and change your calendars, or a command running in Yardlet wants to use them.</string>
+    <string>Yardlet's Apple Calendar connector, when you turn it on, lets your tasks read and change your calendars, or a program in Yardlet's terminal wants to use them.</string>
     <key>NSRemindersFullAccessUsageDescription</key>
-    <string>Yardlet's Apple Reminders connector, when you turn it on, lets your tasks read and add reminders, or a command running in Yardlet wants to use them.</string>
+    <string>Yardlet's Apple Reminders connector, when you turn it on, lets your tasks read and add reminders, or a program in Yardlet's terminal wants to use them.</string>
     <key>NSContactsUsageDescription</key>
-    <string>Yardlet's Apple Contacts connector, when you turn it on, lets your tasks look up your contacts, or a command running in Yardlet wants to use them.</string>
+    <string>Yardlet's Apple Contacts connector, when you turn it on, lets your tasks look up your contacts, or a program in Yardlet's terminal wants to use them.</string>
     <key>OSLogPreferences</key>
     <dict>
         <key>com.zzunkie.yardlet</key>

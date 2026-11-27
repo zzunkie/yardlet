@@ -228,7 +228,9 @@ let package = Package(
         .library(name: "YardletRemote", targets: ["YardletRemote", "YardletRemoteFixtureSupport"])
     ] + (simulatorHost ? [
         // build-app.sh places it in Contents/Helpers as Yardlet Simulator Host.app.
-        .executable(name: "YardletSimulatorHost", targets: ["YardletSimulatorHost"])
+        .executable(name: "YardletSimulatorHost", targets: ["YardletSimulatorHost"]),
+        // build-app.sh places it in Contents/Helpers as Yardlet Agents.app.
+        .executable(name: "YardletAgentHost", targets: ["YardletAgentHost"])
     ] : []) + (cefDirectory == nil ? [] : [
         .executable(name: "YardletCEFHelper", targets: ["YardletCEFHelper"]),
         .executable(name: "YardletBrowserHost", targets: ["YardletBrowserHost"])
@@ -289,6 +291,12 @@ let package = Package(
             name: "YardletSimulatorHost",
             dependencies: ["YardletSimulatorHostProtocol", "YardletSurfacePort"],
             linkerSettings: [.linkedFramework("Metal"), .linkedFramework("MetalPerformanceShaders")]
+        ),
+        // The helper that starts the agents Yardlet runs, so macOS asks for their privacy permissions in their own
+        // name rather than giving them Yardlet's (README "Permissions"). Foundation and Security only.
+        .executableTarget(
+            name: "YardletAgentHost",
+            linkerSettings: [.linkedFramework("Security")]
         )
     ] : []) + [
         // The MCP protocol, the tool catalog, and the local connection shared by the app and
@@ -365,6 +373,8 @@ let package = Package(
                 "CSQLite",
                 "YardletCEFAccessibility",
                 "YardletSimulatorHostProtocol",
+                // Built for the process tree test, which starts agents through it.
+                "YardletAgentHost",
                 .product(name: "SwiftTerm", package: "SwiftTerm")
             ],
             // Recorded fixtures are read from the source tree, so the target keeps no resource

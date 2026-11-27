@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleDisplayName</key>
+    <string>Yardlet Agents</string>
+    <key>CFBundleExecutable</key>
+    <string>Yardlet Agents</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundleIdentifier</key>
+    <string>@BUNDLE_IDENTIFIER@</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>Yardlet Agents</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>@SHORT_VERSION@</string>
+    <key>CFBundleVersion</key>
+    <string>@BUNDLE_VERSION@</string>
+    <key>LSBackgroundOnly</key>
+    <true/>
+    <key>LSMinimumSystemVersion</key>
+    <string>15.0</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>An agent running in Yardlet, or a command it runs, wants to control another app.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>An agent running in Yardlet, or a command it runs, wants to use your calendars.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>An agent running in Yardlet, or a command it runs, wants to use the camera.</string>
+    <key>NSContactsUsageDescription</key>
+    <string>An agent running in Yardlet, or a command it runs, wants to use your contacts.</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>An agent running in Yardlet, or a command it runs, wants to connect to a device on your local network.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>An agent running in Yardlet, or a command it runs, wants to use the microphone.</string>
+    <key>NSRemindersFullAccessUsageDescription</key>
+    <string>An agent running in Yardlet, or a command it runs, wants to use your reminders.</string>
+</dict>
+</plist>

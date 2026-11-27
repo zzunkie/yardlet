@@ -70,7 +70,7 @@ final class RuntimeVersionCache: @unchecked Sendable {
     /// `<runtime> --version`, read as the CLI update check reads it.
     static func readVersion(_ url: URL) async -> String? {
         let result = await CLIProcess.run(CLICommand(executable: url, arguments: ["--version"],
-                                                     timeout: CLIUpdatePlan.versionTimeout))
+                                                     timeout: CLIUpdatePlan.versionTimeout, asAgent: true))
         return result.succeeded ? CLIVersion.parse(result.stdout + "\n" + result.stderr) : nil
     }
 

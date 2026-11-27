@@ -1,0 +1,8 @@
+/* Yardlet 运行的代理（引擎及其命令）的隐私权限对话框。macOS 将其视为 Yardlet Agents 而非 Yardlet 的请求。 */
+"NSAppleEventsUsageDescription" = "Yardlet 中正在运行的代理或其运行的命令请求控制其他应用。";
+"NSMicrophoneUsageDescription" = "Yardlet 中正在运行的代理或其运行的命令请求使用麦克风。";
+"NSCameraUsageDescription" = "Yardlet 中正在运行的代理或其运行的命令请求使用摄像头。";
+"NSCalendarsFullAccessUsageDescription" = "Yardlet 中正在运行的代理或其运行的命令请求访问日历。";
+"NSRemindersFullAccessUsageDescription" = "Yardlet 中正在运行的代理或其运行的命令请求访问提醒事项。";
+"NSContactsUsageDescription" = "Yardlet 中正在运行的代理或其运行的命令请求访问通讯录。";
+"NSLocalNetworkUsageDescription" = "Yardlet 中正在运行的代理或其运行的命令请求连接本地网络上的设备。";

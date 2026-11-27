@@ -1,13 +1,13 @@
 /* スマートフォンでのパスキー認証（WebAuthn ハイブリッド）用の Bluetooth 権限プロンプト */
 "NSBluetoothAlwaysUsageDescription" = "Yardlet の内蔵ブラウザは、スマートフォンやタブレットのパスキーでサインインするために Bluetooth を使用します。";
 "NSBluetoothPeripheralUsageDescription" = "Yardlet の内蔵ブラウザは、スマートフォンやタブレットのパスキーでサインインするために Bluetooth を使用します。";
-/* Yardlet が実行するコマンド（ハーネス、ツール、ターミナル）および内蔵ブラウザホストのプライバシー権限プロンプト */
-"NSAppleEventsUsageDescription" = "Yardlet 内で実行中のコマンド（ハーネスのツールやターミナル内のプログラムなど）が他のアプリを制御しようとしています。";
-"NSMicrophoneUsageDescription" = "Yardlet の内蔵ブラウザでサイトにマイクの使用を許可した場合、または Yardlet 内で実行中のコマンド（音声入力やターミナル内のプログラムなど）がマイクを使用しようとしています。";
-"NSCameraUsageDescription" = "Yardlet の内蔵ブラウザでサイトにカメラの使用を許可した場合、または Yardlet 内で実行中のコマンド（ハーネスのツールやターミナル内のプログラムなど）がカメラを使用しようとしています。";
-/* Apple カレンダー・リマインダー・連絡先コネクタおよび Yardlet が実行するコマンドのプライバシー権限プロンプト */
-"NSCalendarsFullAccessUsageDescription" = "Yardlet の Apple カレンダーコネクタを有効にすると、タスクからカレンダーの読み取りや変更を行えます。または Yardlet 内で実行中のコマンドがカレンダーを使用しようとしています。";
-"NSRemindersFullAccessUsageDescription" = "Yardlet の Apple リマインダーコネクタを有効にすると、タスクからリマインダーの読み取りや追加を行えます。または Yardlet 内で実行中のコマンドがリマインダーを使用しようとしています。";
-"NSContactsUsageDescription" = "Yardlet の Apple 連絡先コネクタを有効にすると、タスクから連絡先を検索できます。または Yardlet 内で実行中のコマンドが連絡先を使用しようとしています。";
+/* Yardlet のターミナル内のプログラムおよび内蔵ブラウザホストのプライバシー権限プロンプト。エージェントは Yardlet Agents または自身の名前で要求する */
+"NSAppleEventsUsageDescription" = "Yardlet のターミナル内のプログラムが他のアプリを制御しようとしています。";
+"NSMicrophoneUsageDescription" = "Yardlet の内蔵ブラウザでサイトにマイクの使用を許可した場合、または Yardlet のターミナル内のプログラムがマイクを使用しようとしています。";
+"NSCameraUsageDescription" = "Yardlet の内蔵ブラウザでサイトにカメラの使用を許可した場合、または Yardlet のターミナル内のプログラムがカメラを使用しようとしています。";
+/* Apple カレンダー・リマインダー・連絡先コネクタおよび Yardlet のターミナル内のプログラムのプライバシー権限プロンプト */
+"NSCalendarsFullAccessUsageDescription" = "Yardlet の Apple カレンダーコネクタを有効にすると、タスクからカレンダーの読み取りや変更を行えます。または Yardlet のターミナル内のプログラムがカレンダーを使用しようとしています。";
+"NSRemindersFullAccessUsageDescription" = "Yardlet の Apple リマインダーコネクタを有効にすると、タスクからリマインダーの読み取りや追加を行えます。または Yardlet のターミナル内のプログラムがリマインダーを使用しようとしています。";
+"NSContactsUsageDescription" = "Yardlet の Apple 連絡先コネクタを有効にすると、タスクから連絡先を検索できます。または Yardlet のターミナル内のプログラムが連絡先を使用しようとしています。";
 /* ローカルネットワーク権限プロンプト（Bonjour による Mac・スマートフォン検出） */
 "NSLocalNetworkUsageDescription" = "リモート接続がオンの場合、同じネットワーク上のスマートフォンや他の Mac がこの Mac を見つけられます。この Mac から他の Mac に接続する際も、Yardlet が同じネットワーク上の Mac を検索します。";

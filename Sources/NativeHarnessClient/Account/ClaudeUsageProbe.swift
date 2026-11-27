@@ -49,7 +49,7 @@ enum ClaudeUsageProbe {
             // The CLI counts the usage endpoint as nonessential traffic.
             values.removeValue(forKey: "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC")
             process.environment = values
-            try NativeProcessTree.run(process)
+            try NativeProcessTree.run(process, asAgent: true)
 
             // This process may be the one that renews the login: its token expired, and the server
             // answers a renewal with a new refresh token and retires the old one. Stopped in between,

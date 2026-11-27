@@ -9,7 +9,8 @@ import Glibc
 /// descendant that left the group and lost its parent first (a daemon that forked twice and called `setsid`) is not
 /// found; under the systemd service its unit's control group ends it when the service stops.
 enum NativeProcessTree {
-    static func run(_ process: Process) throws {
+    /// `asAgent` matters on the Mac alone, where an agent asks for macOS's privacy permissions in its own name.
+    static func run(_ process: Process, asAgent: Bool = false) throws {
         try process.run()
     }
 

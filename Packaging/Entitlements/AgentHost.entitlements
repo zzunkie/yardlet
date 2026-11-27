@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Yardlet Agents is the process macOS holds responsible for the agents it starts and for what they run, so the
+         privacy permissions they ask for are asked in its name. Under the hardened runtime, tccd denies without asking
+         when the responsible process lacks the service's entitlement; these are the ones commands asked for as Yardlet
+         before (Yardlet.entitlements), each paired with a usage string in Packaging/AgentHost/Info.plist. -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <key>com.apple.security.device.camera</key>
+    <true/>
+    <key>com.apple.security.personal-information.calendars</key>
+    <true/>
+    <key>com.apple.security.personal-information.addressbook</key>
+    <true/>
+</dict>
+</plist>

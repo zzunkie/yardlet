@@ -8,6 +8,8 @@ struct CLICommand: Equatable, Sendable {
     var timeout: Duration
     /// What the command reads on its standard input, which keeps a value out of its arguments; nil gives it none.
     var standardInput: Data? = nil
+    /// The command runs a harness, which asks for macOS's privacy permissions in its own name (`NativeProcessTree.run`).
+    var asAgent = false
 }
 
 struct CLICommandResult: Equatable, Sendable {
