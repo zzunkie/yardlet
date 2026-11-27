@@ -348,7 +348,7 @@ final class ComposerTextController: NSObject, NSTextViewDelegate, @preconcurrenc
 
 /// The text view: Markdown's list keys and format keys, plain-text paste, a placeholder, and the keys
 /// the composer answers (`ComposerTextActions`). An input method's composition always has its keys.
-final class ComposerMarkdownTextView: NSTextView {
+class ComposerMarkdownTextView: NSTextView {
     weak var controller: ComposerTextController?
     var placeholder = "" { didSet { if string.isEmpty { needsDisplay = true } } }
     var placeholderFont: NSFont?
@@ -521,10 +521,11 @@ final class ComposerMarkdownTextView: NSTextView {
         pasteAsPlainText(sender)
     }
 
-    /// AppKit's own `pasteAsPlainText:` and its menu item validation ask for the legacy
-    /// `NSStringPboardType` as well as the UTI `.string`. Listing only one of them lets the
-    /// intersection with `readablePasteboardTypes` come up empty, which silently drops every
-    /// text paste and grays out `Edit › Paste and Match Style`.
+    /// AppKit's own `-[NSTextView pasteAsPlainText:]` and its menu-item validation restrict the
+    /// `preferredPasteboardType` pick to the legacy `"NSStringPboardType"` (`paste:` sends no
+    /// restriction and relies on this list alone). Leaving the legacy type out makes
+    /// `pasteAsPlainText:`'s intersection empty, which silently drops every text paste
+    /// (`paste(_:)` forwards there) and grays out `Edit › Paste and Match Style`.
     override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
         [.string, Self.legacyStringPasteboardType]
     }
