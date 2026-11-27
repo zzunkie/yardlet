@@ -56,8 +56,14 @@ enum VaultClipboard {
     private static var pending: (pasteboard: NSPasteboard, count: Int)?
     private static var quitObserver: NSObjectProtocol?
 
-    static func copy(_ value: String, to pasteboard: NSPasteboard = .general) {
-        pasteboard.clearContents()
+    /// `currentHostOnly` keeps it off Universal Clipboard too, for a value that opens the whole vault (a backup's
+    /// recovery key).
+    static func copy(_ value: String, to pasteboard: NSPasteboard = .general, currentHostOnly: Bool = false) {
+        if currentHostOnly {
+            pasteboard.prepareForNewContents(with: .currentHostOnly)
+        } else {
+            pasteboard.clearContents()
+        }
         pasteboard.setString(value, forType: .string)
         pasteboard.setData(Data(), forType: concealedType)
         clearLater(pasteboard)

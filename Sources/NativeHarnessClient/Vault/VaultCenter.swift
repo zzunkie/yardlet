@@ -558,6 +558,9 @@ final class VaultCenter: ObservableObject {
                                         fieldMaxLength: maxLength, random: environment.randomBytes)
     }
 
+    /// Bytes from the system's secure random source (a backup's recovery key); nil when it fails.
+    func randomBytes(_ count: Int) -> [UInt8]? { environment.randomBytes(count) }
+
     /// Decides an agent's new password for a sign-up form whose username field holds `username`. It goes into
     /// a new item; a saved item of that username or of the name asked for is the person's to change, since
     /// Yardlet cannot tell whether the site took a change, and the person's update after it is what makes
@@ -1037,6 +1040,13 @@ final class VaultCenter: ObservableObject {
     func uses(of itemID: UUID, limit: Int = 20) -> [VaultUse] {
         Array(environment.repository.uses(of: itemID, limit: .max)
             .filter { $0.outcome == .filled || $0.outcome == .refused }.prefix(limit))
+    }
+
+    /// A saved item's secret to change and save again: nil when the keychain does not give it, or when the item's sites
+    /// or agent use changed outside Yardlet (the person is told, as `trustedSecret` tells them), so an import or a new
+    /// code never makes a change to `items.json` its own (design §5.3).
+    func secretToUpdate(_ item: VaultItem) -> VaultSecret? {
+        try? trustedSecret(of: item)
     }
 
     /// The item's secret, if the sites and agent policy `items.json` gives the item are the ones Yardlet saved with the

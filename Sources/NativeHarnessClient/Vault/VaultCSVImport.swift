@@ -149,9 +149,8 @@ extension VaultCenter {
             if let existing = items.first(where: { item in
                 item.username == entry.username && item.sites.contains { entry.sites.contains($0) }
             }) {
-                let hasSecrets = existing.hasPassword || existing.hasOneTimeCode || existing.hasPasskey
-                // A secret the keychain would not give back is kept rather than overwritten.
-                guard var secret = hasSecrets ? secret(of: existing.id) : VaultSecret() else { continue }
+                // A secret the keychain would not give back, or one whose item changed outside Yardlet, is left as it is.
+                guard var secret = secretToUpdate(existing) else { continue }
                 if !entry.password.isEmpty { secret.password = entry.password }
                 if let code = entry.oneTimeCode { secret.oneTimeCode = code }
                 guard (try? save(existing, secret: secret)) != nil else { continue }

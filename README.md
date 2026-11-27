@@ -130,8 +130,9 @@ working with the lid closed** is on, turn it off first: macOS keeps an app's bac
 the app is deleted. It has nothing left to run then, and you can also turn Yardlet off in **System
 Settings > General > Login Items & Extensions**. Turn off **Send now in Antigravity tasks
 (experimental)** too if it is on, which removes its plugin folder from `~/.gemini/config/plugins/`.
-Passwords saved in Yardlet can be taken to another password manager first with **Export CSV…** in
-**Settings > Passwords** (passkeys stay behind). To remove Yardlet's own data as well:
+Passwords saved in Yardlet can be kept first with **Export** in **Settings > Passwords**: an encrypted
+backup Yardlet imports again, or a CSV file for another password manager (passkeys stay behind). To
+remove Yardlet's own data as well:
 
 - `~/.yardlet` (task list, drafts, reading state) and `~/Library/Application Support/Yardlet`
   (browser profiles, staged updates). `brew uninstall --zap --cask zzunkie/tap/yardlet` removes

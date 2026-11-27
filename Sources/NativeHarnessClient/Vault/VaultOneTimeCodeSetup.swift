@@ -182,9 +182,8 @@ extension VaultCenter {
     @discardableResult
     func saveOneTimeCode(_ setup: OneTimeCodeSetup, site: String, into item: VaultItem?) throws -> VaultItem {
         if let item {
-            let hasSecrets = item.hasPassword || item.hasOneTimeCode || item.hasPasskey
-            // A secret the keychain would not give back is kept rather than overwritten.
-            guard var secret = hasSecrets ? secret(of: item.id) : VaultSecret() else {
+            // A secret the keychain would not give back, or one whose item changed outside Yardlet, is left as it is.
+            guard var secret = secretToUpdate(item) else {
                 throw VaultRefusal(message: L10n.string("Yardlet could not read this sign-in from the keychain."))
             }
             secret.oneTimeCode = setup.secret

@@ -16,6 +16,10 @@ struct VaultSettingsView: View {
     /// Sites that held a Yardlet passkey, shown once the vault is emptied.
     @State private var passkeySites: [String] = []
     @State private var imported: Imported?
+    /// A backup just written, whose recovery key shows once.
+    @State private var backup: ShownBackup?
+    /// A backup chosen to import, waiting for its recovery key.
+    @State private var backupToOpen: BackupFile?
     @State private var failure: String?
     /// The items' code secrets, read from the keychain while the page shows codes.
     @State private var codeSecrets: [UUID: OneTimeCodeSecret] = [:]
@@ -44,8 +48,24 @@ struct VaultSettingsView: View {
     private struct Imported {
         let title: String
         let count: Int
+        /// Files with secrets in the clear, offered to the Trash once their sign-ins are saved.
         let files: [URL]
+        var detail: String? = nil
     }
+
+    private struct ShownBackup: Identifiable {
+        let id = UUID()
+        let export: VaultCenter.BackupExport
+    }
+
+    private struct BackupFile: Identifiable {
+        let id = UUID()
+        let url: URL
+        let data: Data
+    }
+
+    /// The backup's file type: one of Yardlet's own, by its extension.
+    private static let backupType = UTType(filenameExtension: VaultBackup.fileExtension, conformingTo: .data) ?? .data
 
     private var codeItems: [VaultItem] { vault.items.filter(\.hasOneTimeCode) }
     private var isSearching: Bool { !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -67,9 +87,13 @@ struct VaultSettingsView: View {
                     }
                     Group {
                         Button(L10n.string("Import QR Code…"), action: importQRCodes)
-                        Button(L10n.string("Import CSV…"), action: importCSV)
+                        Button(L10n.string("Import File…"), action: importFile)
                         if !vault.items.isEmpty {
-                            Button(L10n.string("Export CSV…"), action: exportCSV)
+                            Menu(L10n.string("Export")) {
+                                Button(L10n.string("Encrypted Backup…"), action: exportBackup)
+                                Button(L10n.string("CSV for Another Password Manager…"), action: exportCSV)
+                            }
+                            .fixedSize()
                         }
                         Button {
                             editing = Editing(item: nil)
@@ -86,7 +110,7 @@ struct VaultSettingsView: View {
                 .alert(imported?.title ?? "",
                        isPresented: Binding(get: { imported != nil }, set: { if !$0 { imported = nil } }),
                        presenting: imported) { result in
-                    if result.count > 0 {
+                    if result.count > 0, !result.files.isEmpty {
                         // An export holds secrets in the clear.
                         Button(L10n.string("Move the file to the Trash")) {
                             for file in result.files { try? FileManager.default.trashItem(at: file, resultingItemURL: nil) }
@@ -95,6 +119,8 @@ struct VaultSettingsView: View {
                     } else {
                         Button(L10n.string("OK"), role: .cancel) {}
                     }
+                } message: { result in
+                    if let detail = result.detail { Text(detail) }
                 }
             }
             HStack(spacing: 8) {
@@ -125,6 +151,14 @@ struct VaultSettingsView: View {
             Button(L10n.string("OK"), role: .cancel) {}
         } message: {
             Text(passkeySites.joined(separator: "\n"))
+        }
+        .sheet(item: $backup) { shown in
+            VaultRecoveryKeySheet(export: shown.export) { backup = nil }
+        }
+        .sheet(item: $backupToOpen) { file in
+            VaultBackupKeySheet(fileName: file.url.lastPathComponent, onImport: { key in
+                restore(file, key: key)
+            }, onCancel: { backupToOpen = nil })
         }
         .sheet(item: $editing) { editing in
             VaultItemSheet(vault: vault, item: editing.item) { self.editing = nil }
@@ -328,13 +362,18 @@ struct VaultSettingsView: View {
         .parityCard()
     }
 
-    private func importCSV() {
+    /// Another manager's CSV export, Yardlet's own, or Yardlet's encrypted backup, which asks for its recovery key.
+    private func importFile() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.commaSeparatedText]
+        panel.allowedContentTypes = [.commaSeparatedText, Self.backupType]
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         panel.prompt = L10n.string("Import")
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        if let data = try? Data(contentsOf: url), VaultBackup.isBackup(data) {
+            backupToOpen = BackupFile(url: url, data: data)
+            return
+        }
         var encoding = String.Encoding.utf8
         let text = (try? String(contentsOf: url, usedEncoding: &encoding)) ?? ""
         let count = vault.importSignIns(VaultCSVImport.entries(text, suffixes: vault.suffixes))
@@ -367,6 +406,53 @@ struct VaultSettingsView: View {
                 : L10n.format("Exported %lld sign-ins.", Int64(export.count))
             imported = Imported(title: title, count: 0, files: [])
         }
+    }
+
+    /// Every item, and the addresses and cards unless the person leaves them out, to an encrypted backup (design
+    /// §8.1): Touch ID first, then where to save it, then its recovery key, shown once.
+    private func exportBackup() {
+        Task { @MainActor in
+            failure = nil
+            do {
+                guard let export = try await vault.exportBackup(choosingFile: { offersWallet in
+                    let panel = NSSavePanel()
+                    panel.allowedContentTypes = [Self.backupType]
+                    panel.nameFieldStringValue = L10n.string("Yardlet Passwords Backup") + "." + VaultBackup.fileExtension
+                    panel.message = L10n.string("The backup is encrypted with a recovery key Yardlet shows next. Passkeys are not included.")
+                    panel.prompt = L10n.string("Back Up")
+                    let wallet = NSButton(checkboxWithTitle: L10n.string("Include addresses and cards"), target: nil, action: nil)
+                    wallet.state = .on
+                    if offersWallet { panel.accessoryView = wallet }
+                    guard panel.runModal() == .OK, let url = panel.url else { return nil }
+                    return (url, offersWallet && wallet.state == .on)
+                }) else { return }
+                backup = ShownBackup(export: export)
+            } catch {
+                failure = error.localizedDescription
+            }
+        }
+    }
+
+    /// Opens a backup with the key typed and restores it; the words to show when the key does not open it.
+    private func restore(_ file: BackupFile, key: String) -> String? {
+        let contents: VaultBackup.Contents
+        do {
+            contents = try VaultBackup.open(file.data, recoveryKey: key)
+        } catch {
+            return error.localizedDescription
+        }
+        let restored = vault.restoreBackup(contents)
+        backupToOpen = nil
+        var title = L10n.format("Imported %lld items from the backup.", Int64(restored.count))
+        if restored.walletCount > 0 {
+            title += " " + L10n.format("%lld addresses and cards were added.", Int64(restored.walletCount))
+        }
+        let detail = restored.passkeys.isEmpty ? nil
+            : L10n.string("Passkeys stay on the Mac that made them. Make a new Yardlet passkey on each of these sites:")
+                + "\n" + restored.passkeys.joined(separator: "\n")
+        // The alert opens once the sheet has closed.
+        Task { @MainActor in imported = Imported(title: title, count: restored.count, files: [], detail: detail) }
+        return nil
     }
 
     /// Pictures of QR codes: an authenticator app's export (Google Authenticator's Transfer accounts, one

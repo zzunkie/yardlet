@@ -322,7 +322,7 @@ cookies across host restarts.
   then on.
 - **What the person does:** "Import from Another Browser…" opens one sheet from three places: the page's right-click
   menu in the browser panel, the panel's ⋯ menu under Viewport (Chrome keeps its import in its ⋮ menu and Safari in its
-  File menu, not only on a page), and Settings › Passwords beside "Import CSV…". The sheet starts on the Mac's default
+  File menu, not only on a page), and Settings › Passwords beside "Import File…". The sheet starts on the Mac's default
   browser. Choose the browser and profile → check
   the sites (from the panel, the current page's site is at the top, already checked; from Settings none is) → keep or
   clear "Import visit history" → Import → when sites are checked from a Chromium browser, allow in the macOS keychain
