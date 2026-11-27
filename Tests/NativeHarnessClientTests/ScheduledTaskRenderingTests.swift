@@ -5,7 +5,7 @@ import XCTest
 
 /// Scheduled tasks drawn for review into `.build/schedules-qa/`, light and dark: the sidebar entry,
 /// the list in the task list's place beside the chosen schedule with its run history (a run that went
-/// to another account among them, and its task's hover card), a schedule that runs on mail too, the empty
+/// to another account among them, and its task's hover card), the empty
 /// place, the editor for each trigger and for continuing a task, and the other-app import sheet
 /// before and after an import. No provider, runtime or app file is touched; the import sheet draws a
 /// listing made from made-up schedules.
