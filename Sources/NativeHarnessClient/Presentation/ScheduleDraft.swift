@@ -97,15 +97,17 @@ struct ScheduleDraft: Equatable {
         parentTaskID = destination.parentTaskID
     }
 
-    /// Add time: an hour after the latest time, at its minute, or the next hour after it the list does not
-    /// have yet.
+    /// The time Add time adds: an hour after the latest time, at its minute, or the next hour after it the list
+    /// does not have yet. Nil once there are `ScheduleTrigger.maxTimes`, which also turns Add time off.
+    var nextTime: ScheduleTime? {
+        guard times.count < ScheduleTrigger.maxTimes else { return nil }
+        guard let latest = times.max() else { return ScheduleTime(hour: 9, minute: 0) }
+        return (1...23).lazy.map { ScheduleTime(hour: (latest.hour + $0) % 24, minute: latest.minute) }
+            .first { !times.contains($0) }
+    }
+
     mutating func addTime() {
-        guard let latest = times.max() else {
-            times = [ScheduleTime(hour: 9, minute: 0)]
-            return
-        }
-        let later = (1...23).lazy.map { ScheduleTime(hour: (latest.hour + $0) % 24, minute: latest.minute) }
-        let next = later.first { !times.contains($0) } ?? latest
+        guard let next = nextTime else { return }
         times.append(next)
     }
 
@@ -143,7 +145,10 @@ struct ScheduleDraft: Equatable {
         switch kind {
         case .weekly where days.isEmpty, .interval where intervalDays.isEmpty:
             return L10n.string("Choose at least one day.")
-        case .interval where !ScheduleTrigger.intervalHours.contains(intervalHours):
+        case .daily where times.isEmpty, .weekly where times.isEmpty:
+            return L10n.string("Choose a time.")
+        case .daily where !ScheduleTrigger.timesAreValid(times), .weekly where !ScheduleTrigger.timesAreValid(times),
+             .interval where !ScheduleTrigger.intervalHours.contains(intervalHours):
             return L10n.string("Schedules run at most once an hour.")
         case .once where onceAt <= now:
             return L10n.string("Choose a time that has not passed.")

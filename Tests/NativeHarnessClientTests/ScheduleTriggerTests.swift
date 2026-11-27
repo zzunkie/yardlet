@@ -84,6 +84,11 @@ final class ScheduleTriggerTests: XCTestCase {
                        "One time is a list of one")
         XCTAssertFalse(ScheduleTrigger.daily([]).isValid)
         XCTAssertNil(ScheduleTrigger.daily([]).nextSlot(after: date(seoul, 2026, 10, 16), calendar: seoul))
+        let hourly = (0..<24).map { ScheduleTime(hour: $0, minute: 0) }
+        XCTAssertTrue(ScheduleTrigger.daily(hourly).isValid, "Every hour of the day")
+        XCTAssertFalse(ScheduleTrigger.daily(hourly + [ScheduleTime(hour: 23, minute: 30)]).isValid, "At most 24 times")
+        XCTAssertFalse(ScheduleTrigger.weekly(days: ScheduleWeekday.weekdays,
+                                              times: hourly + [ScheduleTime(hour: 23, minute: 30)]).isValid)
 
         // 2026-03-08 02:00 PST becomes 03:00 PDT: the skipped 02:30 runs right after the gap, then 03:30 as usual.
         let la = calendar("America/Los_Angeles")

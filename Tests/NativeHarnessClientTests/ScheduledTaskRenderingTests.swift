@@ -466,6 +466,16 @@ final class ScheduledTaskRenderingTests: XCTestCase {
         }
         XCTAssertEqual(saved?.trigger, .daily([ScheduleTime(hour: 10, minute: 0), ScheduleTime(hour: 11, minute: 0)]))
 
+        // At 24 times Add time adds no row.
+        var full = draft
+        full.times = (0..<24).map { ScheduleTime(hour: $0, minute: 0) }
+        let fullHost = WindowlessRender.Host(editor(full).frame(width: size.width, height: size.height), size: size)
+        defer { fullHost.close() }
+        fullHost.settle()
+        _ = fullHost.hosting.pressAccessibilityElement(labelled: L10n.string("Add time"))
+        fullHost.settle(passes: 3)
+        XCTAssertEqual(fullHost.accessibilityElements().filter { $0.label == L10n.string("Remove time") }.count, 24)
+
         var weekly = draft
         weekly.kind = .weekly
         weekly.startsInNewWorktree = true

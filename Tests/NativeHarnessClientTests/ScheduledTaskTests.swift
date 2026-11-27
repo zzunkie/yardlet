@@ -853,6 +853,18 @@ final class ScheduledTaskTests: XCTestCase {
         ]), "Saved earliest first")
         for _ in 0..<3 { adding.removeTime(at: 0) }
         XCTAssertEqual(adding.times, [ScheduleTime(hour: 1, minute: 30)], "The last time stays")
+
+        // A schedule holds at most 24 times; Add time stops there, and none or more is a problem to fix.
+        var full = ScheduleDraft(now: now, calendar: seoul, harness: .claudeCode)
+        full.prompt = "Check the queue."
+        for _ in 0..<30 { full.addTime() }
+        XCTAssertEqual(full.times.count, 24, "Add time stops at 24 times")
+        XCTAssertEqual(Set(full.times).count, 24, "Each of them once")
+        XCTAssertNil(full.problem(now: now, calendar: seoul))
+        full.times += [ScheduleTime(hour: 9, minute: 30)]
+        XCTAssertEqual(full.problem(now: now, calendar: seoul), L10n.string("Schedules run at most once an hour."))
+        full.times = []
+        XCTAssertEqual(full.problem(now: now, calendar: seoul), L10n.string("Choose a time."))
     }
 
     func testTheQuitConfirmationSaysSchedulesWaitForYardlet() {

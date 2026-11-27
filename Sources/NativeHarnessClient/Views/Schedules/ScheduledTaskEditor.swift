@@ -174,6 +174,7 @@ struct ScheduledTaskEditor: View {
                 }
                 .buttonStyle(.borderless)
                 .parityPointer()
+                .disabled(draft.nextTime == nil)
             }
         }
     }

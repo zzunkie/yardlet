@@ -73,6 +73,8 @@ enum ScheduleTrigger: Hashable, Sendable {
     case once(Date)
 
     static let intervalHours = 1...24
+    /// The most times of day a daily or weekly trigger holds: one for each hour.
+    static let maxTimes = 24
 
     /// Every day at one time.
     static func daily(_ time: ScheduleTime) -> ScheduleTrigger { .daily([time]) }
@@ -90,11 +92,16 @@ enum ScheduleTrigger: Hashable, Sendable {
     /// Whether the trigger can be saved: a time and a day to run on, and no more than once an hour.
     var isValid: Bool {
         switch self {
-        case let .daily(times): !times.isEmpty
-        case let .weekly(days, times): !days.isEmpty && !times.isEmpty
+        case let .daily(times): Self.timesAreValid(times)
+        case let .weekly(days, times): !days.isEmpty && Self.timesAreValid(times)
         case let .interval(hours, _, _): Self.intervalHours.contains(hours)
         case .once: true
         }
+    }
+
+    /// Whether a daily or weekly trigger's times can be saved: at least one, and at most `maxTimes`.
+    static func timesAreValid(_ times: [ScheduleTime]) -> Bool {
+        (1...maxTimes).contains(times.count)
     }
 }
 
