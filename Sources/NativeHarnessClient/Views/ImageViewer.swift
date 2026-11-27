@@ -686,12 +686,18 @@ private final class ImageViewerClipView: NSClipView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        // Control-click opens the context menu through `menuForEvent:`, as in the Codex app; the click
+        // itself must not close the viewer.
+        if event.modifierFlags.contains(.control) {
+            super.mouseDown(with: event)
+            return
+        }
         // The image takes its own clicks, so this one landed beside it.
         onClickBeside?()
     }
 }
 
-final class ImageViewerImageView: NSImageView {
+private final class ImageViewerImageView: NSImageView {
     var onDoubleClick: ((NSPoint) -> Void)?
 
     // The right-click menu's actions. `showInFinder` and `markUpImage` are nil when the image is not
@@ -707,6 +713,12 @@ final class ImageViewerImageView: NSImageView {
     override var acceptsFirstResponder: Bool { false }
 
     override func mouseDown(with event: NSEvent) {
+        // Control-click opens the context menu through `menuForEvent:` on the way up; the view's own
+        // double-click path must not swallow the event.
+        if event.modifierFlags.contains(.control) {
+            super.mouseDown(with: event)
+            return
+        }
         if event.clickCount == 2 { onDoubleClick?(convert(event.locationInWindow, from: nil)) }
     }
 
