@@ -252,15 +252,12 @@ struct TaskDetail: View {
                     diagnosticID: session.id.uuidString,
                     renderState: workspaceState.conversationRender
                 )
-                // A subtask asked to stop is stopping until it no longer runs.
-                .onChange(of: transcript) { _, transcript in
-                    guard !stoppingSubtaskIDs.isEmpty else { return }
-                    stoppingSubtaskIDs = stoppingSubtaskIDs.filter { id in
-                        transcript.railEntries.contains { entry in
-                            if case let .activity(activity, state) = entry.content { return activity.id == id && state == .running }
-                            return false
-                        }
-                    }
+                // A subtask asked to stop is stopping until it no longer runs. What is watched is the set of
+                // those that stopped, empty almost always, not the whole transcript: two publications in one
+                // frame would run the action twice in that frame.
+                .onChange(of: Self.stoppedSubtasks(stoppingSubtaskIDs, in: transcript)) { _, stopped in
+                    let remaining = stoppingSubtaskIDs.subtracting(stopped)
+                    if remaining != stoppingSubtaskIDs { stoppingSubtaskIDs = remaining }
                 }
             }
             .environment(\.transcriptWorkspaceURL, session.workspaceURL)
@@ -709,6 +706,16 @@ struct TaskDetail: View {
             isStopping: { stoppingSubtaskIDs.contains($0) },
             error: { subtaskErrors[$0] }
         )
+    }
+
+    /// The subtasks of `stopping`, those asked to stop, that the transcript no longer shows running.
+    static func stoppedSubtasks(_ stopping: Set<String>, in transcript: TranscriptTurns) -> Set<String> {
+        guard !stopping.isEmpty else { return [] }
+        var stopped = stopping
+        for entry in transcript.railEntries {
+            if case let .activity(activity, .running) = entry.content { stopped.remove(activity.id) }
+        }
+        return stopped
     }
 
     private func stopSubtask(_ activity: HarnessActivity) {

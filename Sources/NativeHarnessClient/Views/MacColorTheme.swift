@@ -12,6 +12,11 @@ extension ThemeRGB {
                 blue: CGFloat(value & 255) / 255, alpha: 1)
     }
     var color: Color { Color(nsColor: nsColor) }
+    /// `color` resolved, from its sRGB bytes without going through AppKit: the same components.
+    var resolved: Color.Resolved {
+        Color.Resolved(red: Float(CGFloat(value >> 16) / 255), green: Float(CGFloat(value >> 8 & 255) / 255),
+                       blue: Float(CGFloat(value & 255) / 255))
+    }
 }
 
 enum ThemeMode: String, CaseIterable {
@@ -156,6 +161,21 @@ extension EnvironmentValues {
 
 enum ThemeSurface: Hashable, CaseIterable, ShapeStyle {
     case canvas, sidebar, elevated, input, review
+
+    /// The native surface in `mode`: a fixed sRGB color, except the review surface, the system's text background.
+    func native(in mode: ThemeMode) -> NSColor {
+        switch (self, mode) {
+        case (.canvas, .dark): NSColor(srgbRed: 0.098, green: 0.100, blue: 0.108, alpha: 1) // #191A1B
+        case (.canvas, .light): NSColor(srgbRed: 0.988, green: 0.988, blue: 0.990, alpha: 1) // #FCFCFC
+        case (.sidebar, .dark): NSColor(srgbRed: 0.125, green: 0.129, blue: 0.141, alpha: 1) // #202124
+        case (.sidebar, .light): NSColor(srgbRed: 0.957, green: 0.961, blue: 0.969, alpha: 1) // #F4F5F7
+        case (.elevated, .dark): NSColor(srgbRed: 0.153, green: 0.157, blue: 0.173, alpha: 1) // #27282C
+        case (.input, .dark): NSColor(srgbRed: 0.173, green: 0.176, blue: 0.192, alpha: 1) // #2C2D31
+        case (.elevated, .light), (.input, .light): .white
+        case (.review, _): .textBackgroundColor
+        }
+    }
+
     var original: Color {
         switch self {
         case .canvas: ParityTheme.originalCanvas
@@ -167,18 +187,45 @@ enum ThemeSurface: Hashable, CaseIterable, ShapeStyle {
     }
 
     func resolve(in environment: EnvironmentValues) -> Color.Resolved {
-        let base = original.resolve(in: environment)
-        guard let background = environment.yardletColorTheme[ThemeMode(environment.colorScheme)].background else { return base }
-        let canvas = ParityTheme.originalCanvas.resolve(in: environment)
-        let chosen = background.color.resolve(in: environment)
-        // Keep the brightness steps between the native surfaces, including the raised composer.
+        ThemeResolution.current(in: environment)[self]
+    }
+
+    /// `resolve(in:)` worked out anew: only the review surface goes through AppKit.
+    func resolveUncached(in environment: EnvironmentValues) -> Color.Resolved {
+        let mode = ThemeMode(environment.colorScheme)
+        let base = self == .review ? original.resolve(in: environment) : Self.fixed[mode]![self]!
+        guard let background = environment.yardletColorTheme[mode].background else { return base }
+        return Self.shifted(base, onto: background, in: mode)
+    }
+
+    /// `surface`, a native surface in `mode`, on the theme's `background` instead of the native canvas: the
+    /// brightness steps between the native surfaces, including the raised composer, are kept.
+    static func shifted(_ surface: Color.Resolved, onto background: ThemeRGB, in mode: ThemeMode) -> Color.Resolved {
+        let canvas = fixed[mode]![.canvas]!
+        let chosen = background.resolved
         func shifted(_ channel: Float, _ surface: Float, _ original: Float) -> Float {
             max(0, min(1, channel + surface - original))
         }
-        return Color.Resolved(red: shifted(chosen.red, base.red, canvas.red),
-                              green: shifted(chosen.green, base.green, canvas.green),
-                              blue: shifted(chosen.blue, base.blue, canvas.blue))
+        return Color.Resolved(red: shifted(chosen.red, surface.red, canvas.red),
+                              green: shifted(chosen.green, surface.green, canvas.green),
+                              blue: shifted(chosen.blue, surface.blue, canvas.blue))
     }
+
+    /// A fixed color as SwiftUI resolves it, which does not depend on the environment.
+    static func resolvedFixed(_ color: NSColor) -> Color.Resolved {
+        Color(nsColor: color).resolve(in: EnvironmentValues())
+    }
+
+    /// The native surfaces other than review, resolved once for each mode as their adaptive colors resolve,
+    /// which can differ from the fixed color they pick in the last bit.
+    private static let fixed: [ThemeMode: [ThemeSurface: Color.Resolved]] = Dictionary(
+        uniqueKeysWithValues: ThemeMode.allCases.map { mode in
+            var environment = EnvironmentValues()
+            environment.colorScheme = mode.scheme
+            return (mode, Dictionary(uniqueKeysWithValues: allCases.filter { $0 != .review }.map {
+                ($0, $0.original.resolve(in: environment))
+            }))
+        })
 }
 
 /// A window, task hosting or reply hosting reapplies the same inherited text design and color.
