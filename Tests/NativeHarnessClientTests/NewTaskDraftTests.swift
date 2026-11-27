@@ -31,6 +31,15 @@ final class NewTaskDraftTests: XCTestCase {
         folderOnly.projectID = nil
         folderOnly.dropUnavailableProject(visible: [visible])
         XCTAssertEqual(folderOnly.workspaceURL, secondProject, "A folder inside a visible project is kept")
+        // A folder chosen from disk that is no project is kept too: its task starts there as a chat.
+        let outside = URL(filePath: "/tmp/new-task-draft-outside")
+        let chosenFolder = makeDraft()
+        chosenFolder.workspaceURL = outside
+        chosenFolder.projectID = nil
+        chosenFolder.dropUnavailableProject(visible: [visible])
+        XCTAssertEqual(chosenFolder.workspaceURL, outside)
+        XCTAssertNil(chosenFolder.projectID)
+        XCTAssertFalse(chosenFolder.startsChat, "It starts in that folder, not a new chat folder")
     }
 
     func testReturningHomeKeepsTextAndExplicitProjectAndHarnessSelections() {
@@ -214,7 +223,7 @@ final class NewTaskDraftTests: XCTestCase {
         // Switching to another project also clears the parent link.
         draft.startNested(under: parent, project: project, isChat: false)
         let other = Project(name: "Beta", primaryRoot: secondProject)
-        NewTaskDestination.select(other, draft: draft, onChooseWorkspace: { _ in })
+        NewTaskDestination.select(other, draft: draft)
         XCTAssertNil(draft.parentTask)
         XCTAssertEqual(draft.projectID, other.id)
     }

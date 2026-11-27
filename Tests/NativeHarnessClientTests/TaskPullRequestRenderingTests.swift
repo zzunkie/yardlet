@@ -163,7 +163,7 @@ final class TaskPullRequestRenderingTests: XCTestCase {
             draft.text = "Add the PR badge"
             draft.setStartsInNewWorktree(worktree, projectID: project.id)
             let view = NewTaskHome(recentSessions: [], projects: [project], draft: draft, runtimeSelections: runtimes,
-                                   onSelectSession: { _ in }, onChooseWorkspace: { _ in }, onShowHarnesses: {},
+                                   onSelectSession: { _ in }, onShowHarnesses: {},
                                    onCreate: { _ in nil }, activity: NewTaskHomeActivity(sessions: sessions),
                                    readFolderGit: { _ in NewTaskFolderGitState(isRepository: true, branch: "main",
                                                                                isDefaultBranch: true) })

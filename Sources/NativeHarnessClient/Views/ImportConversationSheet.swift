@@ -1,7 +1,8 @@
+import AppKit
 import SwiftUI
 
 /// Continues a conversation another app or CLI started, as a Yardlet task with the same session.
-/// The list is one project folder's history under the chosen account: Claude Code's, Codex's,
+/// The list is one folder's history under the chosen account, a project's or one chosen from disk: Claude Code's, Codex's,
 /// Antigravity CLI's, and that of each other ACP agent installed (`ACPSessionHistory`). Codex's can
 /// be searched; a conversation opened from a search shows its match.
 struct ImportConversationSheet: View {
@@ -12,6 +13,9 @@ struct ImportConversationSheet: View {
 
     @State private var harness: HarnessKind
     @State private var workspacePath: String
+    /// A folder no shown project holds, chosen from disk ("Choose folder…") or the draft's own: its
+    /// conversations come in as chats there (`ConversationImportPlacement`).
+    @State private var otherFolder: URL?
     @State private var accountID: String
     @State private var page = ImportableConversationPage(conversations: [])
     @State private var isLoading = false
@@ -36,10 +40,14 @@ struct ImportConversationSheet: View {
         let search = harness == .codex ? (initialSearchTerm ?? "").trimmingCharacters(in: .whitespacesAndNewlines) : ""
         // Everything the list is read for is set before the sheet first draws, so opening it reads
         // the provider once rather than again when the first values arrive.
-        let folders = Self.folders(in: projects)
+        let other = initialWorkspace.flatMap { url in
+            projects.contains { $0.contains(root: url) } ? nil : url.standardizedFileURL
+        }
+        let folders = Self.folders(in: projects, other: other)
         _harness = State(initialValue: harness)
+        _otherFolder = State(initialValue: other)
         _workspacePath = State(initialValue:
-            (initialWorkspace.flatMap { url in folders.first { $0.url == url } } ?? folders.first)?.id ?? "")
+            (initialWorkspace.flatMap { url in folders.first { Project.isSamePath($0.url, url) } } ?? folders.first)?.id ?? "")
         _accountID = State(initialValue: Self.accountID(for: harness, in: model.connections))
         _searchTerm = State(initialValue: search)
         _search = State(initialValue: search)
@@ -51,15 +59,44 @@ struct ImportConversationSheet: View {
         var id: String { url.standardizedFileURL.path(percentEncoded: false) }
     }
 
-    private var folders: [Folder] { Self.folders(in: projects) }
+    private var folders: [Folder] { Self.folders(in: projects, other: otherFolder) }
 
-    private static func folders(in projects: [Project]) -> [Folder] {
+    private static func folders(in projects: [Project], other: URL?) -> [Folder] {
         var seen = Set<String>()
-        return projects.flatMap { project in
+        return (projects.flatMap { project in
             project.roots.map { root in
                 Folder(name: project.roots.count > 1 ? "\(project.name) · \(root.lastPathComponent)" : project.name, url: root)
             }
-        }.filter { seen.insert($0.id).inserted }
+        } + (other.map { [Folder(name: $0.lastPathComponent, url: $0)] } ?? []))
+            .filter { seen.insert($0.id).inserted }
+    }
+
+    /// The folder menu's last item, which asks for a folder rather than naming one.
+    private static let chooseFolderTag = "choose-folder"
+
+    private var folderSelection: Binding<String> {
+        Binding(get: { workspacePath }, set: { id in
+            guard id == Self.chooseFolderTag else { workspacePath = id; return }
+            // After the menu closes, so the panel opens over the sheet rather than inside the menu's tracking.
+            DispatchQueue.main.async { chooseFolder() }
+        })
+    }
+
+    /// "Choose folder…": the folder the person picks becomes the list's, and the menu keeps it.
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        panel.prompt = L10n.string("Open")
+        guard panel.runModal() == .OK, let url = panel.url?.standardizedFileURL else { return }
+        if let known = folders.first(where: { Project.isSamePath($0.url, url) }) {
+            workspacePath = known.id
+            return
+        }
+        otherFolder = url
+        workspacePath = Folder(name: url.lastPathComponent, url: url).id
     }
 
     private var accounts: [AccountChoice] { Self.accounts(for: harness, in: model.connections) }
@@ -105,10 +142,17 @@ struct ImportConversationSheet: View {
             }
             .pickerStyle(.segmented).labelsHidden().frame(width: harnesses.count > 3 ? nil : 420)
             HStack(spacing: 12) {
-                Picker(L10n.string("Project"), selection: $workspacePath) {
-                    ForEach(folders) { Text($0.name).tag($0.id) }
+                // With no folder to list yet, a menu would select nothing: the button asks for one.
+                if folders.isEmpty {
+                    Button(L10n.string("Choose folder…"), action: chooseFolder)
+                } else {
+                    Picker(L10n.string("Project"), selection: folderSelection) {
+                        ForEach(folders) { Text($0.name).tag($0.id) }
+                        Divider()
+                        Text(L10n.string("Choose folder…")).tag(Self.chooseFolderTag)
+                    }
+                    .frame(maxWidth: 320)
                 }
-                .frame(maxWidth: 320)
                 Picker(L10n.string("Account"), selection: $accountID) {
                     ForEach(accounts) { Text($0.title).tag($0.id) }
                 }

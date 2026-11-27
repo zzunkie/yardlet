@@ -229,7 +229,7 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   or app started, as the Mac's File › Import conversation… does (docs/NATIVE_SESSION_STORAGE.md, "Importing
   conversations from other apps"): Claude Code, Codex, Antigravity CLI and each other ACP agent installed whose
   history Yardlet reads, side by side; a project's folder, or one chosen in Windows' folder dialog with the project
-  menu's Choose project…; and the account the harness's new tasks start on, with a menu when there are others.
+  menu's Choose folder…; and the account the harness's new tasks start on, with a menu when there are others.
   The list is the engine's (`AppModel.importableConversations`), each conversation with its title and when it was last
   active, and Load more history when the harness has more. Choosing one imports it, or finds the task that already
   continues it, closes the dialog, and the main window shows that task with its row chosen; the task reads the
@@ -488,7 +488,7 @@ with 1003; the phones are listed among the devices, and turning the remote off c
 still open and the room. The runner's phone reaches the listener from the same computer, which Windows' firewall
 does not filter, so what another device on the network needs is the firewall's permission above. The run then
 imports a conversation the stand-in saved before the app saw it: Import conversation, the stand-in, a folder chosen in
-Windows' folder dialog through Choose project…, the conversation the stand-in lists only for a folder written as
+Windows' folder dialog through Choose folder…, the conversation the stand-in lists only for a folder written as
 Windows writes it, and its turns, which the stand-in replays as it loads, drawn in the main window with the task's row
 chosen (`Windows/scripts/check-import.ps1`). It installs the Codex CLI with npm on the runner's profile, where Codex
 never ran, and opens the app with `YARDLET_QA_HARNESS_CHECK=codex`: the probe starts Codex's App Server in the

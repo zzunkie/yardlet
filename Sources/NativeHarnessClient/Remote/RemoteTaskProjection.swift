@@ -28,7 +28,8 @@ enum RemoteTaskProjection {
                                           canCreateTask: true))
             listed += group.sessions.map { ($0, id) }
         }
-        if !chats.isEmpty {
+        // With no project to start in, Chats is still where the phone's New task starts one.
+        if !chats.isEmpty || groups.isEmpty {
             projects.append(RemoteProject(id: chatsProjectID, name: L10n.string("Chats"), kind: .chats, canCreateTask: true))
             listed += chats.map { ($0, chatsProjectID) }
         }

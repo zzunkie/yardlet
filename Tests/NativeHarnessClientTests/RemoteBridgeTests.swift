@@ -1029,6 +1029,21 @@ final class RemoteBridgeTests: XCTestCase {
         await model.shutdown()
     }
 
+    /// With no project and no chat, the phone still lists Chats, so its New task has somewhere to start;
+    /// once a project is listed, an empty Chats is left out as before.
+    func testTheSnapshotOffersChatsWhenNoProjectIsListed() {
+        func snapshot(_ groups: [WorkspaceGroup]) -> RemoteSnapshot {
+            RemoteTaskProjection.snapshot(groups: groups, chats: [], pinnedIDs: [], nestingParents: [:], details: [:],
+                                          shellBusy: [])
+        }
+        let empty = snapshot([])
+        XCTAssertEqual(empty.projects.map(\.id), [RemoteTaskProjection.chatsProjectID])
+        XCTAssertEqual(empty.projects.first?.canCreateTask, true)
+        let website = Project(name: "Website", primaryRoot: URL(filePath: "/tmp/remote-bridge-website"))
+        XCTAssertEqual(snapshot([WorkspaceGroup(workspaceURL: website.primaryRoot, sessions: [], project: website)])
+            .projects.map(\.id), [website.id.uuidString])
+    }
+
     /// The phone nests by `parentTaskId` alone, so it carries the task the Mac's sidebar draws each task
     /// under: none for a task whose parent is in another list, pinned apart or in a split view, the
     /// nearest listed task past an archived parent, and below the sidebar's deepest level the task its

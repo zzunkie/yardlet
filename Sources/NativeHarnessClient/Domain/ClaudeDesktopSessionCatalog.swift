@@ -34,6 +34,9 @@ enum ClaudeDesktopSessionCatalog {
         /// (`forkedFromSessionId`), as the app's sidebar picks it. Nil once the person moved it to
         /// top level (`lineageDetached`).
         var startedFromDesktopSessionID: String? = nil
+        /// The other folders the session was given besides `cwd` (`additionalDirectories`), as the
+        /// app's "Add folder" adds them.
+        var additionalDirectories: [URL] = []
     }
 
     static func defaultRoot(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
@@ -71,7 +74,19 @@ enum ClaudeDesktopSessionCatalog {
             isArchived: (value["isArchived"] as? Bool) == true, lastActivityAt: activity,
             desktopSessionID: text(value["sessionId"]),
             startedFromDesktopSessionID: (value["lineageDetached"] as? Bool) == true ? nil
-                : text((value["spawnedFrom"] as? [String: Any])?["sessionId"]) ?? text(value["forkedFromSessionId"]))
+                : text((value["spawnedFrom"] as? [String: Any])?["sessionId"]) ?? text(value["forkedFromSessionId"]),
+            additionalDirectories: additionalDirectories(value["additionalDirectories"], besides: workspace))
+    }
+
+    /// The absolute folders of an `additionalDirectories` array, each once and without the session's
+    /// own folder. Anything else in the array is skipped.
+    private static func additionalDirectories(_ value: Any?, besides workspace: URL) -> [URL] {
+        var seen: Set<String> = [ProjectSidebarPresentation.folderKey(for: workspace)]
+        return ((value as? [Any]) ?? []).prefix(64).compactMap { item -> URL? in
+            guard let path = text(item), PathRules.current.isAbsolute(path) else { return nil }
+            let folder = URL(filePath: path, directoryHint: .isDirectory).standardizedFileURL
+            return seen.insert(ProjectSidebarPresentation.folderKey(for: folder)).inserted ? folder : nil
+        }
     }
 
     /// Each session's parent by provider session ID (child `cliSessionId` → parent `cliSessionId`),
@@ -201,6 +216,7 @@ enum ClaudeDesktopSessionCatalog {
             isOpenElsewhere: running.contains(session.cliSessionID))
         conversation.providerOptions = providerOptions(for: session)
         conversation.parentProviderSessionID = parents[session.cliSessionID]
+        conversation.additionalDirectories = session.additionalDirectories
         if let origin = session.originWorkspaceURL {
             conversation.workspaceOrigin = WorkspaceGitOrigin(
                 originWorkspacePath: ProjectSidebarPresentation.normalizedPath(for: origin),

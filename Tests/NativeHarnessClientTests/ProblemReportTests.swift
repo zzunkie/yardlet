@@ -116,7 +116,7 @@ import XCTest
         let homeSize = NSSize(width: 820, height: 330)
         for capture in try WindowlessRender.hostedInBothAppearances("start-failure-\(language)", in: directory, size: homeSize, content: { appearance in
             NewTaskHome(recentSessions: [], projects: [project], draft: draft, runtimeSelections: runtime,
-                onSelectSession: { _ in }, onChooseWorkspace: { _ in }, onShowHarnesses: {}, onCreate: { _ in nil })
+                onSelectSession: { _ in }, onShowHarnesses: {}, onCreate: { _ in nil })
                 .frame(width: homeSize.width, height: homeSize.height)
                 .background(ParityTheme.canvas).environment(\.colorScheme, appearance.colorScheme)
                 .environment(\.yardletReportProblem, report)

@@ -136,7 +136,7 @@ final class ComposerSessionControlsRenderingTests: XCTestCase {
                                                                 size: NSSize(width: 860, height: 280)) {
                 AnyView(NewTaskHome(recentSessions: [], projects: [project], draft: draft, runtimeSelections: runtimes,
                     connections: connections, models: NewTaskModelSource(catalogs: catalogs) { _, _, _, _ in },
-                    onSelectSession: { _ in }, onChooseWorkspace: { _ in }, onShowHarnesses: {},
+                    onSelectSession: { _ in }, onShowHarnesses: {},
                     onCreate: { _ in nil }))
             }
             let elements = try ComposerUnificationFixtures.render(scenario, into: directory)
@@ -163,7 +163,7 @@ final class ComposerSessionControlsRenderingTests: XCTestCase {
             AnyView(VStack(alignment: .leading, spacing: 12) {
                 NewTaskHome(recentSessions: [], projects: [project], draft: draft, runtimeSelections: runtimes,
                     connections: connections, models: NewTaskModelSource(catalogs: catalogs) { _, _, _, _ in },
-                    onSelectSession: { _ in }, onChooseWorkspace: { _ in }, onShowHarnesses: {},
+                    onSelectSession: { _ in }, onShowHarnesses: {},
                     onCreate: { _ in nil })
                     .frame(height: 280)
                 PermissionMenuPreview(slot: slot)
@@ -198,7 +198,7 @@ final class ComposerSessionControlsRenderingTests: XCTestCase {
             let host = WindowlessRender.Host(
                 NewTaskHome(recentSessions: [], projects: [project], draft: narrow, runtimeSelections: runtimes,
                     connections: connections, models: NewTaskModelSource(catalogs: catalogs) { _, _, _, _ in },
-                    onSelectSession: { _ in }, onChooseWorkspace: { _ in }, onShowHarnesses: {}, onCreate: { _ in nil })
+                    onSelectSession: { _ in }, onShowHarnesses: {}, onCreate: { _ in nil })
                     .frame(width: size.width, height: size.height)
                     .background(ParityTheme.canvas),
                 size: size, appearance: .light)

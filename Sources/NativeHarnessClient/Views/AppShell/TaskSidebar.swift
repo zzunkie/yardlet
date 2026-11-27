@@ -2453,7 +2453,7 @@ private struct SidebarChatDragTracking: ViewModifier {
 
 /// A task dragged over Projects or a project's row goes there when dropped, if `take` finds it listed and able
 /// to: on Projects a chat whose folder no listed project holds becomes a project of its own folder
-/// (`AppModel.makeProject(from:)`), and on a project's row a task moves to that project (`AppModel.moveTask`),
+/// once the person confirms it (`NewProjectSheet`), and on a project's row a task moves to that project (`AppModel.moveTask`),
 /// as the task's "Move to project" menu offers. The title or row shows it can take the task while it can.
 /// Without `perform` (a window that cannot) nothing is taken.
 private struct SidebarProjectDropModifier: ViewModifier {

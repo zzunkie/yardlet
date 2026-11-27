@@ -237,8 +237,7 @@ extension AppModel: SessionToolHandling, AgentToolApprovalHandling {
         let outside = matches().map(\.session).filter { sessionToolReadsPastProject($0, caller: caller) }
         if !outside.isEmpty, sessionToolAsksPerson(caller) {
             let names = outside.reduce(into: [String]()) { names, task in
-                let name = project(for: task)?.name
-                    ?? (projects.isChat(task) ? L10n.string("Chats") : task.workspaceURL.lastPathComponent)
+                let name = projects.displayName(for: task)
                 if !names.contains(name) { names.append(name) }
             }
             let allowed = await askPerson(title: L10n.string("List every project's tasks"),
@@ -1977,7 +1976,8 @@ extension AppModel: SessionToolHandling, AgentToolApprovalHandling {
             guard let folder = Self.sessionToolFolder(value) else {
                 return .failure(SessionToolError(message: "no folder at \(value)."))
             }
-            return .success((folder, projects.project(containingRoot: folder)))
+            // A hidden project stays hidden: its folder's child is a chat there (`AppModel.startsInChats`).
+            return .success((folder, projects.project(containingRoot: folder).flatMap { $0.isHidden ? nil : $0 }))
         }
         let matches = projects.projects.filter { !$0.isHidden && $0.name.caseInsensitiveCompare(value) == .orderedSame }
         guard matches.count == 1, let project = matches.first else {

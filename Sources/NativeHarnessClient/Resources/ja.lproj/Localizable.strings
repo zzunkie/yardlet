@@ -157,7 +157,7 @@
 "Review changes" = "変更をレビュー";
 "Chat" = "チャット";
 "Choose project" = "プロジェクトを選択";
-"Choose project…" = "プロジェクトを選択…";
+"Choose folder…" = "フォルダを選択…";
 "Choose runtime…" = "ランタイムを選択…";
 "Choose which local coding agents can own new tasks." = "新しいタスクを担当できるローカルのコーディングエージェントを選択してください。";
 "Choose…" = "選択…";

@@ -381,6 +381,11 @@ final class TaskSuggestionTests: XCTestCase {
         XCTAssertEqual(SuggestedTaskPlace.of(local, from: chat, in: [project], home: home),
                        SuggestedTaskPlace(folder: nil, project: nil, startsInNewWorktree: false), "A chat's starts a chat")
 
+        // A project the person hid is suggested to nobody: the task starts in its folder as a chat.
+        var hiddenProject = project
+        hiddenProject.isHidden = true
+        XCTAssertEqual(SuggestedTaskPlace.of(local, from: inRepository, in: [hiddenProject], isRepository: git, home: home),
+                       SuggestedTaskPlace(folder: repository, project: nil, startsInNewWorktree: false))
     }
 
     func testStartStartsTheTaskAtOnceUnderTheTaskThatSuggestedIt() async throws {

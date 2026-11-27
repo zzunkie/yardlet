@@ -207,7 +207,7 @@ final class ImportConversationPane {
         showPickers()
     }
 
-    /// Choose project…: a folder from Windows' own dialog, as New task's Choose project… chooses one.
+    /// Choose folder…: a folder from Windows' own dialog, as New task's Choose folder… chooses one.
     private func chooseFolder() {
         guard let chosen = WindowsFolderPicker.chooseFolder(window: windowHandle(), title: L10n.string("Choose project"))
         else { return }
@@ -247,7 +247,7 @@ final class ImportConversationPane {
         if !folders.isEmpty { projectMenu.items.append(MenuFlyoutSeparator()) }
         // The dialog runs modally until it closes, so it opens after the click returns: a click that UI Automation
         // invokes (a screen reader, a check) would otherwise wait inside that call for the dialog to close.
-        projectMenu.items.append(ComposerParts.menuItem(L10n.string("Choose project…")) { [weak self] in
+        projectMenu.items.append(ComposerParts.menuItem(L10n.string("Choose folder…")) { [weak self] in
             Task { @MainActor in self?.chooseFolder() }
         })
         pickers.children.append(picker(L10n.string("Project"), value: folder?.name ?? L10n.string("Choose project"),

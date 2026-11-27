@@ -56,8 +56,8 @@ final class RemoteRailTests: XCTestCase {
         else { XCTFail("A fix draft must follow confirmation") }
     }
 
-    /// Another Mac's Environment card names the task's place as the host's own rail does: its project, Chats for a
-    /// chat, whose folder (`new-chat-2`) is only where Yardlet keeps it, else its folder.
+    /// Another Mac's Environment card names the task's place as the host's own rail does: its project, else Chats,
+    /// whether its folder is one Yardlet keeps for a chat (`new-chat-2`) or one that is no project.
     func testTheRailNamesATasksPlaceAsTheHostsOwnRailDoes() throws {
         let home = URL(filePath: "/tmp/remote-rail-home", directoryHint: .isDirectory)
         let claude = URL(filePath: "/tmp/claude")
@@ -82,6 +82,6 @@ final class RemoteRailTests: XCTestCase {
             sessionTitleResolver: { _ in nil }, restoresIndexOnLaunch: false)
         defer { Task { await model.shutdown() } }
         XCTAssertEqual(sessions.map { AppModelRemoteBridge.railFacts(session: $0, model: model, git: nil).folderName },
-                       [L10n.string("Chats"), "Website", "remote-rail-folder"])
+                       [L10n.string("Chats"), "Website", L10n.string("Chats")])
     }
 }

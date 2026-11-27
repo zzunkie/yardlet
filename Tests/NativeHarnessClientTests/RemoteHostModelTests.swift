@@ -459,6 +459,7 @@ final class RemoteHostModelTests: XCTestCase {
         let host = AppModel(store: SessionStore(repository: InMemorySessionRepository()),
             runtimeSelections: RuntimeSelectionStore(defaults: defaults),
             registry: HarnessRegistry { _, _ in FakeHarnessAdapter(kind: .claudeCode) }, restoresIndexOnLaunch: false)
+        _ = host.projects.ensureProject(forRoot: root)
         let created = await host.createSession(harness: .claudeCode, workspaceURL: root,
             runtimeExecutableURL: URL(filePath: "/tmp/claude"), title: "Read the workspace")
         let session = try XCTUnwrap(created)

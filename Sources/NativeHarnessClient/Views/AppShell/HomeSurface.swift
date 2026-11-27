@@ -36,7 +36,6 @@ struct NewTaskHome: View {
     var models: NewTaskModelSource? = nil
     var accounts: NewTaskAccountSource? = nil
     let onSelectSession: (SessionRecord) -> Void
-    let onChooseWorkspace: (URL) -> Void
     let onShowHarnesses: () -> Void
     var onManageAccounts: ((HarnessKind) -> Void)? = nil
     var onAddAccount: ((HarnessKind) -> Void)? = nil
@@ -282,7 +281,7 @@ struct NewTaskHome: View {
                 kind: NewTaskHeroTitleKind(startsChat: draft.startsChat, workspaceURL: draft.workspaceURL,
                                             isInRepository: isInRepository, projectName: projectName),
                 onClearProject: draft.workspaceURL == nil ? nil : { draft.chooseChat() },
-                destination: { NewTaskDestinationMenuItems(draft: draft, projects: projects, onChooseWorkspace: onChooseWorkspace) }
+                destination: { NewTaskDestinationMenuItems(draft: draft, projects: projects) }
             )
             .accessibilitySortPriority(ParityAccessibility.mainContent + 1)
 
@@ -295,7 +294,7 @@ struct NewTaskHome: View {
 
             if draft.workspaceURL == nil {
                 NewTaskDestinationButton(title: destinationTitle, systemName: draft.startsChat ? "bubble.left" : "folder") {
-                    NewTaskDestinationMenuItems(draft: draft, projects: projects, onChooseWorkspace: onChooseWorkspace)
+                    NewTaskDestinationMenuItems(draft: draft, projects: projects)
                 }
                 .padding(.top, 8)
             }
@@ -307,7 +306,6 @@ struct NewTaskHome: View {
                 connections: connections,
                 models: models,
                 accounts: accounts,
-                onChooseWorkspace: onChooseWorkspace,
                 onShowHarnesses: onShowHarnesses,
                 onManageAccounts: onManageAccounts,
                 onAddAccount: onAddAccount,
@@ -380,7 +378,7 @@ struct NewTaskHome: View {
             // Where the new task starts: its composer comes back, as for a chat.
             replyTaskID = nil
             if let project = projects.first(where: { $0.id == id }) {
-                NewTaskDestination.select(project, draft: draft, onChooseWorkspace: onChooseWorkspace)
+                NewTaskDestination.select(project, draft: draft)
             }
             returnToComposer()
         case .chooseChat:
@@ -644,23 +642,23 @@ enum NewTaskDestination {
     }
 
     @MainActor
-    static func select(_ project: Project, draft: NewTaskDraft, onChooseWorkspace: (URL) -> Void) {
+    static func select(_ project: Project, draft: NewTaskDraft) {
         draft.parentTask = nil
         draft.projectID = project.id
         draft.workspaceURL = project.primaryRoot
-        onChooseWorkspace(project.primaryRoot)
     }
 
+    /// A folder chosen from disk is where the task starts and is made no project: the task joins
+    /// a shown project that holds the folder, else it is a chat there. Add project registers one.
     @MainActor
-    static func chooseFolder(draft: NewTaskDraft, projects: [Project], onChooseWorkspace: (URL) -> Void) {
+    static func chooseFolder(draft: NewTaskDraft, projects: [Project]) {
         guard let selectedURL = askForFolder() else { return }
         draft.parentTask = nil
         draft.workspaceURL = selectedURL
         draft.projectID = projects.first { $0.contains(root: selectedURL) }?.id
-        onChooseWorkspace(selectedURL)
     }
 
-    /// "Choose project…": the folder the person picks, or nil when they cancel.
+    /// "Choose folder…": the folder the person picks, or nil when they cancel.
     @MainActor
     static func askForFolder() -> URL? {
         let panel = NSOpenPanel()
@@ -673,16 +671,15 @@ enum NewTaskDestination {
     }
 }
 
-/// The project menu's items: Choose project…, Chat (no project), then the projects, the current
+/// The project menu's items: Choose folder…, Chat (no project), then the projects, the current
 /// one checked.
 struct NewTaskDestinationMenuItems: View {
     @Bindable var draft: NewTaskDraft
     let projects: [Project]
-    let onChooseWorkspace: (URL) -> Void
 
     var body: some View {
-        Button(L10n.string("Choose project…")) {
-            NewTaskDestination.chooseFolder(draft: draft, projects: projects, onChooseWorkspace: onChooseWorkspace)
+        Button(L10n.string("Choose folder…")) {
+            NewTaskDestination.chooseFolder(draft: draft, projects: projects)
         }
         Button {
             draft.chooseChat()
@@ -698,7 +695,7 @@ struct NewTaskDestinationMenuItems: View {
             let current = NewTaskDestination.project(for: draft, in: projects)?.id
             ForEach(projects) { project in
                 Button {
-                    NewTaskDestination.select(project, draft: draft, onChooseWorkspace: onChooseWorkspace)
+                    NewTaskDestination.select(project, draft: draft)
                 } label: {
                     if project.id == current {
                         Label(project.name, systemImage: "checkmark")
@@ -750,7 +747,6 @@ private struct NewTaskComposer: View {
     var connections: ProviderConnectionStore? = nil
     var models: NewTaskModelSource? = nil
     var accounts: NewTaskAccountSource? = nil
-    let onChooseWorkspace: (URL) -> Void
     let onShowHarnesses: () -> Void
     var onManageAccounts: ((HarnessKind) -> Void)? = nil
     var onAddAccount: ((HarnessKind) -> Void)? = nil
@@ -1004,7 +1000,6 @@ private struct NewTaskComposer: View {
                 ForEach(project.roots, id: \.self) { root in
                     Button {
                         draft.workspaceURL = root
-                        onChooseWorkspace(root)
                     } label: {
                         if draft.workspaceURL.map({ Project.isSamePath($0, root) }) == true {
                             Label(root.lastPathComponent, systemImage: "checkmark")

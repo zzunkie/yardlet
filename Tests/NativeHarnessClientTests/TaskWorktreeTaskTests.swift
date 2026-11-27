@@ -377,7 +377,7 @@ final class TaskWorktreeTaskTests: XCTestCase {
             }
             let view = VStack(spacing: 0) {
                 NewTaskHome(recentSessions: [], projects: [repoProject, plainProject], draft: draft,
-                            runtimeSelections: selections, onSelectSession: { _ in }, onChooseWorkspace: { _ in },
+                            runtimeSelections: selections, onSelectSession: { _ in },
                             onShowHarnesses: {}, onCreate: { _ in nil })
                     .frame(width: width, height: 300)
                 WorktreeNoticeBar(message: L10n.format("Kept the worktree of “%@” because it has uncommitted changes.",

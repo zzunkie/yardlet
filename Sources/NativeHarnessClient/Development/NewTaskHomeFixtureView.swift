@@ -83,7 +83,7 @@ struct NewTaskHomeFixtureView: View {
                 : [],
             draft: draft,
             runtimeSelections: runtimeSelections,
-            onSelectSession: { _ in }, onChooseWorkspace: { _ in },
+            onSelectSession: { _ in },
             onShowHarnesses: { showsHarnesses = true },
             onCreate: { submission in
                 submissions += 1

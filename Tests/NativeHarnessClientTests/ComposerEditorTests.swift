@@ -356,7 +356,7 @@ final class ComposerEditorTests: XCTestCase {
         let runtimes = RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false, loadsPersistedSelections: false)
         runtimes.select(URL(filePath: "/usr/bin/true"), for: .claudeCode)
         return NewTaskHome(recentSessions: [], projects: [project], draft: probe.draft, runtimeSelections: runtimes,
-            onSelectSession: { _ in }, onChooseWorkspace: { _ in }, onShowHarnesses: {},
+            onSelectSession: { _ in }, onShowHarnesses: {},
             onCreate: { probe.created.append($0.originalText); return nil },
             onReadCommands: { _, _, _ in probe.reads += 1; return [Self.review, Self.releaseNotes] })
     }

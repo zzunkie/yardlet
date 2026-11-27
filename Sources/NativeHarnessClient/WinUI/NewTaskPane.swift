@@ -504,11 +504,11 @@ final class NewTaskPane {
         heroTitle.fit(width: view.actualWidth)
     }
 
-    /// The project menu (`NewTaskDestinationMenuItems`): Choose project…, Chat (no project), then the projects, the
+    /// The project menu (`NewTaskDestinationMenuItems`): Choose folder…, Chat (no project), then the projects, the
     /// current one checked.
     private func destinationMenu() -> MenuFlyout {
         let menu = MenuFlyout()
-        menu.items.append(ComposerParts.menuItem(L10n.string("Choose project…")) { [weak self] in
+        menu.items.append(ComposerParts.menuItem(L10n.string("Choose folder…")) { [weak self] in
             // The dialog runs modally until it closes, so it opens after the menu's click returns.
             Task { @MainActor in self?.chooseFolder() }
         })
@@ -545,8 +545,8 @@ final class NewTaskPane {
         return menu
     }
 
-    /// Choose project…: a folder from Windows' own dialog, in the project that holds it or as a folder the task's
-    /// start makes a project, as the Mac's Choose project… does.
+    /// Choose folder…: a folder from Windows' own dialog, in the project that holds it or as a chat in that folder,
+    /// as the Mac's Choose folder… does.
     private func chooseFolder() {
         guard let folder = WindowsFolderPicker.chooseFolder(window: windowHandle(), title: L10n.string("Choose project"))
         else { return }

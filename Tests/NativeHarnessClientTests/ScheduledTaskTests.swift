@@ -109,6 +109,29 @@ final class ScheduledTaskTests: XCTestCase {
         await model.shutdown()
     }
 
+    /// A schedule of a project the person has hidden since still runs, as a chat in the project's
+    /// folder: the project stays hidden and the run's task is listed under Chats.
+    func testARunOfAHiddenProjectStartsAChatAndLeavesTheProjectHidden() async throws {
+        let clock = Clock(date(16, 20))
+        let model = makeModel(adapter: SuggestionRecordingAdapter(), clock: clock)
+        let project = model.projects.ensureProject(forRoot: try folder("issues"), name: "Issues")
+        model.scheduledTasks.create(dailySchedule(project: project))
+        model.projects.hide(project.id)
+
+        clock.now = date(17, 9, 0, 30)
+        await model.scheduledTasks.checkDue()
+
+        let run = try XCTUnwrap(model.scheduledTasks.schedules.first?.state.runs.first)
+        XCTAssertEqual(run.outcome, .started)
+        let task = try XCTUnwrap(model.store.sessions.first { $0.id == run.taskID })
+        XCTAssertNil(task.projectID)
+        XCTAssertTrue(task.isMovedToChats)
+        XCTAssertTrue(Project.isSamePath(task.workspaceURL, project.primaryRoot))
+        XCTAssertEqual(model.projects.project(id: project.id)?.isHidden, true)
+        XCTAssertEqual(model.projects.chats(sessions: model.store.sessions).map(\.id), [task.id])
+        await model.shutdown()
+    }
+
     func testARunWhoseTaskDidNotStartNamesTheTaskAndWhy() async throws {
         let reason = "OpenCode could not start: the stand-in refused."
         let clock = Clock(date(16, 20))

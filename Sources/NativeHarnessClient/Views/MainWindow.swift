@@ -29,10 +29,8 @@ struct TaskObservationScope<Content: View>: View {
     }
 }
 
-private struct ProjectEditPresentation: Identifiable {
+private struct ProjectEditID: Identifiable {
     let id: UUID
-    /// A project just made of a chat: its name opens selected (`ProjectEditSheet.focusesName`).
-    var focusesName = false
 }
 
 struct MainWindow: View {
@@ -89,8 +87,8 @@ struct MainWindow: View {
     @State private var sessionToRename: SessionRecord?
     @State private var sessionToDelete: SessionRecord?
     @State private var projectToEdit: UUID?
-    /// Whether the project being edited was just made of a chat, so its name opens selected.
-    @State private var isNamingNewProject = false
+    /// A chat about to be made a project, asked about first (`NewProjectSheet`).
+    @State private var newProjectRequest: NewProjectRequest?
     @State private var projectToArchive: WorkspaceGroup?
     @State private var projectToRemove: WorkspaceGroup?
     @State private var renameTitle = ""
@@ -426,7 +424,7 @@ struct MainWindow: View {
             || connectorAddStart != nil
             || isPresentingImport || isPresentingOtherAppImport
             || harnessSettingsSession != nil
-            || projectToEdit != nil || hasManagementAlert
+            || projectToEdit != nil || newProjectRequest != nil || hasManagementAlert
             || schedulesWindow.hasModal
     }
 
@@ -689,7 +687,6 @@ struct MainWindow: View {
             connection: { model.suggestedTaskConnection(harness: $0, parent: parent) },
             isRepository: SuggestedTaskPlace.isInRepository,
             asksForWorktree: suggestion.startsInNewWorktree,
-            chooseWorkspace: { projects.ensureProject(forRoot: $0) },
             save: { model.taskSuggestions.setChoice($0, of: suggestion.id, in: source.id) },
             start: { choice in
                 model.taskSuggestions.setChoice(choice, of: suggestion.id, in: source.id)
@@ -1211,19 +1208,21 @@ struct MainWindow: View {
         }
     }
 
-    /// Makes a chat a project of its own folder and moves it there (`AppModel.makeProject(from:)`).
-    /// The shown chat stays in sight, as a move keeps it, and the project opens for editing with its
-    /// name selected: Return keeps the chat's title, typing replaces it.
+    /// Asks before making a chat a project of its own folder (`NewProjectSheet`): nothing is made
+    /// until the person confirms its name and folders.
     private func makeProject(from session: SessionRecord) {
+        rememberShellFocus()
+        newProjectRequest = model.newProjectRequest(for: session)
+    }
+
+    /// Makes the project the New project sheet confirmed and moves the chat there
+    /// (`AppModel.makeProject(from:name:additionalRoots:)`). The shown chat stays in sight, as a move keeps it.
+    private func createProject(from session: SessionRecord, name: String, additionalRoots: [URL]) {
         Task {
-            guard let project = await model.makeProject(from: session) else { return }
-            if model.store.selectedSessionID == session.id {
-                sidebarDisclosure.expand(SidebarProjection.disclosureKey(
-                    for: WorkspaceGroup(workspaceURL: project.primaryRoot, sessions: [], project: project)))
-            }
-            rememberShellFocus()
-            isNamingNewProject = true
-            projectToEdit = project.id
+            guard let project = await model.makeProject(from: session, name: name, additionalRoots: additionalRoots),
+                  model.store.selectedSessionID == session.id else { return }
+            sidebarDisclosure.expand(SidebarProjection.disclosureKey(
+                for: WorkspaceGroup(workspaceURL: project.primaryRoot, sessions: [], project: project)))
         }
     }
 
@@ -1932,7 +1931,6 @@ struct MainWindow: View {
                 preview: { model.newTaskAccountPreview(harness: $0, model: $1) },
                 pick: { await model.newTaskAccount(harness: $0, model: $1) }),
             onSelectSession: { activateTask($0.id) },
-            onChooseWorkspace: { projects.ensureProject(forRoot: $0) },
             onShowHarnesses: presentHarnesses,
             onManageAccounts: { presentAccounts($0) },
             onAddAccount: { presentAccounts($0, add: true) },
@@ -2133,7 +2131,7 @@ struct MainWindow: View {
                         onSelectSection: selectSection,
                         onActivate: activateRow,
                         onNewTaskInProject: { workspaceURL in
-                            let project = projects.ensureProject(forRoot: workspaceURL)
+                            guard let project = projects.project(containingRoot: workspaceURL) else { return }
                             newTaskDraft.parentTask = nil
                             newTaskDraft.projectID = project.id
                             newTaskDraft.workspaceURL = project.primaryRoot
@@ -2159,8 +2157,10 @@ struct MainWindow: View {
                         onMakeProject: makeProject,
                         onNest: { task, parent in Task { await model.nest(task, under: parent) } },
                         onNewNestedTask: { session in
+                            // A chat in a folder of the person's own nests a task in that folder.
                             let isChat = projects.isChat(session)
-                            let project = isChat ? nil : model.project(for: session)
+                                && (session.isMovedToChats || projects.isChatFolder(session.workspaceURL))
+                            let project = model.project(for: session)
                             newTaskDraft.startNested(under: session, project: project, isChat: isChat)
                             showNewTask()
                         },
@@ -2813,9 +2813,6 @@ struct MainWindow: View {
             if isEmpty { searchMemo.clear() }
         }
         .onDisappear { model.setShowsTasks(false, inWindow: windowID) }
-        .onChange(of: model.store.workspaceGroups.map(\.workspaceURL), initial: true) { _, _ in
-            projects.ensureProjects(forTasks: model.store.sessions)
-        }
         // A notification led to a task archived since: the archived list is where it is restored.
         .onChange(of: model.archivedTasksRevealRequest) { _, _ in showArchivedTasks() }
         // ⌘, in another Mac's window shows this Mac's Settings here, in the first main window to see it.
@@ -2841,11 +2838,15 @@ struct MainWindow: View {
         shellPresentedContent(sidebarLists)
         .environment(\.renamingTaskIDs, model.renamingFromConversationIDs)
         .sheet(item: Binding(
-            get: { projectToEdit.map { ProjectEditPresentation(id: $0, focusesName: isNamingNewProject) } },
-            set: { if $0 == nil { projectToEdit = nil; isNamingNewProject = false } }
+            get: { projectToEdit.map(ProjectEditID.init) },
+            set: { if $0 == nil { projectToEdit = nil } }
         ), onDismiss: finishShellModal) { presentation in
-            ProjectEditSheet(projects: projects, projectID: presentation.id, instructions: model.yardletInstructions,
-                             focusesName: presentation.focusesName)
+            ProjectEditSheet(projects: projects, projectID: presentation.id, instructions: model.yardletInstructions)
+        }
+        .sheet(item: $newProjectRequest, onDismiss: finishShellModal) { request in
+            NewProjectSheet(request: request) { name, roots in
+                createProject(from: request.session, name: name, additionalRoots: roots)
+            }
         }
         .sheet(item: $harnessSettingsSession, onDismiss: restoreTaskModalFocus) { session in
             let actions = HarnessSettingsActions(model: model, session: session,

@@ -229,6 +229,8 @@ struct SuggestedTaskPlace: Equatable {
         isRepository: (URL) -> Bool = SuggestedTaskPlace.isInRepository,
         home: URL = FileManager.default.homeDirectoryForCurrentUser
     ) -> SuggestedTaskPlace {
+        // A project the person hid is no place to suggest: a task in its folder starts as a chat there.
+        let projects = projects.filter { !$0.isHidden }
         // A chat the agent asked for (`chat`), as New Task's "No project".
         if suggestion.startsAsChat {
             return SuggestedTaskPlace(folder: nil, project: nil, startsInNewWorktree: false)
@@ -240,7 +242,10 @@ struct SuggestedTaskPlace: Equatable {
             return SuggestedTaskPlace(folder: folder, project: ProjectProjection.project(containingRoot: folder, in: projects),
                                       startsInNewWorktree: isRepository(folder))
         }
-        if ProjectProjection.isChat(source, in: projects, home: home) {
+        // A chat in a chat's folder, or one the person moved to Chats, suggests a chat; a chat in a
+        // folder of the person's own suggests a task in that folder, a chat there too.
+        if ProjectProjection.isChat(source, in: projects),
+           source.isMovedToChats || ChatWorkspaces.isChat(source.workspaceURL, home: home) {
             return SuggestedTaskPlace(folder: nil, project: nil, startsInNewWorktree: false)
         }
         let origin = source.originWorkspaceURL

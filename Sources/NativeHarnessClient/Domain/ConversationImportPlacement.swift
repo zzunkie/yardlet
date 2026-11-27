@@ -3,23 +3,29 @@ import Foundation
 /// Where a conversation imported from another app goes in Yardlet. The one decision every import
 /// path asks, kept here so the sidebar's Chats can take it over in one place.
 enum ConversationImportPlacement: Equatable, Sendable {
-    /// A chat's folder (`ChatWorkspaces`): the task belongs to no project.
+    /// No project the person registered holds the conversation's folder: the task is a chat.
     case chat
-    /// The project of this folder: a worktree's original repository, else the conversation's own
-    /// folder, or the nearest of `projectRoots` that holds either inside it. The task's cwd stays
-    /// the conversation's folder either way.
+    /// The project of this root, one of `projectRoots`: it is the folder the conversation stands
+    /// for (a worktree's original repository, else its own folder), or the nearest one that holds
+    /// that folder inside it. The task's cwd stays the conversation's folder either way.
     case project(root: URL)
 
-    /// - Parameter projectRoots: folders that are or will be projects (the person's projects and the
-    ///   other conversations being imported), so a conversation in a folder inside one joins it.
+    /// - Parameter projectRoots: the roots of the projects the person registered and shows. A
+    ///   folder that is none of them, and inside none, is not made a project by an import.
     static func of(
         _ conversation: ImportableConversation,
         home: URL = FileManager.default.homeDirectoryForCurrentUser,
         projectRoots: [URL] = []
     ) -> ConversationImportPlacement {
-        if ChatWorkspaces.isChat(conversation.workspaceURL, home: home) { return .chat }
         let folder = folder(of: conversation)
-        return .project(root: nearestEnclosing(folder, in: projectRoots, home: home) ?? folder)
+        for candidate in [folder, conversation.workspaceURL] {
+            if let root = projectRoots.first(where: { Project.isSamePath($0, candidate) }) {
+                return .project(root: root)
+            }
+        }
+        // A chat's folder that is no project of its own stays a chat, wherever it is.
+        if ChatWorkspaces.isChat(conversation.workspaceURL, home: home) { return .chat }
+        return nearestEnclosing(folder, in: projectRoots, home: home).map { .project(root: $0) } ?? .chat
     }
 
     /// The folder a conversation stands for: its worktree's repository, else its own.
@@ -44,7 +50,7 @@ enum ConversationImportPlacement: Equatable, Sendable {
 
 /// The group an import list shows a conversation under: Chats, or a project by its name.
 struct ConversationImportDestination: Hashable, Sendable {
-    /// The project's ID, the folder that would become a project, or `chats`.
+    /// The project's ID, or `chats`.
     let id: String
     let name: String
 

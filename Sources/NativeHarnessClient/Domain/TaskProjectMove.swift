@@ -15,7 +15,8 @@ enum TaskProjectMove {
         /// project holds stays in Chats because the move records it (`SessionRecord.isMovedToChats`),
         /// and keeps working in its folder.
         var removableFrom: Project?
-        /// Whether the task can become a project of its own folder (`AppModel.makeProject(from:)`):
+        /// Whether the task can become a project of its own folder, once the person confirms it
+        /// (`AppModel.makeProject(from:name:additionalRoots:)`):
         /// a task in no project, as a chat is, whose folder no listed project holds. A hidden project
         /// of the folder, which Remove project leaves, is shown again with the task in it. A task moved
         /// to Chats from its project's folder goes back with a move to that project instead.
@@ -119,5 +120,30 @@ enum TaskProjectMove {
         var copy = session
         copy.assignProject(project?.id, additionalRoots: additionalRoots(for: session, in: project))
         return copy
+    }
+}
+
+/// What the New project sheet starts with for a chat made a project of its own folder
+/// (`AppModel.newProjectRequest(for:)`): the name, the primary folder and the other folders. For a
+/// hidden project of the chat's folder, which is shown again, they are that project's own.
+struct NewProjectRequest: Identifiable, Equatable {
+    let session: SessionRecord
+    let name: String
+    let primaryRoot: URL
+    let otherRoots: [URL]
+
+    init(session: SessionRecord, name: String, primaryRoot: URL? = nil, otherRoots: [URL] = []) {
+        self.session = session
+        self.name = name
+        self.primaryRoot = Project.canonical(primaryRoot ?? session.workspaceURL)
+        self.otherRoots = otherRoots.map(Project.canonical)
+    }
+
+    var id: UUID { session.id }
+
+    /// Whether the sheet can take `root` out: not the primary folder, nor the chat's own, which the
+    /// project is made of.
+    func canRemove(_ root: URL) -> Bool {
+        !Project.isSamePath(root, primaryRoot) && !Project.isSamePath(root, session.workspaceURL)
     }
 }

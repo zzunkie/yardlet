@@ -945,7 +945,7 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
             accounts: { connections.choices(for: [$0]) }, runtimeURL: { runtimes.selectedURL(for: $0) },
             defaults: { model.suggestedTaskOptions(harness: $0, parent: start.parent) },
             connection: { model.suggestedTaskConnection(harness: $0, parent: start.parent) },
-            isRepository: SuggestedTaskPlace.isInRepository, chooseWorkspace: { _ in nil }, save: { _ in }, start: { _ in })
+            isRepository: SuggestedTaskPlace.isInRepository, save: { _ in }, start: { _ in })
     }
 
     /// The local timeline of a Claude Code task waiting on the person, whose cards can answer as the window's do.

@@ -25,7 +25,7 @@ final class NewTaskDraft {
     /// The folder the task starts in. Choosing a folder or a project is choosing not to start a chat.
     var workspaceURL: URL? { didSet { if workspaceURL != oldValue { onChange?() } } }
     /// The project whose primary folder seeds `workspaceURL`. A folder chosen directly leaves
-    /// this nil, and the task still joins the project that owns that folder.
+    /// this nil, and the task joins the project that owns that folder, if one does.
     var projectID: UUID? { didSet { if projectID != oldValue { onChange?() } } }
     /// The task starts as a chat with no project, in a new folder made for it when it starts
     /// (`ChatWorkspaces`), as the Codex app starts a chat: whenever no folder is chosen once the
@@ -222,11 +222,10 @@ final class NewTaskDraft {
     }
 
     /// A draft left in a project that has since been hidden or removed starts over in the first
-    /// visible project instead of offering a destination the sidebar no longer shows.
+    /// visible project instead of offering a destination the sidebar no longer shows. A folder
+    /// chosen on its own (no `projectID`) is no project's and stays: its task starts there as a chat.
     func dropUnavailableProject(visible projects: [Project]) {
-        guard let workspaceURL else { return }
-        if let projectID, projects.contains(where: { $0.id == projectID }) { return }
-        if projectID == nil, projects.contains(where: { $0.contains(root: workspaceURL) }) { return }
+        guard workspaceURL != nil, let projectID, !projects.contains(where: { $0.id == projectID }) else { return }
         self.workspaceURL = projects.first?.primaryRoot
         self.projectID = projects.first?.id
     }
