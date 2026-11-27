@@ -733,9 +733,14 @@ enum VaultPageScripts {
           .concat(Array.from(e.labels || []))
           .map(p => (p instanceof Element ? p.textContent : p) || '').join(' ')
           .replace(/(\p{Ll})(\p{Lu})/gu, '$1 $2').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ') + ' ';
-        const looksLikeUsername = e => e.type === 'email'
+        // A non-text input (`<input type="checkbox" autocomplete="username">` and the like) is never a sign-in field,
+        // so the shared helper guards every branch with `signInTextTypes.includes(e.type)` — including the autocomplete
+        // and `type === 'email'` branches, which would otherwise let a non-text input through.
+        const looksLikeUsername = e => signInTextTypes.includes(e.type) && (
+          e.type === 'email'
           || autocompleteOf(e).some(t => t === 'username' || t === 'email')
-          || (signInTextTypes.includes(e.type) && usernameWords.test(signInFieldWords(e)));
+          || usernameWords.test(signInFieldWords(e))
+        );
         """#
 
     /// What the person's fill from the key button would put into the page (design §16), by its target field
@@ -1042,31 +1047,50 @@ enum VaultPageScripts {
         }
         // Fallback for Chromium builds whose `Page.getFrameTree` omits remote frames from `childFrames`: reads the
         // iframe element that owns the OOPIF on the parent session (`DOM.getFrameOwner`), then walks the parent's DOM
-        // from `DOM.getDocument` down to that element and returns the enclosing document node's `frameId`. No nesting
-        // level is skipped, so an iframe in a deeper local frame still resolves to that local frame, not to the main.
+        // from `DOM.getDocument` down to that element and returns the enclosing document's frame id. No nesting level
+        // is skipped — an iframe in a deeper local frame resolves to that local frame, not to the main — and no
+        // "unknown nesting falls back to the containing document" step: when the engine omits a nested frame's id,
+        // the branch resolves to `nil` and the OOPIF is dropped (fail-closed), so a cross-site middle hop cannot be
+        // skipped over by mistake. `pierce: true` is what makes Chromium include `contentDocument` and `shadowRoots`
+        // in the returned tree.
         func parentFrameIDByDOM(of frameID: String, parentSession: String?) async -> String? {
             let wait = min(timeout, .seconds(5))
             guard let owner = try? await cdp.send("DOM.getFrameOwner", ["frameId": .string(frameID)],
                                                   session: parentSession, timeout: wait),
                   let backendNodeID = owner["backendNodeId"]?.integerValue,
                   let document = try? await cdp.send("DOM.getDocument",
-                                                     ["depth": .integer(-1), "pierce": .bool(false)],
+                                                     ["depth": .integer(-1), "pierce": .bool(true)],
                                                      session: parentSession, timeout: wait),
                   let root = document["root"] else { return nil }
-            // The root document's frameId is this session's own root. Each nested `contentDocument` names its own
-            // frame id; a node under that document belongs to that frame.
+            // Chromium's `DOM.Node` carries `frameId` on the owning `<iframe>` element (naming the subframe it hosts),
+            // not on the `#document` node, so `contentDoc["frameId"]` is usually absent; the iframe element's own
+            // `frameId` is the only reliable source. Passing `nil` down keeps a frame whose id cannot be read out of
+            // the fillable list, which is what makes this fail-closed.
             func search(_ node: JSONValue, docFrameID: String?) -> String? {
                 if node["backendNodeId"]?.integerValue == backendNodeID { return docFrameID }
                 for child in node["children"]?.arrayValue ?? [] {
                     if let found = search(child, docFrameID: docFrameID) { return found }
                 }
+                // Open shadow roots that `pierce: true` reveals: a node in a shadow tree belongs to the same frame as
+                // its host, so the same `docFrameID` carries down.
+                for root in node["shadowRoots"]?.arrayValue ?? [] {
+                    if let found = search(root, docFrameID: docFrameID) { return found }
+                }
                 if let contentDoc = node["contentDocument"] {
-                    let nested = contentDoc["frameId"]?.stringValue ?? docFrameID
+                    // The iframe element names its subframe's id; fall back to the document node's `frameId` for
+                    // engines that place it there instead, but NEVER to the containing document's id: a nested
+                    // frame whose id cannot be read stays `nil` so the OOPIF is dropped.
+                    let nested = node["frameId"]?.stringValue ?? contentDoc["frameId"]?.stringValue
                     if let found = search(contentDoc, docFrameID: nested) { return found }
                 }
                 return nil
             }
-            return search(root, docFrameID: root["frameId"]?.stringValue)
+            // The root `#document` node has no `frameId` in Chromium's CDP output, so seed from the parent session's
+            // frameTree (`attached.parent`'s own root frame id); every nested frame reads its id from the owning
+            // iframe element along the way.
+            let rootFrameID = trees[parentSession]?["frameTree"]?["frame"]?["id"]?.stringValue
+                ?? root["frameId"]?.stringValue
+            return search(root, docFrameID: rootFrameID)
         }
         var frames: [VaultFrame] = []
         for session in order {

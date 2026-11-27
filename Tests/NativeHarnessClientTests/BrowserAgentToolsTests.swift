@@ -1975,12 +1975,19 @@ final class BrowserAgentToolsTests: XCTestCase {
 
     /// An OOPIF whose parent session's `childFrames` omits it (one Chromium build leaves `RemoteFrame` entries out of
     /// `Page.getFrameTree`) is still linked through `DOM.getFrameOwner` + `DOM.getDocument`: the parent's DOM tree is
-    /// walked from the owning iframe element up to the enclosing document node, and that document's `frameId` is the
-    /// OOPIF's parent frame. A nested chain `A → B(s1) → C(s2)` with a cross-site middle hop `B` is still refused:
-    /// `fillFrames` reads every origin in the chain. When neither the parent tree nor `DOM.getFrameOwner` names a parent
-    /// the frame is dropped from `fillFrames`, so nothing is placed into it (fail-closed).
+    /// walked from the owning iframe element up to the enclosing document, and the document's frame id (seeded from
+    /// the parent session's `frameTree`, since `#document` carries no `frameId` in Chromium's CDP output) is the
+    /// OOPIF's parent frame. Chromium puts `frameId` on the owning `<iframe>` element, not on `#document`, so the
+    /// fallback reads it from the element; `pierce: true` is the only way Chromium reveals `contentDocument` and
+    /// `shadowRoots` under `DOM.getDocument`. A nested chain `A → B(local, foreign.test) → C(s2, idmsa.example.com)`
+    /// with a cross-site middle hop `B` is still refused: `fillFrames` reads every origin in the chain. When neither
+    /// the parent tree nor `DOM.getFrameOwner` names a parent the frame is dropped (fail-closed), and when a nested
+    /// local `<iframe>` has no `frameId` of its own the OOPIF inside it is also dropped — the fallback never promotes
+    /// a nested frame to its containing document's id, because that would let a cross-site middle hop be skipped.
     func testOOPIFParentIsFoundByDOMWhenTheParentTreeOmitsIt() async throws {
         // One-hop OOPIF: the parent tree does NOT list it; `DOM.getFrameOwner` + `DOM.getDocument` resolves the chain.
+        // The parent session's frameTree seeds the root document's frame id (`main`), the iframe element carries
+        // the OOPIF's own frame id (`signin`), and the root `#document` node carries none — matching Chromium.
         cdp.frameSessions = [BrowserFrameSession(id: "s1", frameID: "signin", parent: nil)]
         cdp.responders["Page.getFrameTree"] = { _ in
             .object(["frameTree": .object([
@@ -1997,12 +2004,14 @@ final class BrowserAgentToolsTests: XCTestCase {
                 ? .object(["backendNodeId": .integer(42)])
                 : .object(["backendNodeId": .integer(0)])
         }
-        cdp.responders["DOM.getDocument"] = { _ in
-            // root doc = main; its iframe node (backendNodeId 42) lives directly in that document.
-            .object(["root": .object([
-                "nodeType": .integer(9), "backendNodeId": .integer(1), "frameId": .string("main"),
+        var documentCalls: [[String: JSONValue]] = []
+        cdp.responders["DOM.getDocument"] = { params in
+            documentCalls.append(params)
+            return .object(["root": .object([
+                "nodeType": .integer(9), "backendNodeId": .integer(1), // no frameId on #document (Chromium)
                 "children": .array([.object([
-                    "nodeType": .integer(1), "backendNodeId": .integer(42), "frameId": .string("signin")
+                    "nodeType": .integer(1), "nodeName": .string("IFRAME"),
+                    "backendNodeId": .integer(42), "frameId": .string("signin")
                 ])])
             ])])
         }
@@ -2017,11 +2026,13 @@ final class BrowserAgentToolsTests: XCTestCase {
         let frames = try await VaultPageScripts.frames(cdp, timeout: .seconds(2))
         XCTAssertEqual(frames.first(where: { $0.id == "signin" })?.parentID, "main",
                        "DOM.getFrameOwner + DOM.getDocument resolves the parent when the parent tree omits the OOPIF")
+        XCTAssertTrue(documentCalls.allSatisfy { $0["pierce"] == .bool(true) },
+                      "DOM.getDocument is called with pierce: true so contentDocument and shadowRoots are included")
 
-        // A nested OOPIF under a local iframe on another registrable domain: `A(example.com) → iframeB (local, foreign.test)
-        // → C(idmsa.example.com, s2)`. Resolving C must name iframeB's document (`b`), not the main — the fallback walks
-        // `contentDocument` so a nested local frame is not skipped. `fillFrames` must still refuse the chain because
-        // `b.foreign.test` is a cross-site middle hop.
+        // A nested OOPIF under a local iframe on another registrable domain: `A(example.com) → iframeB(local, foreign.test)
+        // → C(idmsa.example.com, s2)`. Resolving C must name iframeB's document (`b`), not the main — the fallback
+        // reads the iframe element's own `frameId`, so a nested local frame is not skipped. `fillFrames` must still
+        // refuse the chain because `b` is on a cross-site middle hop.
         cdp.frameSessions = [BrowserFrameSession(id: "s2", frameID: "c", parent: nil)]
         cdp.responders["Page.getFrameTree"] = { _ in
             .object(["frameTree": .object([
@@ -2043,15 +2054,17 @@ final class BrowserAgentToolsTests: XCTestCase {
         cdp.responders["DOM.getFrameOwner"] = { _ in .object(["backendNodeId": .integer(99)]) }
         cdp.responders["DOM.getDocument"] = { _ in
             .object(["root": .object([
-                "nodeType": .integer(9), "backendNodeId": .integer(1), "frameId": .string("main"),
+                "nodeType": .integer(9), "backendNodeId": .integer(1), // #document has no frameId
                 "children": .array([.object([
-                    "nodeType": .integer(1), "backendNodeId": .integer(50),
-                    // iframe for the local frame B, with its contentDocument naming the "b" frame.
+                    // Local iframe B — its OWN frameId names the subframe ("b"); its contentDocument carries no frameId.
+                    "nodeType": .integer(1), "nodeName": .string("IFRAME"),
+                    "backendNodeId": .integer(50), "frameId": .string("b"),
                     "contentDocument": .object([
-                        "nodeType": .integer(9), "backendNodeId": .integer(51), "frameId": .string("b"),
+                        "nodeType": .integer(9), "backendNodeId": .integer(51),
                         "children": .array([.object([
-                            // iframe for the OOPIF C, backendNodeId 99
-                            "nodeType": .integer(1), "backendNodeId": .integer(99), "frameId": .string("c")
+                            // OOPIF iframe C — its frameId names "c" and is what the fallback matches on.
+                            "nodeType": .integer(1), "nodeName": .string("IFRAME"),
+                            "backendNodeId": .integer(99), "frameId": .string("c")
                         ])])
                     ])
                 ])])
@@ -2067,13 +2080,56 @@ final class BrowserAgentToolsTests: XCTestCase {
         }
         let nestedFrames = try await VaultPageScripts.frames(cdp, timeout: .seconds(2))
         XCTAssertEqual(nestedFrames.first(where: { $0.id == "c" })?.parentID, "b",
-                       "DOM traversal names the nested local frame, not the main, as the OOPIF's parent")
-        // A cross-site middle hop (`b` is on another registrable domain than the item's) is refused — only the main
-        // frame is left in the fillable list.
+                       "the iframe element's own frameId names the nested local frame, not the main")
         let item = VaultItem(name: "Example", sites: ["example.com"], username: "ada", hasPassword: true, policy: .always)
         let fills = VaultPageScripts.fillFrames(of: nestedFrames, sites: item.sites)
         XCTAssertEqual(fills.map(\.frame.id), ["main"],
                        "a cross-site middle hop refuses the OOPIF even after the parent chain is resolved by DOM")
+
+        // Fail-closed when the nested local iframe has no `frameId` of its own (an engine that omits it):
+        // the OOPIF inside is dropped. Without this guard, a `?? docFrameID` fallback would wrongly promote the
+        // OOPIF to the main frame — exactly the cross-site-skip fail-open that the critical review caught.
+        cdp.frameSessions = [BrowserFrameSession(id: "s4", frameID: "c2", parent: nil)]
+        cdp.responders["Page.getFrameTree"] = { _ in
+            .object(["frameTree": .object([
+                "frame": .object([
+                    "id": .string("main"), "loaderId": .string("doc-main"),
+                    "url": .string("https://account.example.com/"),
+                    "securityOrigin": .string("https://account.example.com")
+                ]),
+                "childFrames": .array([])
+            ])])
+        }
+        cdp.responders["DOM.getFrameOwner"] = { _ in .object(["backendNodeId": .integer(199)]) }
+        cdp.responders["DOM.getDocument"] = { _ in
+            .object(["root": .object([
+                "nodeType": .integer(9), "backendNodeId": .integer(1),
+                "children": .array([.object([
+                    // A local iframe with NO frameId on the element (no `"frameId":`). The OOPIF inside must not
+                    // fall back to the main's id; it must resolve to nil and be dropped.
+                    "nodeType": .integer(1), "nodeName": .string("IFRAME"),
+                    "backendNodeId": .integer(150),
+                    "contentDocument": .object([
+                        "nodeType": .integer(9), "backendNodeId": .integer(151),
+                        "children": .array([.object([
+                            "nodeType": .integer(1), "nodeName": .string("IFRAME"),
+                            "backendNodeId": .integer(199), "frameId": .string("c2")
+                        ])])
+                    ])
+                ])])
+            ])])
+        }
+        cdp.sessionResponder = { session, method, _ in
+            guard session == "s4", method == "Page.getFrameTree" else { throw BrowserDevToolsError.closed }
+            return .object(["frameTree": .object(["frame": .object([
+                "id": .string("c2"), "loaderId": .string("doc-c2"),
+                "url": .string("https://idmsa.example.com/signin"),
+                "securityOrigin": .string("https://idmsa.example.com")
+            ])])])
+        }
+        let hiddenMiddleFrames = try await VaultPageScripts.frames(cdp, timeout: .seconds(2))
+        XCTAssertFalse(hiddenMiddleFrames.contains { $0.id == "c2" },
+                       "a nested local iframe without its own frameId drops the OOPIF — no fall back to the main")
 
         // Fail-closed: when the parent tree omits the OOPIF AND `DOM.getFrameOwner` cannot find its owner, the frame
         // is dropped from the fillable list.
