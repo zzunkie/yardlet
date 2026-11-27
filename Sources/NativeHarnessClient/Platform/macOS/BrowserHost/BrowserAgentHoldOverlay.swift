@@ -25,7 +25,8 @@ struct BrowserAgentHoldOverlay: View {
             withAnimation(ParityMotion.easeInOut(reduceMotion: reduceMotion)) { isShown = true }
         }
         .task(id: heldPresses) {
-            guard heldPresses > 0 else { return }
+            // Back to 0 when the panel shows another held tab: a flash cut short there must not stay on.
+            guard heldPresses > 0 else { isAnswering = false; return }
             withAnimation(ParityMotion.easeOut(reduceMotion: reduceMotion)) { isAnswering = true }
             try? await Task.sleep(for: .milliseconds(700))
             guard !Task.isCancelled else { return }
@@ -102,11 +103,15 @@ private struct BrowserAgentHoldEdge: View {
         let dark = colorScheme == .dark
         let accent = ParityTheme.accent
         ZStack {
+            // At rest the glow is at full strength, and the breath dims it: when `moves` goes off, the target changes
+            // back to 1 with no animation, which ends the repeating one.
             aura(dark: dark)
                 .animation(moves ? .easeInOut(duration: 2.2).repeatForever(autoreverses: true) : nil) {
-                    $0.opacity(!moves || isBreathing ? 1 : 0.6)
+                    $0.opacity(moves && isBreathing ? 0.6 : 1)
                 }
-            aura(dark: dark).opacity(isAnswering ? 1 : 0)
+            if isAnswering {
+                aura(dark: dark).transition(.opacity)
+            }
             sweep(accent: accent, dark: dark)
                 .mask { Rectangle().strokeBorder(lineWidth: isAnswering ? 4 : 2.5) }
         }
@@ -135,12 +140,13 @@ private struct BrowserAgentHoldEdge: View {
     private func sweep(accent: Color, dark: Bool) -> some View {
         let light = accent.mix(with: .white, by: dark ? 0.55 : 0.4)
         return GeometryReader { proxy in
-            let side = (proxy.size.width * proxy.size.width + proxy.size.height * proxy.size.height).squareRoot()
+            // The page's diagonal and a point more, so the circle's antialiased rim never reaches a corner.
+            let side = (proxy.size.width * proxy.size.width + proxy.size.height * proxy.size.height).squareRoot() + 2
             Circle()
                 .fill(AngularGradient(colors: [accent, accent, light, accent, accent], center: .center))
                 .frame(width: side, height: side)
                 .animation(moves ? .linear(duration: 8).repeatForever(autoreverses: false) : nil) {
-                    $0.rotationEffect(.degrees(isSweeping ? 360 : 0))
+                    $0.rotationEffect(.degrees(moves && isSweeping ? 360 : 0))
                 }
                 .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
         }
