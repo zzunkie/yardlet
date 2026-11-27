@@ -2812,12 +2812,12 @@
         }
       }
     },
-    "Drag": {
+    "Drag mode": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "끌기"
+            "value": "끌기 모드"
           }
         }
       }
@@ -4440,12 +4440,12 @@
         }
       }
     },
-    "One finger drags on the page instead of scrolling it": {
+    "One finger drags instead of scrolling": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "한 손가락으로 끌면 페이지를 스크롤하지 않고 페이지 위에서 끕니다"
+            "value": "한 손가락으로 스크롤 대신 끌기"
           }
         }
       }
@@ -4732,12 +4732,12 @@
         }
       }
     },
-    "Password (hidden)": {
+    "Password": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "비밀번호 입력(가려짐)"
+            "value": "비밀번호"
           }
         }
       }
@@ -5782,6 +5782,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "이전 메시지 보기"
+          }
+        }
+      }
+    },
+    "Show Keyboard": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "키보드 올리기"
           }
         }
       }
@@ -7284,16 +7294,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@의 Yardlet에서 메일을 켜면 여기서 받은편지함을 볼 수 있습니다."
-          }
-        }
-      }
-    },
-    "Type into the page": {
-      "localizations": {
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "이 페이지에 입력"
           }
         }
       }

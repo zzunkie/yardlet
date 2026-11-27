@@ -25,8 +25,10 @@ extension EnvironmentValues {
 /// A task's browser tab on the phone (docs/REMOTE_PROTOCOL.md §15.25), over its conversation: the tab's title and site
 /// (which takes a new address where the Mac allows it, §15.30), the bars the Mac's panel shows above the page (the
 /// handoff, a site's permission prompt, what waits on the Mac), the picture of the page, and under it Back, Forward,
-/// Reload, the phone's own field for typing into the page and the choice to drag. The tab is watched only while this
-/// screen shows, and its picture is hidden from the app switcher.
+/// Reload, the keyboard and a menu with Drag mode. The keyboard comes up when a text field on the page takes focus and
+/// goes down when it loses it, as a phone's browser does (§15.25 `editableField`); the keyboard button opens and
+/// closes it by hand. The tab is watched only while this screen shows, and its picture is hidden from the app
+/// switcher.
 struct BrowserView: View {
     let session: HostSession
     let taskID: String
@@ -82,6 +84,17 @@ struct BrowserView: View {
         .onDisappear { browser.hide() }
         // Another tab: the field starts empty, and what it held stays with the tab it was typed into.
         .onChange(of: tab?.tabId) { typing.clear() }
+        .onChange(of: tab.map(RemoteTabKeyboard.init)) { old, new in
+            switch RemoteTabKeyboard.change(from: old, to: new) {
+            case .raise:
+                guard isEnabled, !isEditingAddress, !isShowingTabs, scenePhase == .active else { return }
+                typing.beginTyping()
+            case .dismiss:
+                typing.endTyping()
+            case nil:
+                break
+            }
+        }
         .onChange(of: leaves, initial: true) { _, leaves in
             if leaves { dismiss() }
         }
@@ -364,65 +377,102 @@ struct BrowserView: View {
 
     private var bottomBar: some View {
         VStack(spacing: 0) {
+            if isDragging {
+                dragModeBar
+            }
             Divider()
             HStack(spacing: 4) {
                 Button {
                     browser.input(RemoteTabInput(kind: .navigate, action: "back"))
                 } label: {
-                    Image(systemName: "chevron.left").frame(width: 36, height: 36)
+                    Image(systemName: "chevron.left").frame(width: 40, height: 40)
                 }
                 .accessibilityLabel("Back")
                 .disabled(tab?.canGoBack != true)
                 Button {
                     browser.input(RemoteTabInput(kind: .navigate, action: "forward"))
                 } label: {
-                    Image(systemName: "chevron.right").frame(width: 36, height: 36)
+                    Image(systemName: "chevron.right").frame(width: 40, height: 40)
                 }
                 .accessibilityLabel("Forward")
                 .disabled(tab?.canGoForward != true)
                 Button {
                     browser.input(RemoteTabInput(kind: .navigate, action: "reload"))
                 } label: {
-                    Image(systemName: "arrow.clockwise").frame(width: 36, height: 36)
+                    Image(systemName: "arrow.clockwise").frame(width: 40, height: 40)
                 }
                 .accessibilityLabel("Reload")
-                TabTypingField(typing: typing, isPassword: tab?.passwordField == true,
-                               placeholder: tab?.passwordField == true ? String(localized: "Password (hidden)")
-                                   : String(localized: "Type into the page"),
-                               typed: { typed in
-                                   switch typed {
-                                   case let .text(text): browser.input(.text(text))
-                                   case .backspace: browser.input(.key("Backspace"))
-                                   }
-                               },
-                               key: { browser.input(.key($0)) },
-                               editing: { isTyping = $0 })
-                    .frame(maxWidth: .infinity, minHeight: 36, maxHeight: 36)
-                    .padding(.horizontal, 12)
-                    .background(Color(.tertiarySystemFill), in: Capsule())
-                    .padding(.leading, 4)
-                if isTyping {
-                    Button {
-                        typing.endTyping()
-                    } label: {
-                        Image(systemName: "keyboard.chevron.compact.down").frame(width: 36, height: 36)
-                    }
-                    .accessibilityLabel("Hide Keyboard")
-                } else {
-                    Toggle(isOn: $isDragging) {
-                        Image(systemName: "hand.draw")
-                    }
-                    .toggleStyle(.button)
-                    .accessibilityLabel("Drag")
-                    .accessibilityHint(Text("One finger drags on the page instead of scrolling it"))
+                Spacer(minLength: 8)
+                if isTyping && tab?.passwordField == true {
+                    // What is typed goes to a password field: hidden here, and the keyboard learns nothing from it.
+                    Label("Password", systemImage: "lock.fill")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(YardletPalette.onSurfaceVariant)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
                 }
+                Button {
+                    if isTyping { typing.endTyping() } else { typing.beginTyping() }
+                } label: {
+                    Image(systemName: isTyping ? "keyboard.chevron.compact.down" : "keyboard")
+                        .frame(width: 40, height: 40)
+                        .background(isTyping ? Color(.tertiarySystemFill) : .clear, in: Circle())
+                }
+                .accessibilityLabel(isTyping ? "Hide Keyboard" : "Show Keyboard")
+                Menu {
+                    Toggle(isOn: $isDragging) {
+                        Label("Drag mode", systemImage: "hand.draw")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis").frame(width: 40, height: 40)
+                }
+                .accessibilityLabel("More")
             }
             .font(.body.weight(.medium))
             .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(.vertical, 6)
             .disabled(!isEnabled)
         }
         .background(YardletPalette.surface)
+        // The field the keyboard types into, drawn nowhere: what is typed shows on the page's picture.
+        .background(alignment: .bottomLeading) {
+            TabTypingField(typing: typing, isPassword: tab?.passwordField == true, inputMode: tab?.inputMode,
+                           typed: { typed in
+                               switch typed {
+                               case let .text(text): browser.input(.text(text))
+                               case .backspace: browser.input(.key("Backspace"))
+                               }
+                           },
+                           key: { browser.input(.key($0)) },
+                           editing: { isTyping = $0 })
+                .frame(width: 1, height: 1)
+                .opacity(0.01)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+                .disabled(!isEnabled)
+        }
+    }
+
+    /// While one finger drags on the page instead of scrolling it, a line says so, with the way out.
+    private var dragModeBar: some View {
+        VStack(spacing: 0) {
+            Divider()
+            HStack(spacing: 8) {
+                Label("Drag mode", systemImage: "hand.draw")
+                    .font(.subheadline.weight(.semibold))
+                Text("One finger drags instead of scrolling")
+                    .font(.footnote)
+                    .foregroundStyle(YardletPalette.onSurfaceVariant)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                Spacer(minLength: 0)
+                Button("Done") { isDragging = false }
+                    .font(.subheadline.weight(.semibold))
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+        }
+        .background(YardletPalette.surfaceContainerLow)
     }
 }
 

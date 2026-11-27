@@ -1477,6 +1477,13 @@ final class BrowserTab {
     /// The page's focused field is a password field, as the host last reported (false once the renderer
     /// ends), for a panel that shows the tab later.
     private(set) var isPasswordFieldFocused = false
+    /// What the page's focused field takes, as the host last reported; nil when it takes no text.
+    private(set) var editableField: BrowserEditableField?
+    /// Goes up each time a text field takes focus or a remote tap lands in the one that has it, so a remote device
+    /// raises a keyboard its person put away (§15.25 `editableFocusCount`); 0 before any.
+    private(set) var editableFocusCount = 0
+    /// Every focused field report so far, to tell whether one came while a remote tap settled.
+    private(set) var editableFieldReports = 0
     /// The page's icon as PNG, which the host downloads through the page's own profile; nil until
     /// one arrives, and again once the tab goes to another site.
     private(set) var favicon: Data?
@@ -1780,6 +1787,15 @@ final class BrowserTab {
         if remote { lastRemoteInput = now }
         if edits { hadPersonEdits = true }
         tellDownloads()
+    }
+
+    /// A remote tap that has settled (`RemoteTabBridge`): when the field that had focus before it still has it and no
+    /// focus report came meanwhile, the tap landed in that field, and a device raises the keyboard its person put
+    /// away, as a phone's browser does on a second tap. A tap elsewhere moves focus or blurs the field, which the host
+    /// reports. `reports` is `editableFieldReports` before the tap.
+    func noteEditableFieldTapped(reportsBefore reports: Int) {
+        guard let field = editableField, reports == editableFieldReports, !isClosed else { return }
+        receive(.editableField(tab: id, kind: field.rawValue, focusMoved: true))
     }
 
     /// The person's last input to the page came from a remote device, or a page the remote device's input drove opened
@@ -2388,6 +2404,7 @@ final class BrowserTab {
             isDiscarded = true
             isDiscardAsked = false
             isPasswordFieldFocused = false
+            editableField = nil
             closedDialogs += [javaScriptDialog?.id, fileDialog?.id].compactMap { $0 }
             if let chooser = fileDialog { client?.send(.fileDialogResult(tab: id, dialog: chooser.id, paths: nil)) }
             javaScriptDialog = nil
@@ -2423,6 +2440,11 @@ final class BrowserTab {
             fileDialog = nil
         case .passwordField(_, let isFocused):
             isPasswordFieldFocused = isFocused
+        case .editableField(_, let kind, let focusMoved):
+            let field = BrowserEditableField(rawValue: kind)
+            if let field, focusMoved || field != editableField { editableFocusCount += 1 }
+            editableField = field
+            editableFieldReports += 1
         case .failed(let message, _?, let limit):
             openFailure = BrowserTabOpenFailure(message: message, limit: limit)
         case .openedTab(_, let newTab?, _):

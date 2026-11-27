@@ -567,6 +567,11 @@ enum BrowserHostEvent: Codable, Equatable, Sendable {
     /// Whether the page's focused field is a password field (an `<input type=password>` in any frame), sent
     /// when that changes; the panel turns on secure keyboard entry while it has the keyboard there.
     case passwordField(tab: BrowserTabID, isFocused: Bool)
+    /// What the page's focused field takes (`BrowserEditableField`'s raw value, 0 for no text), sent when that
+    /// changes and when focus moves into a text field (`focusMoved`), from one text field to another too. The client
+    /// also produces it, with `focusMoved`, when a remote tap lands in the text field that already has focus
+    /// (`BrowserTab.noteEditableFieldTapped`).
+    case editableField(tab: BrowserTabID, kind: Int, focusMoved: Bool)
     /// The tab's renderer process ended; the page must be reloaded.
     /// The tab's renderer ended: `status` is CEF's termination status ("crashed", "oom", "killed",
     /// "abnormal" …) and `code` its exit code (a signal number when it crashed).
@@ -614,11 +619,30 @@ enum BrowserHostEvent: Codable, Equatable, Sendable {
              .navigationBlocked(let tab, _), .navigationRequest(let tab), .filledValueBlocked(let tab), .tooltip(let tab, _), .javaScriptDialog(let tab, _),
              .javaScriptDialogReset(let tab), .fileDialog(let tab, _), .dialogClosed(let tab, _), .permissionPrompt(let tab, _),
              .permissionPromptDismissed(let tab, _), .download(let tab, _),
-             .findResult(let tab, _), .dragOperation(let tab, _), .passwordField(let tab, _), .pageCrashed(let tab, _, _, _), .responsiveness(let tab, _),
+             .findResult(let tab, _), .dragOperation(let tab, _), .passwordField(let tab, _), .editableField(let tab, _, _), .pageCrashed(let tab, _, _, _), .responsiveness(let tab, _),
              .discarded(let tab), .discardRefused(let tab, _),
              .accessibilityTree(let tab, _), .accessibilityLocations(let tab, _), .scrollOffset(let tab, _, _),
              .devTools(let tab, _), .hidden(let tab), .closed(let tab):
             tab
+        }
+    }
+}
+
+/// What text the page's focused field takes (`BrowserHostEvent.editableField`), by its type or `inputmode`.
+enum BrowserEditableField: Int, Sendable {
+    case text = 1, password, email, url, telephone, numeric, decimal, search
+
+    /// The keyboard a remote device shows for it (§15.25 `inputMode`); nil for plain text.
+    var inputMode: String? {
+        switch self {
+        case .text: nil
+        case .password: "password"
+        case .email: "email"
+        case .url: "url"
+        case .telephone: "tel"
+        case .numeric: "numeric"
+        case .decimal: "decimal"
+        case .search: "search"
         }
     }
 }

@@ -215,6 +215,11 @@ final class RemoteTabBridge {
         listed.requestId = handoff?.notice
         listed.reason = handoff.flatMap { RemoteText.short($0.reason, RemoteText.requestDetailLimit) }
         listed.passwordField = tab.isPasswordFieldFocused ? true : nil
+        if let field = tab.editableField {
+            listed.editableField = true
+            listed.inputMode = field.inputMode
+            listed.editableFocusCount = max(1, tab.editableFocusCount)
+        }
         listed.permission = tab.permissionPrompt.map {
             RemoteTabPermission(prompt: $0.id, origin: $0.origin, permissions: $0.permissions)
         }
@@ -389,7 +394,7 @@ final class RemoteTabBridge {
         case .frame:
             guard followed[session]?.watched[key] != nil, paintTold.insert(key).inserted else { return }
             changeHandler?(.tabPainted(taskID: session.uuidString, tabID: key.uuidString))
-        case .title, .address, .loading, .passwordField, .javaScriptDialog, .javaScriptDialogReset, .dialogClosed,
+        case .title, .address, .loading, .passwordField, .editableField, .javaScriptDialog, .javaScriptDialogReset, .dialogClosed,
              .fileDialog, .permissionPrompt, .permissionPromptDismissed, .externalApp, .pageCrashed, .discarded, .closed:
             tellList(session)
         default:
@@ -873,12 +878,14 @@ final class RemoteTabBridge {
             case .click:
                 tab.notePersonInput(remote: true)
                 copies.noteInput(on: tab, permit: permit)
+                let reports = tab.editableFieldReports
                 try await send(tab, "Input.dispatchMouseEvent", point.merging(["type": .string("mouseMoved")]) { $1 }, permit, scope)
                 let press = point.merging(["button": .string(button), "clickCount": .integer(Int64(input.clickCount ?? 1))]) { $1 }
                 try await send(tab, "Input.dispatchMouseEvent",
                                press.merging(["type": .string("mousePressed"), "buttons": .integer(buttonMask)]) { $1 }, permit, scope)
                 try await send(tab, "Input.dispatchMouseEvent",
                                press.merging(["type": .string("mouseReleased"), "buttons": .integer(0)]) { $1 }, permit, scope)
+                noteTapSettled(on: tab, reportsBefore: reports)
             case .mouse:
                 tab.notePersonInput(remote: true)
                 if input.action != "move" { copies.noteInput(on: tab, permit: permit) }
@@ -944,6 +951,22 @@ final class RemoteTabBridge {
     }
 
     static let inputTimeout: Duration = .seconds(5)
+
+    /// How long a tap's focus report may trail the tap's last DevTools answer: the renderer sends it on another channel.
+    static var tapSettle: Duration = .milliseconds(250)
+
+    /// A tap on a tab whose text field has focus may land in that field again, which no focus report says: once the
+    /// tap has settled with the field still focused and no report since, the tab counts it (`noteEditableFieldTapped`),
+    /// so a device raises the keyboard its person put away. A tap elsewhere blurs the field or moves focus, which the
+    /// host reports within the wait; a page that keeps focus on a tap outside the field (a toolbar that cancels its
+    /// mousedown) counts as a tap in it.
+    private func noteTapSettled(on tab: BrowserTab, reportsBefore reports: Int) {
+        guard tab.editableField != nil else { return }
+        Task { @MainActor [weak tab] in
+            try? await Task.sleep(for: Self.tapSettle)
+            tab?.noteEditableFieldTapped(reportsBefore: reports)
+        }
+    }
 
     /// One step of input: sent only while the watch holds, nothing is over the page and the page is the one the input
     /// was checked on, right before it goes.

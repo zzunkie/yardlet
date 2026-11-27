@@ -26,6 +26,8 @@ struct RemoteFixtureTabs {
     var username = ""
     var passwordLength = 0
     var focus: Field?
+    /// Goes up each time a field takes focus or a tap lands in the focused one (§15.25 `editableFocusCount`).
+    var focusCount = 0
     var signedIn = false
     var refused = false
     /// The front tab of the task's panel.
@@ -44,13 +46,15 @@ struct RemoteFixtureTabs {
                              url: signedIn ? "https://github.com/acme/web/releases/new" : "https://github.com/login",
                              active: front == Self.signInTab ? true : nil, canGoBack: true,
                              waiting: handoff == nil ? nil : "handoff", requestId: handoff?.requestID, reason: handoff?.reason,
-                             passwordField: focus == .password ? true : nil)
+                             passwordField: focus == .password ? true : nil, editableField: focus == nil ? nil : true,
+                             inputMode: focus == .password ? "password" : nil,
+                             editableFocusCount: focus == nil ? nil : focusCount)
         ]
     }
 
     // MARK: - Input
 
-    /// What the input changed: the page's picture, its list entry (title, password focus), or nothing.
+    /// What the input changed: the page's picture, its list entry (title, focused field), or nothing.
     struct Change: OptionSet {
         let rawValue: Int
         static let picture = Change(rawValue: 1)
@@ -73,14 +77,16 @@ struct RemoteFixtureTabs {
 
     mutating func input(_ input: RemoteTabInput, on tabID: String) -> Change {
         guard tabID == Self.signInTab else { return [] }
-        let before = (focus, signedIn)
+        let before = (focus, signedIn, focusCount)
         switch input.kind {
         case .click, .mouse:
             guard input.kind == .click || input.action == "down", let x = input.x, let y = input.y, !signedIn else { return [] }
             if inside(usernameBox, x, y) {
                 focus = .username
+                focusCount += 1
             } else if inside(passwordBox, x, y) {
                 focus = .password
+                focusCount += 1
             } else if inside(button, x, y) {
                 submit()
             } else {
@@ -100,7 +106,9 @@ struct RemoteFixtureTabs {
             case "Backspace":
                 if focus == .username, !username.isEmpty { username.removeLast() }
                 if focus == .password { passwordLength = max(0, passwordLength - 1) }
-            case "Tab": focus = focus == .username ? .password : .username
+            case "Tab":
+                focus = focus == .username ? .password : .username
+                focusCount += 1
             case "Enter": submit()
             default: return []
             }
@@ -113,7 +121,7 @@ struct RemoteFixtureTabs {
             return []
         }
         var change: Change = .picture
-        if before.0 != focus || before.1 != signedIn { change.insert(.list) }
+        if before.0 != focus || before.1 != signedIn || before.2 != focusCount { change.insert(.list) }
         return change
     }
 

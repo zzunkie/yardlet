@@ -165,10 +165,11 @@ typedef struct {
     int frameRate;
     /// Yardlet's last focus command: a panel showing this tab has the keyboard.
     int focused;
-    /// The page's focused field is a password field, as its renderer last said (YardletCEFEventPasswordField),
-    /// and the identifier of the frame it is in (malloc'd), or NULL.
-    int passwordFocused;
-    char *passwordFrame;
+    /// What the page's focused field takes, as its renderer last said (YardletCEFEventEditableField: 0 no
+    /// text, 2 a password field, YardletCEFEventPasswordField), and the identifier of the frame it is in
+    /// (malloc'd), or NULL.
+    int fieldKind;
+    char *fieldFrame;
     /// The request context the browser was made in: its index in g_contexts plus one, 0 for the global one.
     int contextHandle;
     int sharedTexture;
@@ -427,37 +428,50 @@ static cef_browser_host_t *host_for_tab(int tab) {
     return slot->browser->get_host(slot->browser);
 }
 
-// MARK: - Password fields
+// MARK: - Focused fields
 // CEF 154's windowless view tells the browser process nothing about the focused field's type
 // (OnVirtualKeyboardRequested carries only `inputmode`, and only when an input method may show), so each
 // renderer reports it (YardletCEFHelper's FocusedField.c): a focus change in one of its frames, and the
 // answer to a question about a frame's focused field. Yardlet's panel turns on secure keyboard entry and
-// Roman input sources while that field has the keyboard, as Safari and Chrome do (BrowserHostView).
+// Roman input sources while a password field has the keyboard, as Safari and Chrome do (BrowserHostView);
+// a remote device raises its own keyboard while any text field has it.
 
 static const char kFocusedFieldMessage[] = "YardletFocusedField";
 static const char kFocusedFieldQuery[] = "YardletFocusedFieldQuery";
 
-/// Borrows the frame's reference.
-static void set_password_focus(BrowserSlot *slot, int focused, cef_frame_t *frame) {
-    free(slot->passwordFrame);
-    slot->passwordFrame = NULL;
-    if (focused && frame) {
+static const int kFieldPassword = 2;
+
+/// `kind` is the renderer's (FocusedField.c); `focus_moved`, the focus went to that field rather than the host
+/// asking. Borrows the frame's reference.
+static void set_field_focus(BrowserSlot *slot, int kind, cef_frame_t *frame, int focus_moved) {
+    free(slot->fieldFrame);
+    slot->fieldFrame = NULL;
+    if (kind && frame) {
         cef_string_userfree_t identifier = frame->get_identifier(frame);
-        slot->passwordFrame = copy_string(identifier);
+        slot->fieldFrame = copy_string(identifier);
         if (identifier) p_cef_string_userfree_utf16_free(identifier);
     }
-    if (slot->passwordFocused == focused) return;
-    slot->passwordFocused = focused;
-    emit(slot->tab, YardletCEFEventPasswordField, NULL, NULL, focused);
+    int was = slot->fieldKind;
+    slot->fieldKind = kind;
+    if ((was == kFieldPassword) != (kind == kFieldPassword)) {
+        emit(slot->tab, YardletCEFEventPasswordField, NULL, NULL, kind == kFieldPassword);
+    }
+    // Focus that moves from one text field to another is news too: a device raises its keyboard again.
+    if (was != kind || (kind && focus_moved)) {
+        cef_string_t moved = {0};
+        if (kind && focus_moved) set_string(&moved, "1");
+        emit(slot->tab, YardletCEFEventEditableField, NULL, kind && focus_moved ? &moved : NULL, kind);
+        p_cef_string_utf16_clear(&moved);
+    }
 }
 
-/// Whether the frame is the one the focused password field is in. Borrows the frame's reference.
-static int is_password_frame(const BrowserSlot *slot, cef_frame_t *frame) {
-    if (slot->passwordFrame == NULL || frame == NULL) return 0;
+/// Whether the frame is the one the focused field is in. Borrows the frame's reference.
+static int is_field_frame(const BrowserSlot *slot, cef_frame_t *frame) {
+    if (slot->fieldFrame == NULL || frame == NULL) return 0;
     cef_string_userfree_t value = frame->get_identifier(frame);
     char *identifier = copy_string(value);
     if (value) p_cef_string_userfree_utf16_free(value);
-    int same = strcmp(identifier, slot->passwordFrame) == 0;
+    int same = strcmp(identifier, slot->fieldFrame) == 0;
     free(identifier);
     return same;
 }
@@ -505,9 +519,13 @@ static int CEF_CALLBACK client_on_process_message_received(cef_client_t *self, c
         // A frame a new document replaced says nothing about the page now.
         if (slot && frame && frame->is_valid(frame)) {
             cef_list_value_t *arguments = message->get_argument_list(message);
-            int focused = arguments && arguments->get_size(arguments) > 0 && arguments->get_bool(arguments, 0);
+            size_t count = arguments ? arguments->get_size(arguments) : 0;
+            int password = count > 0 && arguments->get_bool(arguments, 0);
+            // The first argument alone says a password field (or none), as a helper before the kinds sends it.
+            int kind = count > 1 ? arguments->get_int(arguments, 1) : (password ? kFieldPassword : 0);
+            int moved = count > 2 && arguments->get_bool(arguments, 2);
             YARDLET_RELEASE(arguments);
-            set_password_focus(slot, focused, frame);
+            set_field_focus(slot, kind, frame, moved);
         }
     } else if (source_process == PID_RENDERER && name_utf8 && strcmp(name_utf8, kPageStateAnswer) == 0) {
         handled = 1;
@@ -1263,7 +1281,7 @@ static void CEF_CALLBACK life_span_on_before_close(cef_life_span_handler_t *self
         YARDLET_RELEASE(slot->devtoolsRegistration);
         YARDLET_RELEASE(slot->unresponsive);
         YARDLET_RELEASE(slot->browser);
-        free(slot->passwordFrame);
+        free(slot->fieldFrame);
         clear_filled_values(slot);
         memset(slot, 0, sizeof(*slot));
         release_context(context);
@@ -1474,7 +1492,7 @@ static void CEF_CALLBACK request_on_render_process_terminated(cef_request_handle
         slot->unresponsive = NULL;
         clear_blocked_popups(slot->tab);
         // The ended renderer's field is gone; the page that loads next reports its own.
-        set_password_focus(slot, 0, NULL);
+        set_field_focus(slot, 0, NULL, 0);
         release_media_prompts(slot->tab);
         slot->capturing = 0;
     }
@@ -2119,8 +2137,8 @@ static void CEF_CALLBACK load_on_load_start(cef_load_handler_t *self, cef_browse
         if (host) host->set_focus(host, 1);
         YARDLET_RELEASE(host);
     }
-    if (slot && frame && (frame->is_main(frame) || is_password_frame(slot, frame))) {
-        if (slot->passwordFocused) set_password_focus(slot, 0, NULL);
+    if (slot && frame && (frame->is_main(frame) || is_field_frame(slot, frame))) {
+        if (slot->fieldKind) set_field_focus(slot, 0, NULL, 0);
         ask_focused_field(frame);
     }
     // A new document in the main frame (OnLoadStart comes after a commit, never for a same-document move):

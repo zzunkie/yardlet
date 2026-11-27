@@ -106,12 +106,21 @@ public struct RemoteBrowserTab: Codable, Equatable, Sendable {
     public var reason: String?
     /// The page's focused field is a password field: a client masks what it types into it.
     public var passwordField: Bool?
+    /// The page's focused field takes text (a password field too): a client raises its keyboard for it.
+    public var editableField: Bool?
+    /// The keyboard that field asks for while `editableField` holds: `password`, `email`, `url`, `tel`, `numeric`,
+    /// `decimal` or `search`; absent for plain text.
+    public var inputMode: String?
+    /// While `editableField` holds, a number at least 1 that goes up each time a text field takes focus or a tap lands
+    /// in the one that has it, so a client raises a keyboard its person put away.
+    public var editableFocusCount: Int?
     /// The site's permission prompt up on the tab, also while `waiting` names a more pressing wait.
     public var permission: RemoteTabPermission?
 
     public init(tabId: String, title: String? = nil, url: String? = nil, active: Bool? = nil, loading: Bool? = nil,
                 canGoBack: Bool? = nil, canGoForward: Bool? = nil, waiting: String? = nil, requestId: String? = nil,
-                reason: String? = nil, passwordField: Bool? = nil, permission: RemoteTabPermission? = nil) {
+                reason: String? = nil, passwordField: Bool? = nil, editableField: Bool? = nil, inputMode: String? = nil,
+                editableFocusCount: Int? = nil, permission: RemoteTabPermission? = nil) {
         self.tabId = tabId
         self.title = title
         self.url = url
@@ -123,7 +132,43 @@ public struct RemoteBrowserTab: Codable, Equatable, Sendable {
         self.requestId = requestId
         self.reason = reason
         self.passwordField = passwordField
+        self.editableField = editableField
+        self.inputMode = inputMode
+        self.editableFocusCount = editableFocusCount
         self.permission = permission
+    }
+}
+
+/// The watched tab's focused field, as a client follows it to raise and put away its keyboard (§15.25): the keyboard
+/// comes up when a text field takes focus (`editableField` turns true, or `editableFocusCount` goes up) and goes down
+/// when the field loses it, as a phone's browser does. A Mac that never sends `editableField` leaves the keyboard to
+/// the person.
+public struct RemoteTabKeyboard: Equatable, Sendable {
+    public var tabId: String
+    public var editable: Bool
+    public var focusCount: Int
+
+    public init(_ tab: RemoteBrowserTab) {
+        tabId = tab.tabId
+        editable = tab.editableField == true
+        focusCount = tab.editableFocusCount ?? 0
+    }
+
+    public enum Change: Equatable, Sendable {
+        case raise
+        case dismiss
+    }
+
+    /// What the keyboard does as the watched tab goes from `old` to `new`; nil to leave it as it is, so a keyboard the
+    /// person opened by hand stays up where the Mac says nothing of the page's field.
+    public static func change(from old: RemoteTabKeyboard?, to new: RemoteTabKeyboard?) -> Change? {
+        let sameTab = old != nil && old?.tabId == new?.tabId
+        if let new, new.editable {
+            let wasEditable = sameTab && old?.editable == true
+            return !wasEditable || new.focusCount > (old?.focusCount ?? 0) ? .raise : nil
+        }
+        // Another tab, or none: what the last one's field had goes with it.
+        return old?.editable == true ? .dismiss : nil
     }
 }
 

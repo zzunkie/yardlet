@@ -629,7 +629,8 @@ swift run --build-system native yardlet-remote-fixture --secure-port 47700 --sin
     command's notice and a scheduled check-in opened (§6.2 `sender`); "Regenerate the screenshots" failed.
   - "Publish the release notes" (§15.18, §15.25) waits on a sign-in page it handed to the person, one of its two
     browser tabs. The page draws as PNG and takes clicks, typing and keys: tap the username field and type, Tab or
-    tap to the password field (the list marks it `passwordField`), then Sign in; with both filled the page says it is
+    tap to the password field (the list marks it `passwordField`; a focused field is `editableField`, the password
+    field with `inputMode` `password`), then Sign in; with both filled the page says it is
     signed in, and I'm done answers the handoff. `Meta+c` in the username field sends its text as `tabCopied` (`Meta+x`
     also empties it); in the password field it sends nothing. Thirty seconds after an answer the page signs out and the
     handoff comes back. Its other tab, a static page, has a camera and microphone permission prompt numbered past 2^53
@@ -1820,7 +1821,7 @@ permission prompt in the watched tab (below); browsing outside a task stays on t
    "tabs": [{"tabId": "77A0…", "title": "Managing releases - GitHub Docs", "url": "https://docs.github.com/…"},
             {"tabId": "9B21…", "title": "Sign in to GitHub", "url": "https://github.com/login", "active": true,
              "waiting": "handoff", "requestId": "…", "reason": "Sign in so I can publish the notes",
-             "passwordField": true}]}
+             "passwordField": true, "editableField": true, "inputMode": "password", "editableFocusCount": 2}]}
   ```
 
   Lists the task's tabs, as the task's side panel lists them, in its order, and starts watching one: `tabId` names it,
@@ -1846,7 +1847,13 @@ permission prompt in the watched tab (below); browsing outside a task stays on t
   password manager filled), `active`, `loading`, `canGoBack`, `canGoForward`, `waiting` (what the tab waits on from the
   person, the most pressing: `handoff`, `passkey`, `signIn`, `permission`, `externalApp`, `javaScriptDialog`,
   `fileChooser`), `requestId` and `reason` (the handoff's, §15.18), `passwordField` (the page's focused field is a
-  password field), `permission` (the site's permission prompt up on the tab, also while `waiting` names a more pressing
+  password field), `editableField` (the page's focused field takes text, a password field too: a phone raises its
+  keyboard, as a phone's browser does when a text field takes focus, and puts it away when the field loses focus),
+  `inputMode` (the keyboard that field asks for by its type or `inputmode`: `password`, `email`, `url`, `tel`,
+  `numeric`, `decimal`, `search`; absent for plain text), `editableFocusCount` (while `editableField` holds, a number of
+  at least 1 that goes up each time a text field takes focus, from another text field too, or a tap lands in the field
+  that has focus, so a phone raises a keyboard its person put away; a tap counts once it has settled, about a quarter
+  second, with the field still focused), `permission` (the site's permission prompt up on the tab, also while `waiting` names a more pressing
   wait; below). Not a command. Errors: `notFound` (no such task, or no such tab of it), `unavailable` (no browser
   engine).
 - `{"event": "tabFrame", "seq": 51, "taskId": "4C1F…", "tabId": "9B21…", "frame": 3, "image": "<base64>",
@@ -2002,10 +2009,13 @@ permission prompt in the watched tab (below); browsing outside a task stays on t
     is two clicks, the second with `clickCount` 2; a drag of one finger on the page is `scroll` (the finger's movement in
     picture pixels times that factor, sign reversed), unless the person chose to drag (`mouse`). Send scrolls at most
     about ten a second, adding up the deltas between.
-  - Typing goes through a text field of the phone's own under the picture: send committed text as `text` (an input
-    method's composing text stays on the phone until committed), and the keyboard's Return, Backspace and Tab as `key`.
-    While the watched tab's `passwordField` is true, mask that field, turn off suggestions and learning, and keep nothing
-    of what was typed.
+  - Typing goes through a text field of the phone's own: send committed text as `text` (an input method's composing
+    text stays on the phone until committed), and the keyboard's Return, Backspace and Tab as `key`. While the watched
+    tab's `passwordField` is true, mask that field, turn off suggestions and learning, and keep nothing of what was
+    typed. From a Mac that sends `editableField`, raise the keyboard when it turns true or `editableFocusCount` goes
+    up, with the keyboard `inputMode` asks for, and put it away when it turns false, as a phone's browser does; a
+    keyboard button opens and closes it by hand. From an older Mac, which never sends it, the keyboard opens only by
+    hand and stays until put away.
   - Acknowledge each frame once it is decoded. Keep frames in memory only, and block screenshots and the recent-apps
     preview of the browser screen (Android `FLAG_SECURE`).
   - Send `viewport`: the browser screen's size in CSS pixels (on Android, its size in dp, which Chrome on the phone
