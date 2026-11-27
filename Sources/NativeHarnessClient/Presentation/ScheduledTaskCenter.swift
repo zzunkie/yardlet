@@ -42,6 +42,9 @@ final class ScheduledTaskCenter {
     @ObservationIgnored var checkInterval: Duration = .seconds(60)
 
     @ObservationIgnored private let repository: any ScheduledTaskRepository
+    /// The run whose turn each task runs now, by task. In memory only: a quit ends the turn, and the run
+    /// keeps when only for a turn that ended (`turnEnded(in:at:)`).
+    @ObservationIgnored private var runningTurns: [UUID: UUID] = [:]
     @ObservationIgnored private var loop: Task<Void, Never>?
     /// The loop's current sleep; cancelling it ends the sleep, not the loop.
     @ObservationIgnored private var sleeper: Task<Void, Never>?
@@ -74,6 +77,34 @@ final class ScheduledTaskCenter {
         Set(schedules.flatMap { schedule in
             schedule.state.runs.compactMap { run in schedule.startedNewTask(run) ? run.taskID : nil }
         })
+    }
+
+    /// The turns schedules' runs started in these tasks: those that ended, as their runs keep them, and the
+    /// one each task runs now. Token usage counts a task's requests in them for their schedules; the person's
+    /// own turns in the same task are left out.
+    func turns(inTasks taskIDs: Set<UUID>) -> [UUID: [ScheduledTurn]] {
+        guard !taskIDs.isEmpty else { return [:] }
+        var turns: [UUID: [ScheduledTurn]] = [:]
+        for schedule in schedules {
+            for run in schedule.state.runs where run.outcome == .started {
+                guard let taskID = run.taskID, taskIDs.contains(taskID),
+                      run.endedAt != nil || runningTurns[taskID] == run.id else { continue }
+                turns[taskID, default: []].append(ScheduledTurn(scheduleID: schedule.id, start: run.at, end: run.endedAt))
+            }
+        }
+        return turns
+    }
+
+    /// A task's turn ended: the run whose turn it was keeps when. Every way a turn ends comes here
+    /// (`AppModel.turnEnded`); false when it was not a run's turn.
+    @discardableResult
+    func turnEnded(in taskID: UUID, at date: Date) -> Bool {
+        guard let runID = runningTurns.removeValue(forKey: taskID),
+              let index = schedules.firstIndex(where: { $0.state.runs.contains { $0.id == runID } }),
+              let run = schedules[index].state.runs.firstIndex(where: { $0.id == runID }) else { return false }
+        schedules[index].state.runs[run].endedAt = date
+        persist()
+        return true
     }
 
     var enabledCount: Int { schedules.filter(\.isEnabled).count }
@@ -210,8 +241,10 @@ final class ScheduledTaskCenter {
         startingIDs.remove(schedule.id)
         switch result {
         case let .started(taskID, account):
-            record(ScheduledTaskRun(slot: slot, at: at, trigger: trigger, outcome: .started, taskID: taskID,
-                                    mode: schedule.destination.mode, account: account), for: schedule.id)
+            let run = ScheduledTaskRun(slot: slot, at: at, trigger: trigger, outcome: .started, taskID: taskID,
+                                       mode: schedule.destination.mode, account: account)
+            runningTurns[taskID] = run.id
+            record(run, for: schedule.id)
         case let .failed(message, taskID):
             record(ScheduledTaskRun(slot: slot, at: at, trigger: trigger, outcome: .failed, failure: message,
                                     taskID: taskID), for: schedule.id)

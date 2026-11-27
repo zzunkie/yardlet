@@ -4,9 +4,9 @@ import XCTest
 
 /// Schedules in the app: a run is a task started through the new-task path (with a stand-in
 /// harness, so no runtime or model is contacted), skipped while the previous run still works,
-/// sent to its task when it continues one, announced when it was missed, kept off an account that is
-/// nearly spent, paused and resumed, turned off after failed starts, naming the task that did not start
-/// and why, kept across a relaunch, and imported once.
+/// sent to its task when it continues one, keeping when the turn it started ended, announced when it was
+/// missed, kept off an account that is nearly spent, paused and resumed, turned off after failed starts,
+/// naming the task that did not start and why, kept across a relaunch, and imported once.
 @MainActor
 final class ScheduledTaskTests: XCTestCase {
     private var root: URL!
@@ -231,6 +231,54 @@ final class ScheduledTaskTests: XCTestCase {
         model.scheduledTasks.update(startsTasks)
         XCTAssertTrue(model.scheduledTasks.schedules(continuing: target.id).isEmpty, "Once its runs start new tasks, it is gone")
         await model.shutdown()
+    }
+
+    /// The turn a run starts is the schedule's from the run's start until that turn ends, which the run keeps;
+    /// the person's next turn in the same task is not, and a run's turn a quit cut off is not running after it.
+    func testARunKeepsWhenTheTurnItStartedEnded() async throws {
+        let file = root.appending(path: ".yardlet/schedules.json")
+        let clock = Clock(date(16, 20))
+        let model = makeModel(repository: FileScheduledTaskRepository(fileURL: file), clock: clock)
+        let project = model.projects.ensureProject(forRoot: try folder("issues"))
+        let target = try await model.store.createSession(
+            harness: .openCode, workspaceURL: project.primaryRoot, runtimeExecutableURL: URL(filePath: "/tmp/opencode"),
+            title: "Release watch", projectID: project.id)
+        model.scheduledTasks.create(ScheduledTask(
+            name: "Heartbeat", prompt: "Any new failures since last time?",
+            trigger: .interval(hours: 2, anchor: date(16, 22), days: []),
+            destination: ScheduleDestination(mode: .continueTask, harness: .openCode, targetTaskID: target.id)))
+        let schedule = try XCTUnwrap(model.scheduledTasks.schedules.first)
+
+        clock.now = date(17, 0, 0, 10)
+        await model.scheduledTasks.checkDue()
+        let run = try XCTUnwrap(model.scheduledTasks.schedules.first?.state.runs.first)
+        XCTAssertEqual(run.outcome, .started)
+        XCTAssertNil(run.endedAt)
+        XCTAssertEqual(model.scheduledTasks.turns(inTasks: [target.id]),
+                       [target.id: [ScheduledTurn(scheduleID: schedule.id, start: run.at, end: nil)]])
+        XCTAssertEqual(model.scheduledTasks.turns(inTasks: [UUID()]), [:])
+
+        try await model.store.updateSession(id: target.id, status: .running)
+        await model.turnEnded(target.id, as: .completed, cause: .providerStatus, at: date(17, 0, 4))
+        XCTAssertEqual(model.scheduledTasks.schedules.first?.state.runs.first?.endedAt, date(17, 0, 4))
+        let ended = [target.id: [ScheduledTurn(scheduleID: schedule.id, start: run.at, end: date(17, 0, 4))]]
+        XCTAssertEqual(model.scheduledTasks.turns(inTasks: [target.id]), ended)
+
+        // The person's own turn after it ends without touching the run.
+        try await model.store.updateSession(id: target.id, status: .running)
+        await model.turnEnded(target.id, as: .completed, cause: .providerStatus, at: date(17, 1))
+        XCTAssertEqual(model.scheduledTasks.schedules.first?.state.runs.first?.endedAt, date(17, 0, 4))
+        XCTAssertEqual(model.scheduledTasks.turns(inTasks: [target.id]), ended)
+
+        // The next run's turn, cut off by a quit: after it, that run has no turn running and keeps no end.
+        clock.now = date(17, 2, 0, 10)
+        await model.scheduledTasks.checkDue()
+        XCTAssertEqual(model.scheduledTasks.turns(inTasks: [target.id])[target.id]?.count, 2)
+        await model.shutdown()
+        let relaunched = ScheduledTaskCenter(repository: FileScheduledTaskRepository(fileURL: file))
+        XCTAssertEqual(relaunched.turns(inTasks: [target.id]), ended)
+        XCTAssertFalse(relaunched.turnEnded(in: target.id, at: date(17, 3)))
+        XCTAssertNil(relaunched.schedules.first?.state.runs.first?.endedAt)
     }
 
     /// A task's rail reads the schedules that continue it from an index, drawn again with each event of the task;

@@ -7210,6 +7210,8 @@ final class AppModel {
             coordinationLog.record(.init(event: "turn-ended", task: id.uuidString,
                                          harness: store.sessions.first { $0.id == id }?.harness.rawValue,
                                          reason: cause.rawValue, status: status.rawValue))
+            // A schedule's run whose turn this was keeps when it ended, which its token count goes up to.
+            scheduledTasks.turnEnded(in: id, at: timestamp)
         }
         if follows.contains(.routingEvaluation), endsTurn, !isIdleCompaction {
             recordTurnForRoutingEvaluation(id, status: status, at: timestamp)
