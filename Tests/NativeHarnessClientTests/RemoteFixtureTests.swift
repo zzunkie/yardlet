@@ -413,8 +413,12 @@ final class RemoteFixtureTests: XCTestCase {
         XCTAssertNotEqual(focused.image, page.image)
         _ = try await input(#"{"kind":"text","text":"octocat"}"#)
         _ = try await input(#"{"kind":"key","key":"Tab"}"#)
-        let marked = try await phone.event(.browserTabsChanged)
-        XCTAssertEqual(marked.tabs?.last?.passwordField, true, "a client masks what it types into the password field")
+        // The username field's focus is told too (`editableField`): wait for the password field's.
+        try await waitFor { phone.events(.browserTabsChanged).last?.tabs?.last?.inputMode == "password" }
+        let marked = try XCTUnwrap(phone.events(.browserTabsChanged).last?.tabs?.last)
+        XCTAssertEqual(marked.passwordField, true, "a client masks what it types into the password field")
+        XCTAssertEqual(marked.editableField, true, "a client raises its keyboard")
+        XCTAssertEqual(marked.editableFocusCount, 2, "the username field's focus, then the password field's")
         _ = try await input(#"{"kind":"text","text":"hunter2"}"#)
         _ = try await input(#"{"kind":"click","x":300,"y":255}"#)
         try await waitFor { phone.events(.browserTabsChanged).last?.tabs?.last?.title == "New release · acme/web" }
