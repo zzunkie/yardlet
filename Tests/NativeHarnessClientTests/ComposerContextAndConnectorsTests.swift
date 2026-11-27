@@ -317,8 +317,10 @@ final class ComposerContextAndConnectorsTests: XCTestCase {
             XCTAssertEqual(list != nil, carries, harness.rawValue)
         }
         XCTAssertEqual(AgentToolInjectionRoute.route(for: .antigravityCLI), .acpSessionMCPServers)
-        XCTAssertNil(ComposerSessionOptionsProjection.make(harness: .pi, session: nil, providerCapabilities: nil,
+        XCTAssertNil(ComposerSessionOptionsProjection.make(harness: .museCode, session: nil, providerCapabilities: nil,
                                                            providerUsage: nil, isAttached: true).connectors)
+        XCTAssertNotNil(ComposerSessionOptionsProjection.make(harness: .pi, session: nil, providerCapabilities: nil,
+                                                              providerUsage: nil, isAttached: true).connectors)
         XCTAssertNotNil(ComposerSessionOptionsProjection.make(harness: .openCode, session: nil, providerCapabilities: nil,
                                                               providerUsage: nil, isAttached: true).connectors)
     }
