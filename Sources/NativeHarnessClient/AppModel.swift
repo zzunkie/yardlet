@@ -7295,15 +7295,18 @@ final class AppModel {
         let key = "\(sessionID.uuidString):\(status.rawValue)" + (requestID.map { ":\($0)" } ?? "")
         guard notifiedBackgroundStates.insert(key).inserted else { return }
 
+        // What the request asks, in the words a phone's notification has for it, so "Allow once" says what it allows.
+        let asking = request == nil ? nil : AppModelRemoteBridge.requestSummary(of: session, in: self)
+            .flatMap(\.summary).map { "\(session.title): \($0)" }
         let title: String
         let body: String
         switch status {
         case .waitingForApproval where kind == .question:
             title = L10n.string("Task has a question")
-            body = L10n.format("%@ is waiting for your answer.", session.title)
+            body = asking ?? L10n.format("%@ is waiting for your answer.", session.title)
         case .waitingForApproval:
             title = L10n.string("Task needs your attention")
-            body = L10n.format("%@ is waiting for approval.", session.title)
+            body = asking ?? L10n.format("%@ is waiting for approval.", session.title)
         case .completed:
             title = L10n.string("Task completed")
             body = L10n.format("%@ finished.", session.title)

@@ -434,6 +434,7 @@ final class NotificationRoutingTests: XCTestCase {
         XCTAssertTrue(approval.offersAllowOnce)
         XCTAssertEqual(approval.identifier, "yardlet-session-\(session.id.uuidString)-waitingForApproval-bash-1")
         XCTAssertEqual(approval.title, L10n.string("Task needs your attention"))
+        XCTAssertEqual(approval.body, "Claude approvals: Use Bash: swift test", "It says what \"Allow once\" allows")
         XCTAssertTrue(approval.showsWhileActive, "\"Allow once\" answers it while Yardlet is in front")
 
         await model.respond(to: "bash-1", decision: .deny, in: session)
@@ -447,6 +448,7 @@ final class NotificationRoutingTests: XCTestCase {
         ])))
         let question = try await waitForPost(in: center, count: 2)
         XCTAssertEqual(question.target.requestID, "question-1")
+        XCTAssertEqual(question.body, "Claude approvals: Which layout?")
         XCTAssertFalse(question.offersAllowOnce)
 
         await model.respond(
