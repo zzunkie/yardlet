@@ -140,12 +140,15 @@ final class BrowserDevToolsClient {
             let params = value["params"] ?? .null
             let session = value["sessionId"]?.stringValue
             followFrameSessions(method, params, from: session)
-            // `Runtime.bindingCalled` from any attached session goes to the vault observer alone, with the session id
-            // the CDP envelope carried (a page's own script cannot write that id). The observer refuses an event from
-            // a session whose chain is not same-site to the main frame, so a cross-site OOPIF cannot push a save or a
-            // typed-secret notice onto the main frame.
+            // `Runtime.bindingCalled` from any attached session goes to the vault observer with the session id the
+            // CDP envelope carried (a page's own script cannot write that id); the observer refuses an event from a
+            // session whose chain is not same-site to the main frame, so a cross-site OOPIF cannot push a save or a
+            // typed-secret notice onto the main frame. The tab's own session (`session == nil`) also continues to
+            // reach the generic event observers, so `RemoteTabCopies` and the tests that watch for a binding keep
+            // seeing it. OOPIF events stay isolated to the vault callback and never enter `events`/`eventLog`.
             if method == "Runtime.bindingCalled" {
                 onVaultBinding?(params, session)
+                if session == nil { eventObservers.values.forEach { $0(method, params) } }
                 return
             }
             guard session == nil else { return }

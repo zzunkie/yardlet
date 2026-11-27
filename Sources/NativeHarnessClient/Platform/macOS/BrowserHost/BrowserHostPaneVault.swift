@@ -237,8 +237,11 @@ extension BrowserHostPaneController {
         guard let data = payload.data(using: .utf8),
               let fields = try? JSONDecoder().decode([String: String].self, from: data) else { return }
         if let session {
-            Task { @MainActor [weak self] in
-                guard let self, await self.isSameSiteOOPIF(session: session, on: tab) else { return }
+            Task { @MainActor [weak self, weak tab] in
+                // A late event that arrives after the panel switched to another tab goes nowhere: the handlers below
+                // read `self.tab`, so an event for a tab the panel no longer shows would land on the wrong page.
+                guard let self, let tab, self.tab === tab,
+                      await self.isSameSiteOOPIF(session: session, on: tab) else { return }
                 self.handleWatchFields(fields, on: tab)
             }
             return
