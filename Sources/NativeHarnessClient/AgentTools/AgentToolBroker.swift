@@ -423,9 +423,23 @@ final class AgentToolBroker: AgentToolLaunchProviding {
             return await tools.run(tool: call.tool, arguments: JSONValue(call.arguments), sessionID: sessionID)
         }
         if TaskSuggestionToolCatalog.definition(named: call.tool) != nil, let suggestions {
+            // `spawn_task` draws its chip from the harness's direct tool call (ConversationTaskSuggestionProjection);
+            // a call wrapped in `run_yardlet_script` leaves no such call for the projection to find, so the chip
+            // never appears. Refuse the wrapped call instead of answering as if a chip were up.
+            // `dismiss_task` writes to `TaskSuggestionStore` and is unaffected by the wrapper.
+            if origin == .wrapped, call.tool == TaskSuggestionToolCatalog.spawnTask {
+                return .failure("spawn_task must be called directly (not inside run_yardlet_script) so its "
+                    + "suggestion chip appears in the conversation.", .invalidArguments, retry: .withChanges)
+            }
             return await suggestions.callTaskSuggestionTool(named: call.tool, arguments: call.arguments, sessionID: sessionID)
         }
         if WidgetToolCatalog.definition(named: call.tool) != nil, offersWidget(to: sessionID) {
+            // `show_widget` draws its view from the harness's direct tool call (ConversationWidgetProjection); a
+            // wrapped call leaves no such call, so the view never appears. Refuse it.
+            if origin == .wrapped {
+                return .failure("show_widget must be called directly (not inside run_yardlet_script) so its view "
+                    + "appears in the conversation.", .invalidArguments, retry: .withChanges)
+            }
             return Self.showWidget(call.arguments)
         }
         if SessionToolCatalog.definition(named: call.tool) != nil || SettingsToolCatalog.definition(named: call.tool) != nil,
@@ -606,13 +620,18 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         let vaultDefinitions = browserOn && vault?.offersTool == true ? [VaultToolCatalog.tool] : []
         let simulatorUsable = simulatorToolsByTask[sessionID] == true && simulators?.simulatorPlatformIsUsable == true
         let simulatorDefinitions = simulatorUsable ? SimulatorToolCatalog.tools : []
-        let suggestionDefinitions = suggestions == nil ? [] : TaskSuggestionToolCatalog.tools
-        let widgetDefinitions = offersWidget(to: sessionID) ? [WidgetToolCatalog.tool] : []
+        // `spawn_task` and `show_widget` draw UI from the harness's direct tool call (ConversationTaskSuggestionProjection,
+        // ConversationWidgetProjection), so a call wrapped in `run_yardlet_script` leaves no record for the projection
+        // and no chip or view appears. They are left out of the Code Mode search so the agent calls them by name.
+        // `dismiss_task` writes to `TaskSuggestionStore` directly, so it stays in the search.
+        let suggestionDefinitions = suggestions == nil
+            ? []
+            : TaskSuggestionToolCatalog.tools.filter { $0.name != TaskSuggestionToolCatalog.spawnTask }
         let sessionDefinitions = sessions == nil ? [] : (SessionToolCatalog.tools + SettingsToolCatalog.tools)
         let terminalDefinitions = sessions != nil && sharesTerminal() ? [TerminalToolCatalog.tool] : []
         let scheduleDefinitions = schedules == nil ? [] : ScheduleToolCatalog.tools
         let core = (browserDefinitions + vaultDefinitions + simulatorDefinitions + suggestionDefinitions
-            + widgetDefinitions + sessionDefinitions + terminalDefinitions + scheduleDefinitions).map(\.json)
+            + sessionDefinitions + terminalDefinitions + scheduleDefinitions).map(\.json)
         let connectorTools = await filteredConnectorTools(for: sessionID)
         return core + connectorTools
     }

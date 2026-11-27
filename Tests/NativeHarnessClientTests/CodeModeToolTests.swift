@@ -322,6 +322,80 @@ final class CodeModeToolTests: XCTestCase {
         XCTAssertEqual(timedOut.structuredContent?["error"]?["retry"]?.stringValue, AgentToolFailure.Retry.afterChecking.rawValue)
     }
 
+    func testCodeModeRefusesWrappedSpawnTaskAndShowWidgetAndLeavesThemOutOfSearch() async throws {
+        let stub = ExperimentConnectorProvider(toolCount: 5)
+        let (broker, sessionID, token, _) = try makeBroker(codeMode: .on, connectors: stub,
+                                                            connectorScope: ConnectorTaskScope(harness: .claudeCode))
+        let suggestions = RecordingSuggestions()
+        broker.suggestions = suggestions
+
+        // 1. `spawn_task` and `show_widget` are listed as direct tools (the harness draws the chip/view from the call).
+        let rawList = await broker.list(AgentToolCall(
+            token: token, session: sessionID.uuidString, tool: "",
+            arguments: .object([:]), method: AgentToolCall.listMethod
+        ))
+        let listed = try XCTUnwrap(rawList)
+        let names = Set(listed.tools.compactMap { $0["name"]?.stringValue })
+        XCTAssertTrue(names.contains(TaskSuggestionToolCatalog.spawnTask))
+        XCTAssertTrue(names.contains(WidgetToolCatalog.showWidget))
+        XCTAssertTrue(names.contains(CodeModeToolCatalog.runScript))
+
+        // 2. `search_yardlet_tools` leaves `spawn_task` and `show_widget` out so the agent doesn't try them via the script.
+        //    `dismiss_task` stays, because it writes to the store directly and works through the wrapper.
+        let summary = try json(of: await broker.handle(AgentToolCall(
+            token: token, session: sessionID.uuidString, tool: CodeModeToolCatalog.searchTools,
+            arguments: .object([:])
+        )))
+        let searchNames = Set((summary["tools"] as? [[String: Any]] ?? []).compactMap { $0["name"] as? String })
+        XCTAssertFalse(searchNames.contains(TaskSuggestionToolCatalog.spawnTask),
+                       "spawn_task must not surface in search_yardlet_tools; it only works as a direct call.")
+        XCTAssertFalse(searchNames.contains(WidgetToolCatalog.showWidget),
+                       "show_widget must not surface in search_yardlet_tools; it only works as a direct call.")
+        XCTAssertTrue(searchNames.contains(TaskSuggestionToolCatalog.dismissTask))
+
+        // 3. `callTool('spawn_task', ...)` inside a script answers `{isError: true, text: "...must be called
+        //    directly..."}`; the suggestion handler is never called. The script itself succeeded, so the harness
+        //    result is not an error — the refusal lives in the script's output.
+        let spawnCode = """
+        const result = callTool('spawn_task', { title: 'try', prompt: 'x', tldr: 'y' });
+        return result;
+        """
+        let spawnFromScript = await broker.handle(AgentToolCall(
+            token: token, session: sessionID.uuidString, tool: CodeModeToolCatalog.runScript,
+            arguments: .object(["code": .string(spawnCode)])
+        ))
+        XCTAssertFalse(spawnFromScript.isError, text(of: spawnFromScript))
+        let spawnText = text(of: spawnFromScript)
+        XCTAssertTrue(spawnText.contains("spawn_task must be called directly"),
+                      "expected refusal text in the script output: \(spawnText)")
+        XCTAssertTrue(spawnText.contains("\"isError\":true"))
+
+        // 4. `callTool('show_widget', ...)` inside a script is refused too.
+        let widgetCode = """
+        return callTool('show_widget', { title: 'x', widget_code: '<p>hi</p>' });
+        """
+        let widgetFromScript = await broker.handle(AgentToolCall(
+            token: token, session: sessionID.uuidString, tool: CodeModeToolCatalog.runScript,
+            arguments: .object(["code": .string(widgetCode)])
+        ))
+        XCTAssertFalse(widgetFromScript.isError, text(of: widgetFromScript))
+        let widgetText = text(of: widgetFromScript)
+        XCTAssertTrue(widgetText.contains("show_widget must be called directly"),
+                      "expected refusal text in the script output: \(widgetText)")
+        XCTAssertTrue(widgetText.contains("\"isError\":true"))
+
+        // The suggestions handler never saw a spawn_task call (the wrapper refused before dispatch).
+        XCTAssertEqual(suggestions.spawnCalls, 0)
+
+        // 5. A direct `spawn_task` call still reaches the handler, which answers normally.
+        let direct = await broker.handle(AgentToolCall(
+            token: token, session: sessionID.uuidString, tool: TaskSuggestionToolCatalog.spawnTask,
+            arguments: .object(["title": .string("try"), "prompt": .string("x"), "tldr": .string("y")])
+        ))
+        XCTAssertFalse(direct.isError, text(of: direct))
+        XCTAssertEqual(suggestions.spawnCalls, 1)
+    }
+
     func testAntigravityCompactScopeUsesCodeModeWhenEnabled() async throws {
         let stub = ExperimentConnectorProvider(toolCount: 15)
         let scope = ConnectorTaskScope(harness: .antigravityCLI)
@@ -397,6 +471,15 @@ final class CodeModeToolTests: XCTestCase {
 
     private func text(of result: AgentToolResult) -> String {
         result.content.compactMap { if case let .text(t) = $0 { return t }; return nil }.joined(separator: "\n")
+    }
+}
+
+@MainActor
+private final class RecordingSuggestions: TaskSuggestionToolHandling {
+    var spawnCalls = 0
+    func callTaskSuggestionTool(named name: String, arguments: ToolJSON, sessionID: UUID) async -> AgentToolResult {
+        if name == TaskSuggestionToolCatalog.spawnTask { spawnCalls += 1 }
+        return .text(TaskSuggestionToolCatalog.notedResult(taskID: "task_test", place: nil))
     }
 }
 

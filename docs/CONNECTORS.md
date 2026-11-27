@@ -592,7 +592,9 @@ as before. Both carry `alwaysLoad`, so Claude Code loads them with the prompt ra
 - `run_yardlet_script` runs a JavaScript function body in JavaScriptCore, with no file system, network or timers, whose
   `callTool(name, arguments)` calls a connector or Yardlet tool, up to 20 calls in 30 seconds by default (60 at most).
   Each call is checked and, where the task asks, asked about as a direct call is, and the script's result has keys and
-  tokens hidden.
+  tokens hidden. `spawn_task` and `show_widget` draw their chip and view from the harness's direct tool call, so the
+  script's `callTool` refuses them and `search_yardlet_tools` leaves them out: the agent calls each by its own name so
+  the conversation renders them.
 
 `Auto` decides per task, from its harness and the number of connector tools it is offered: never in Codex or Pi, which
 run their own code mode (Pi reaches an MCP server's tools from its `codemode` scripts by default); in Claude Code from 30 connector tools (`CodeModePreference.claudeCodeConnectorToolThreshold`), since
