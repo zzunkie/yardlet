@@ -18,6 +18,12 @@ final class StructuredHeadlessAdapterTests: XCTestCase {
         let arguments = StructuredHeadlessFlavor.cursor.arguments(prompt: "--force", providerSessionID: "chat")
         XCTAssertFalse(arguments.contains("--force"))
         XCTAssertTrue(arguments.contains("\n--force"))
+        // Cursor's own trust flag comes only with the person's answer, and before the prompt.
+        XCTAssertEqual(
+            StructuredHeadlessFlavor.cursor.arguments(prompt: "hello", providerSessionID: "chat", trustsWorkspace: true)
+                .suffix(2),
+            ["--trust", "hello"]
+        )
     }
 
     func testRuntimeProbeDeclaresTheSameCapabilitiesAsTheCompatibilityManifest() async throws {
@@ -98,6 +104,69 @@ final class StructuredHeadlessAdapterTests: XCTestCase {
 
         await adapter.close(handle)
         collector.cancel()
+    }
+
+    /// Cursor's print mode refuses a folder nobody trusted; the person answers its question on the card, and
+    /// only a "trust" answer runs the message again, with Cursor's own `--trust`.
+    func testCursorAsksToTrustTheFolderAndRunsTheMessageOnlyOnceTrusted() async throws {
+        let fixture = try makeFixtureExecutable(flavor: .cursor)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let log = fixture.executable.appendingPathExtension("log")
+        let adapters: [any HarnessAdapter] = [
+            StructuredHeadlessAdapter(kind: .cursorAgent, executableURL: fixture.executable),
+            await HarnessRegistry().adapter(for: .cursorAgent, executableURL: fixture.executable)
+        ]
+        for adapter in adapters {
+            try? FileManager.default.removeItem(at: log)
+            let handle = try await adapter.createSession(CreateHarnessSessionRequest(
+                localSessionID: UUID(), workspaceURL: fixture.root, initialPrompt: nil))
+            let recorder = HeadlessPayloadRecorder()
+            let collector = Task {
+                for await event in await adapter.events(for: handle) { await recorder.append(event.payload) }
+            }
+            defer { collector.cancel() }
+            func requests() async -> [PermissionRequest] {
+                await recorder.payloads.compactMap {
+                    if case let .permissionRequested(request) = $0 { request } else { nil }
+                }
+            }
+
+            try await adapter.send("needs-trust", to: handle)
+            try await waitUntil { await requests().count == 1 }
+            let firstRequests = await requests()
+            let declined = try XCTUnwrap(firstRequests.first)
+            XCTAssertEqual(declined.actions.map(\.decision), [.allow, .deny])
+            XCTAssertTrue(declined.detail?.contains(fixture.root.path(percentEncoded: false)) == true)
+            try await adapter.respond(to: declined.id, decision: .deny, in: handle)
+            try await waitUntil { await recorder.payloads.contains(.sessionStatusChanged(.ready)) }
+            let afterDeclining = await recorder.payloads
+            XCTAssertFalse(afterDeclining.contains { if case .error = $0 { true } else { false } })
+
+            // A new message replaces the one waiting on the question.
+            try await adapter.send("needs-trust", to: handle)
+            try await waitUntil { await requests().count == 2 }
+            let secondRequests = await requests()
+            let replaced = try XCTUnwrap(secondRequests.last)
+            let completedBefore = await recorder.payloads.filter { $0 == .turnCompleted }.count
+            try await adapter.send("hello", to: handle)
+            try await waitUntil { await recorder.payloads.filter { $0 == .turnCompleted }.count == completedBefore + 1 }
+            let afterReplacing = await recorder.payloads
+            XCTAssertTrue(afterReplacing.contains(.permissionExpired(replaced.id)))
+
+            try await adapter.send("needs-trust", to: handle)
+            try await waitUntil { await requests().count == 3 }
+            let thirdRequests = await requests()
+            let trusted = try XCTUnwrap(thirdRequests.last)
+            try await adapter.respond(to: trusted.id, decision: .allow, in: handle)
+            try await waitUntil { await recorder.payloads.filter { $0 == .turnCompleted }.count == completedBefore + 2 }
+
+            let runs = try String(contentsOf: log, encoding: .utf8).split(separator: "\n")
+                .filter { $0.hasSuffix("needs-trust") }
+            XCTAssertEqual(runs.count, 4)
+            XCTAssertEqual(runs.filter { $0.contains("--trust") }.count, 1)
+            XCTAssertTrue(runs.last?.contains("--trust") == true)
+            await adapter.close(handle)
+        }
     }
 
     func testCursorCreateChatReadsAnIdentifierWrittenLateAcrossSeveralWrites() async throws {
@@ -698,6 +767,12 @@ final class StructuredHeadlessAdapterTests: XCTestCase {
                 printf '%s\\n' "$$" > "$0.pid"
                 sh -c 'printf "%s\\n" "$$" > "$1"; exec sleep 30' sh "$0.child"
                 exit 0
+                ;;
+              needs-trust)
+                case " $* " in
+                  *" --trust "*) ;;
+                  *) printf '%s\\n' 'Workspace Trust Required' >&2; exit 1 ;;
+                esac
                 ;;
               fail)
                 printf '%s\\n' 'fixture headless failure' >&2

@@ -10,8 +10,9 @@ enum HarnessProtocolCompatibilityManifest {
     static func structuredHeadless(_ kind: HarnessKind) -> HarnessAdapterManifest {
         precondition(kind == .cursorAgent)
         var capabilities = Array(HarnessAdapterManifestValidator.requiredCapabilities)
-        // Cursor's stream-json carries no plan payload, so the headless adapter declares no plans.
-        capabilities += [.sessionResume, .turnInterrupt, .structuredActivities, .reasoning, .usage]
+        // Cursor's stream-json carries no plan payload, so the headless adapter declares no plans. Its one
+        // permission request is Cursor's folder trust question (`StructuredHeadlessAdapter.workspaceTrustRequest`).
+        capabilities += [.sessionResume, .turnInterrupt, .structuredPermissions, .structuredActivities, .reasoning, .usage]
         return HarnessAdapterManifest(
             adapterID: "com.yardlet.compat.structured-headless.\(kind.rawValue)",
             harness: kind,

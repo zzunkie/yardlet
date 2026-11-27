@@ -21,6 +21,10 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding {
     private var activitiesBySessionID: [UUID: [String: HarnessActivity]] = [:]
     private var optionsByLocalSessionID: [UUID: StructuredHeadlessSessionOptions] = [:]
     private var modelChoicesByLocalSessionID: [UUID: [ProviderCapabilityChoice]] = [:]
+    /// Each session's last prompt, run again once the person trusts the folder.
+    private var promptsBySessionID: [UUID: String] = [:]
+    /// The trust question each session waits on (`workspaceTrustRequest`).
+    private var trustRequestsBySessionID: [UUID: String] = [:]
 
     init(
         kind: HarnessKind,
@@ -59,7 +63,8 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding {
             capabilities: HarnessCapabilities(
                 canResume: true,
                 canInterrupt: true,
-                hasStructuredPermissions: false,
+                // Its one request is Cursor's own folder trust question.
+                hasStructuredPermissions: true,
                 hasStructuredActivities: true,
                 hasPlans: false,
                 acceptsImages: false,
@@ -107,6 +112,14 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding {
     }
 
     func send(_ prompt: String, to session: HarnessSessionHandle) async throws {
+        // A new message stands in for the one waiting on the trust question; it asks again if it must.
+        if let request = trustRequestsBySessionID.removeValue(forKey: session.localSessionID) {
+            emit(.permissionExpired(request), for: session.localSessionID)
+        }
+        try await startTurn(prompt, in: session, trustsWorkspace: false)
+    }
+
+    private func startTurn(_ prompt: String, in session: HarnessSessionHandle, trustsWorkspace: Bool) async throws {
         await LoginShellPath.ready()
         guard handles[session.localSessionID] != nil else {
             throw HarnessAdapterError.invalidProviderEvent(
@@ -130,6 +143,7 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding {
         terminalSessionIDs.remove(session.localSessionID)
         stderrBySessionID.removeValue(forKey: session.localSessionID)
         completeOwnedActivities(for: session.localSessionID)
+        promptsBySessionID[session.localSessionID] = prompt
 
         let process = Process()
         let stdoutPipe = Pipe()
@@ -141,7 +155,8 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding {
         process.arguments = flavor.arguments(
             prompt: prompt,
             providerSessionID: providerSessionID,
-            options: optionsByLocalSessionID[session.localSessionID] ?? .init()
+            options: optionsByLocalSessionID[session.localSessionID] ?? .init(),
+            trustsWorkspace: trustsWorkspace
         )
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
@@ -185,17 +200,34 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding {
     }
 
     func interrupt(_ session: HarnessSessionHandle) async throws {
+        if let request = trustRequestsBySessionID.removeValue(forKey: session.localSessionID) {
+            emit(.permissionExpired(request), for: session.localSessionID)
+            emit(.sessionStatusChanged(.ready), for: session.localSessionID)
+            return
+        }
         guard let process = processes[session.localSessionID], process.isRunning else { return }
         interruptedSessionIDs.insert(session.localSessionID)
         // A print-mode turn is the process itself and has no cancel request of its own.
         NativeProcessTree.interrupt(process: process)
     }
 
+    /// Answers Cursor's folder trust question: trusted, the same message runs again with `--trust` (Cursor then
+    /// records the folder, as its own app does when the person trusts it there); not trusted, it does not run.
     func respond(
         to permissionRequestID: String,
         decision: PermissionDecision,
         in session: HarnessSessionHandle
     ) async throws {
+        if trustRequestsBySessionID[session.localSessionID] == permissionRequestID {
+            trustRequestsBySessionID.removeValue(forKey: session.localSessionID)
+            guard decision == .allow, let prompt = promptsBySessionID[session.localSessionID] else {
+                // As when the person quits Cursor's own question: the message does not run, and the card says why.
+                emit(.sessionStatusChanged(.ready), for: session.localSessionID)
+                return
+            }
+            try await startTurn(prompt, in: session, trustsWorkspace: true)
+            return
+        }
         throw HarnessAdapterError.capabilityUnavailable(
             L10n.string("This headless runtime does not expose structured permission responses")
         )
@@ -314,6 +346,8 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding {
         activitiesBySessionID.removeValue(forKey: session.localSessionID)
         optionsByLocalSessionID.removeValue(forKey: session.localSessionID)
         modelChoicesByLocalSessionID.removeValue(forKey: session.localSessionID)
+        promptsBySessionID.removeValue(forKey: session.localSessionID)
+        trustRequestsBySessionID.removeValue(forKey: session.localSessionID)
         eventChannel.close(session.localSessionID)
     }
 
@@ -401,6 +435,13 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding {
             return
         }
         terminalSessionIDs.remove(localSessionID)
+        if Self.asksForWorkspaceTrust(detail), let folder = handles[localSessionID]?.workspaceURL {
+            let request = "cursor-workspace-trust-\(UUID().uuidString.lowercased())"
+            trustRequestsBySessionID[localSessionID] = request
+            emit(.permissionRequested(Self.workspaceTrustRequest(id: request, folder: folder)), for: localSessionID)
+            emit(.sessionStatusChanged(.waitingForApproval), for: localSessionID)
+            return
+        }
         emit(
             .error(
                 message: detail.isEmpty
@@ -411,6 +452,30 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding {
             for: localSessionID
         )
         emit(.sessionStatusChanged(.failed), for: localSessionID)
+    }
+
+    /// Cursor's print mode refuses a folder the person has not trusted, before any model request, with the
+    /// question its interactive mode would ask ("Workspace Trust Required", 2026.11.13).
+    nonisolated static func asksForWorkspaceTrust(_ stderr: String) -> Bool {
+        stderr.contains("Workspace Trust Required")
+    }
+
+    /// Cursor's own question on Yardlet's card. Cursor's terminal offers "Trust this workspace" and "Quit";
+    /// trusting here is the same answer, and Cursor keeps it for the folder.
+    nonisolated static func workspaceTrustRequest(id: String, folder: URL) -> PermissionRequest {
+        PermissionRequest(
+            id: id,
+            title: L10n.string("Trust this folder in Cursor?"),
+            detail: L10n.format(
+                "Cursor Agent can run code and access files in %@. It runs there only once you trust the folder's contents, and remembers your answer for the folder.",
+                folder.path(percentEncoded: false)),
+            command: nil,
+            actions: [
+                PermissionRequestAction(id: "trust", text: LocalizedText("Trust this folder"), decision: .allow, kind: nil),
+                PermissionRequestAction(id: "quit", text: LocalizedText("Don't trust"), decision: .deny, kind: "reject_once")
+            ],
+            requiresInAppAnswer: true
+        )
     }
 
     private func remember(_ payload: HarnessEventPayload, for localSessionID: UUID) {

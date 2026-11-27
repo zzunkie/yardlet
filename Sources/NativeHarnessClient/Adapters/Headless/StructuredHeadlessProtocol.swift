@@ -10,10 +10,13 @@ enum StructuredHeadlessFlavor: Equatable, Sendable {
         }
     }
 
+    /// `trustsWorkspace` adds Cursor's `--trust`, which records the folder as trusted; it is passed only after
+    /// the person answered Cursor's trust question on its card (`StructuredHeadlessAdapter`).
     func arguments(
         prompt: String,
         providerSessionID: String,
-        options: StructuredHeadlessSessionOptions = .init()
+        options: StructuredHeadlessSessionOptions = .init(),
+        trustsWorkspace: Bool = false
     ) -> [String] {
         // The prompt is one argument among the CLI's options. One that began with "-" would be read as an
         // option, so it goes behind a line break, which changes nothing in what it asks.
@@ -30,6 +33,7 @@ enum StructuredHeadlessFlavor: Equatable, Sendable {
             if let mode = options.mode { arguments += ["--mode", mode] }
             if options.reviewPolicy == "auto-review" { arguments.append("--auto-review") }
             if let sandbox = options.sandbox { arguments += ["--sandbox", sandbox] }
+            if trustsWorkspace { arguments.append("--trust") }
             arguments.append(prompt)
             return arguments
         }
