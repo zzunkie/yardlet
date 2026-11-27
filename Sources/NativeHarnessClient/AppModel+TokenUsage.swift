@@ -59,7 +59,7 @@ extension AppModel {
             defaults[harness] = names[AccountChoice.nativeID(for: harness)]
         }
         var turns: [String: [ScheduledTurn]] = [:]
-        for (taskID, taskTurns) in scheduledTasks.turns(inTasks: Set(providers.keys)) {
+        for (taskID, taskTurns) in scheduledTasks.turns(inTasks: Set(providers.keys), turnStarts: submissionStartedAt) {
             if let provider = providers[taskID] { turns[provider, default: []] += taskTurns }
         }
         return TokenUsageLedger.Attribution(accounts: accounts, defaults: defaults, scheduledTurns: turns)

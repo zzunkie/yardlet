@@ -269,7 +269,8 @@ final class ScheduledTaskTests: XCTestCase {
         try await model.store.updateSession(id: target.id, status: .running)
         await model.turnEnded(target.id, as: .completed, cause: .providerStatus, at: date(17, 0, 4))
         XCTAssertEqual(model.scheduledTasks.schedules.first?.state.runs.first?.endedAt, date(17, 0, 4))
-        let ended = [target.id: [ScheduledTurn(scheduleID: schedule.id, start: run.at, end: date(17, 0, 4))]]
+        let ended = [target.id: [ScheduledTurn(scheduleID: schedule.id, start: run.at, end: date(17, 0, 4),
+                                               lateness: ScheduledTaskCenter.turnEndGrace)]]
         XCTAssertEqual(model.scheduledTasks.turns(inTasks: [target.id]), ended)
         XCTAssertEqual(told, 2)
 
@@ -318,7 +319,8 @@ final class ScheduledTaskTests: XCTestCase {
         try await model.store.updateSession(id: task, status: .running)
         await model.turnEnded(task, as: .completed, cause: .providerStatus, at: date(17, 13))
         XCTAssertEqual(model.scheduledTasks.turns(inTasks: [task]),
-                       [task: [ScheduledTurn(scheduleID: schedule.id, start: run.at, end: quickEnd)]],
+                       [task: [ScheduledTurn(scheduleID: schedule.id, start: run.at, end: quickEnd,
+                                             lateness: ScheduledTaskCenter.turnEndGrace)]],
                        "The person's turn after it is not the run's")
         await model.shutdown()
     }
@@ -348,6 +350,51 @@ final class ScheduledTaskTests: XCTestCase {
         await model.turnEnded(target.id, as: .completed, cause: .providerStatus, at: date(17, 1))
         XCTAssertNil(model.scheduledTasks.schedules.first?.state.runs.first?.endedAt)
         XCTAssertEqual(model.scheduledTasks.turns(inTasks: [target.id]), [:], "The person's turn is not the run's")
+        await model.shutdown()
+    }
+
+    /// A CLI may stamp its last line a moment after it says the turn ended, and the transcripts are read a little
+    /// later still, when the run already keeps its end. A request stamped up to two seconds past a run's turn counts for
+    /// the run, but never past the start of the task's next turn: the person's, or another run's.
+    func testARequestStampedJustAfterARunsTurnCountsUntilTheNextTurn() async throws {
+        let clock = Clock(date(16, 20))
+        let model = makeModel(clock: clock)
+        let project = model.projects.ensureProject(forRoot: try folder("issues"))
+        let target = try await model.store.createSession(
+            harness: .openCode, workspaceURL: project.primaryRoot, runtimeExecutableURL: URL(filePath: "/tmp/opencode"),
+            title: "Release watch", projectID: project.id)
+        model.scheduledTasks.create(ScheduledTask(
+            name: "Heartbeat", prompt: "Any new failures since last time?",
+            trigger: .interval(hours: 2, anchor: date(16, 22), days: []),
+            destination: ScheduleDestination(mode: .continueTask, harness: .openCode, targetTaskID: target.id)))
+        let schedule = try XCTUnwrap(model.scheduledTasks.schedules.first)
+        clock.now = date(17, 0, 0, 10)
+        await model.scheduledTasks.checkDue()
+        let end = date(17, 0, 4)
+        try await model.store.updateSession(id: target.id, status: .running)
+        await model.turnEnded(target.id, as: .completed, cause: .providerStatus, at: end)
+        let provider = try XCTUnwrap(model.store.sessions.first { $0.id == target.id }?.providerSessionID)
+        func endedTurn() throws -> ScheduledTurn {
+            try XCTUnwrap(model.tokenUsageAttribution(for: [provider]).scheduledTurns[provider]?.first { $0.end == end })
+        }
+        func counts(_ seconds: TimeInterval) throws -> Bool { try endedTurn().contains(end.addingTimeInterval(seconds)) }
+
+        XCTAssertTrue(try counts(1), "Stamped a second after the turn ended")
+        XCTAssertFalse(try counts(3), "Past the grace")
+
+        // The person's next turn starts half a second after: the grace stops there.
+        model.submissionStartedAt[target.id] = end.addingTimeInterval(0.5)
+        XCTAssertTrue(try counts(0.4))
+        XCTAssertFalse(try counts(1), "The person's next turn's own request")
+        model.submissionStartedAt[target.id] = nil
+
+        // The next run's turn in the same task starts a second after: the grace stops there too.
+        clock.now = end.addingTimeInterval(1)
+        await model.scheduledTasks.runNow(schedule.id)
+        XCTAssertEqual(model.scheduledTasks.schedules.first?.state.runs.count, 2)
+        XCTAssertFalse(try counts(1.5))
+        XCTAssertEqual(model.tokenUsageAttribution(for: [provider]).scheduledTurns[provider]?
+            .first { $0.contains(end.addingTimeInterval(1.5)) }?.end, nil, "It is the next run's, which runs")
         await model.shutdown()
     }
 

@@ -227,8 +227,11 @@ struct ScheduledTurn: Equatable, Sendable {
     let start: Date
     /// Nil while the turn runs.
     let end: Date?
+    /// How long after `end` a request stamped then still counts: a CLI may stamp its last line a moment after it says
+    /// the turn ended. Never into the task's next turn (`ScheduledTaskCenter.turns(inTasks:turnStarts:)`).
+    var lateness: TimeInterval = 0
 
     func contains(_ date: Date) -> Bool {
-        date >= start && end.map { date <= $0 } ?? true
+        date >= start && end.map { date <= $0.addingTimeInterval(lateness) } ?? true
     }
 }

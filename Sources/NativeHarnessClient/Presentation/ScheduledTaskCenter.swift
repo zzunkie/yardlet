@@ -91,10 +91,15 @@ final class ScheduledTaskCenter {
         })
     }
 
+    /// How long after a run's turn ended a request stamped then still counts for the turn: a CLI may stamp its last
+    /// line a moment after it says the turn ended, and the transcripts are read when the run already keeps its end.
+    static let turnEndGrace: TimeInterval = 2
+
     /// The turns schedules' runs started in these tasks: those that ended, as their runs keep them, and the
     /// one each task runs now. Token usage counts a task's requests in them for their schedules; the person's
-    /// own turns in the same task are left out.
-    func turns(inTasks taskIDs: Set<UUID>) -> [UUID: [ScheduledTurn]] {
+    /// own turns in the same task are left out. A turn that ended takes requests stamped up to `turnEndGrace` after
+    /// its end, but never from the task's next turn: another run's, or the latest the task started (`turnStarts`).
+    func turns(inTasks taskIDs: Set<UUID>, turnStarts: [UUID: Date] = [:]) -> [UUID: [ScheduledTurn]] {
         guard !taskIDs.isEmpty else { return [:] }
         var turns: [UUID: [ScheduledTurn]] = [:]
         for schedule in schedules {
@@ -107,6 +112,17 @@ final class ScheduledTaskCenter {
         // A turn whose run is not recorded yet.
         for (taskID, turn) in runningTurns where turn.runID == nil && taskIDs.contains(taskID) {
             turns[taskID, default: []].append(ScheduledTurn(scheduleID: turn.scheduleID, start: turn.start, end: turn.endedAt))
+        }
+        for (taskID, list) in turns {
+            turns[taskID] = list.map { turn in
+                guard let end = turn.end else { return turn }
+                var until = end.addingTimeInterval(Self.turnEndGrace)
+                for later in list where later.start >= end { until = min(until, later.start) }
+                if let started = turnStarts[taskID], started > end { until = min(until, started) }
+                var late = turn
+                late.lateness = max(0, until.timeIntervalSince(end))
+                return late
+            }
         }
         return turns
     }
