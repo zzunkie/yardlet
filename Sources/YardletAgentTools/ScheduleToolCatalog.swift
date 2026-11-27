@@ -89,9 +89,9 @@ package enum ScheduleToolCatalog {
     }
 
     package static func unsupportedCron(_ expression: String) -> String {
-        "Yardlet cannot repeat \"\(expression)\". It takes five fields in local time for a time every day or "
-            + "on some weekdays (\"30 9 * * 1-5\"), or every N hours where N divides 24 (\"0 */6 * * *\"); "
-            + "fireAt makes one run."
+        "Yardlet cannot repeat \"\(expression)\". It takes five fields in local time for a minute at one or more "
+            + "hours every day or on some weekdays (\"30 9 * * 1-5\", \"55 9-17/2 * * 1-5\"), or every N hours where "
+            + "N divides 24 (\"0 */6 * * *\"); fireAt makes one run."
     }
 
     // MARK: - Schemas
@@ -141,9 +141,9 @@ package enum ScheduleToolCatalog {
         Key.name: property("string", "The name in Scheduled tasks, in any language. Defaults to the prompt's "
             + "first words."),
         Key.prompt: property("string", "The first message of each run. A run has no memory of this conversation."),
-        Key.cronExpression: property("string", "A repeating schedule: five cron fields in local time, a time "
-            + "every day or on some weekdays (\"0 9 * * *\", \"30 8 * * 1-5\"), or every N hours where N divides "
-            + "24 (\"0 */6 * * *\"). Not with fireAt."),
+        Key.cronExpression: property("string", "A repeating schedule: five cron fields in local time, a minute at "
+            + "one or more hours every day or on some weekdays (\"0 9 * * *\", \"30 8 * * 1-5\", \"55 9-17/2 * * 1-5\"), "
+            + "or every N hours where N divides 24 (\"0 */6 * * *\"). Not with fireAt."),
         Key.fireAt: property("string", "One run at an ISO 8601 time with offset, such as "
             + "\"2026-10-18T09:00:00+09:00\". Not with cronExpression."),
         Key.continueTaskID: property("string", "Each run is the next message of this task, \"self\" or a task id "

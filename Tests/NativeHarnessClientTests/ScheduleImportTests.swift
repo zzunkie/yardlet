@@ -161,10 +161,22 @@ final class ScheduleImportTests: XCTestCase {
                        seoul.date(from: DateComponents(year: 2026, month: 10, day: 17, hour: 12, minute: 5)),
                        "Hours divisible by six, at five past")
         XCTAssertNotNil(OtherAppScheduleImport.cronTrigger("0 * * * *"))
-        XCTAssertNil(OtherAppScheduleImport.cronTrigger("0 */5 * * *"), "Five does not divide a day")
-        XCTAssertNil(OtherAppScheduleImport.cronTrigger("0 9,17 * * *"))
         XCTAssertNil(OtherAppScheduleImport.cronTrigger("0 9 * 1 *"))
         XCTAssertNil(OtherAppScheduleImport.cronTrigger("*/15 * * * *"), "More than once an hour")
+        XCTAssertNil(OtherAppScheduleImport.cronTrigger("0,30 9 * * *"), "Twice in an hour")
+
+        // An hour list or range is one schedule at each of its hours, at the minute.
+        func at(_ hours: Int..., minute: Int = 0) -> [ScheduleTime] { hours.map { ScheduleTime(hour: $0, minute: minute) } }
+        XCTAssertEqual(OtherAppScheduleImport.cronTrigger("0 9,17 * * *"), .daily(at(9, 17)))
+        XCTAssertEqual(OtherAppScheduleImport.cronTrigger("55 9-17/2 * * 1-5"),
+                       .weekly(days: ScheduleWeekday.weekdays, times: at(9, 11, 13, 15, 17, minute: 55)))
+        XCTAssertEqual(OtherAppScheduleImport.cronTrigger("30 8-10,14 * * *"), .daily(at(8, 9, 10, 14, minute: 30)))
+        XCTAssertEqual(OtherAppScheduleImport.cronTrigger("0 17,9,9 * * *"), .daily(at(9, 17)), "Earliest first, once each")
+        XCTAssertEqual(OtherAppScheduleImport.cronTrigger("0 */5 * * *"), .daily(at(0, 5, 10, 15, 20)),
+                       "Five hours do not divide a day, so cron's hours divisible by five are times of day")
+        for unreadable in ["0 9-25 * * *", "0 17-9 * * *", "0 9,,17 * * *", "0 9-17/0 * * *", "0 9/2 * * *", "0 9- * * *"] {
+            XCTAssertNil(OtherAppScheduleImport.cronTrigger(unreadable), unreadable)
+        }
     }
 
     func testASkillFileWithoutFrontmatterIsAllPrompt() {

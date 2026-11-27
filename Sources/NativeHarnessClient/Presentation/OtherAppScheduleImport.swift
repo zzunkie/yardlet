@@ -113,30 +113,55 @@ enum OtherAppScheduleImport {
         return ClaudePermissionMode.selectable.contains(mode) ? mode : nil
     }
 
-    /// A five-field cron expression in local time, where Yardlet has the same trigger: a time every
-    /// day or on some weekdays, or every N hours (N dividing a day). Anything else is nil.
+    /// A five-field cron expression in local time, where Yardlet has the same trigger: a minute at one
+    /// or more hours every day or on some weekdays ("55 9-17/2 * * 1-5"), or every N hours (`*` or `*/N`,
+    /// N dividing a day). Anything else is nil.
     static func cronTrigger(_ expression: String, calendar: Calendar = .autoupdatingCurrent) -> ScheduleTrigger? {
         let fields = expression.split(whereSeparator: \.isWhitespace).map(String.init)
         guard fields.count == 5, fields[2] == "*", fields[3] == "*",
               let minute = Int(fields[0]), (0...59).contains(minute),
               let days = cronDays(fields[4]) else { return nil }
         let hour = fields[1]
-        if let hour = Int(hour), (0...23).contains(hour) {
-            let time = ScheduleTime(hour: hour, minute: minute)
-            return days == ScheduleWeekday.everyDay ? .daily(time) : .weekly(days: days, time: time)
-        }
         let step: Int
         if hour == "*" {
             step = 1
         } else if hour.hasPrefix("*/"), let value = Int(hour.dropFirst(2)), value > 0, 24 % value == 0 {
             step = value
         } else {
-            return nil
+            guard let hours = cronHours(hour) else { return nil }
+            let times = hours.map { ScheduleTime(hour: $0, minute: minute) }
+            return days == ScheduleWeekday.everyDay ? .daily(times) : .weekly(days: days, times: times)
         }
         // Cron's hours divisible by N: counted from a midnight, at the minute.
         let anchor = calendar.date(bySettingHour: 0, minute: minute, second: 0,
                                    of: calendar.startOfDay(for: Date(timeIntervalSince1970: 0))) ?? Date(timeIntervalSince1970: 0)
         return .interval(hours: step, anchor: anchor, days: days == ScheduleWeekday.everyDay ? [] : days)
+    }
+
+    /// Cron's hour field as the hours it names, earliest first: numbers 0–23, ranges, a step after a range
+    /// or `*` ("9-17/2", "*/5"), and lists of them ("8,12-14").
+    static func cronHours(_ field: String) -> [Int]? {
+        var hours = Set<Int>()
+        for part in field.split(separator: ",", omittingEmptySubsequences: false) {
+            let pieces = part.split(separator: "/", omittingEmptySubsequences: false)
+            guard pieces.count <= 2 else { return nil }
+            let range = pieces[0]
+            var bounds = 0...23
+            if range != "*" {
+                let ends = range.split(separator: "-", omittingEmptySubsequences: false)
+                guard ends.count <= 2, let start = Int(ends[0]), let end = Int(ends[ends.count - 1]),
+                      0 <= start, start <= end, end <= 23 else { return nil }
+                bounds = start...end
+            }
+            var step = 1
+            if pieces.count == 2 {
+                // As in cron, a step follows a range or `*`: "9/2" is not one.
+                guard range == "*" || range.contains("-"), let value = Int(pieces[1]), value > 0 else { return nil }
+                step = value
+            }
+            hours.formUnion(stride(from: bounds.lowerBound, through: bounds.upperBound, by: step))
+        }
+        return hours.isEmpty ? nil : hours.sorted()
     }
 
     /// Cron's day-of-week field: `*`, numbers 0–7 (0 and 7 are Sunday), names, lists and ranges.
