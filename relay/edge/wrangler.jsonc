@@ -6,9 +6,17 @@
   "name": "yardlet-edge",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-19",
-  // The two appcast routes take effect only while yardlet.app's DNS record is proxied through Cloudflare; the
+  // The site and appcast routes take effect only while yardlet.app's DNS record is proxied through Cloudflare; the
   // download host is a Custom Domain, which makes its own record.
   "routes": [
+    { "pattern": "yardlet.app/", "zone_name": "yardlet.app" },
+    { "pattern": "yardlet.app/index.html", "zone_name": "yardlet.app" },
+    { "pattern": "yardlet.app/changelog.html", "zone_name": "yardlet.app" },
+    { "pattern": "yardlet.app/privacy.html", "zone_name": "yardlet.app" },
+    { "pattern": "yardlet.app/support.html", "zone_name": "yardlet.app" },
+    { "pattern": "yardlet.app/terms.html", "zone_name": "yardlet.app" },
+    { "pattern": "yardlet.app/blog", "zone_name": "yardlet.app" },
+    { "pattern": "yardlet.app/blog/*", "zone_name": "yardlet.app" },
     { "pattern": "yardlet.app/appcast.xml", "zone_name": "yardlet.app" },
     { "pattern": "yardlet.app/appcast-x86_64.xml", "zone_name": "yardlet.app" },
     { "pattern": "dl.yardlet.app", "custom_domain": true }
