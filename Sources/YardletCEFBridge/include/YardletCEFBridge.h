@@ -97,7 +97,13 @@ typedef enum {
     /// The main frame's navigation sends its request (on_before_browse let it through, also for a redirect): the
     /// page's beforeunload handlers have returned, and Chromium holds DevTools calls to the page until the
     /// navigation ends. No text: the address may carry what the page filled in.
-    YardletCEFEventNavigationRequest = 32
+    YardletCEFEventNavigationRequest = 32,
+    /// number: what the page's focused field takes (in any frame): 0 no text, 1 text, 2 a password, 3 an
+    /// email address, 4 a URL, 5 a telephone number, 6 digits, 7 a decimal number, 8 a search, by its type
+    /// or `inputmode`. Sent when that changes, and when focus moves into a text field (detail "1"), so focus
+    /// that goes from one text field to another is told too. YardletCEFEventPasswordField still says a
+    /// password field on its own.
+    YardletCEFEventEditableField = 33
 } YardletCEFEvent;
 
 /// What a frame's renderer says of its page (YardletCEFHelper's PageState.c names the same flags).

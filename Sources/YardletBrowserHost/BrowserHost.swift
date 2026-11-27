@@ -663,6 +663,8 @@ final class BrowserHost {
             send(["dragOperation": ["tab": tab, "operations": Int(value)]])
         case YardletCEFEventPasswordField.rawValue:
             send(["passwordField": ["tab": tab, "isFocused": value != 0]])
+        case YardletCEFEventEditableField.rawValue:
+            send(["editableField": ["tab": tab, "kind": Int(value), "focusMoved": detail == "1"]])
         case YardletCEFEventCursor.rawValue:
             send(["cursor": ["tab": tab, "cursor": Self.cursorName(value)]])
         default:

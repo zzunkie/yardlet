@@ -48,7 +48,7 @@ Yardlet.app
 | macOS layer | `Sources/NativeHarnessClient/Platform/macOS/BrowserHost/` | `CEFBrowserHostProcess` (process, pipes, IOSurface receiving), `MacBrowserHost` (the app's single client), `BrowserHostView` (layers, input, IME, drag and drop, menus), `BrowserSecureInput` (secure input and input source limits for password fields), `BrowserHostPane` (SwiftUI panel), `BrowserKeyCodes`, `BrowserAccessibilityBridge` and `BrowserAccessibilityElement` (VoiceOver) |
 | Mach exchange | `Sources/YardletSurfacePort/` | bootstrap check-in/look-up, sending and receiving IOSurface ports, audit token checks (C) |
 | CEF accessibility processing | `Sources/YardletCEFAccessibility/` | `CEFAccessibilityReducer`: CEF accessibility values → the contract's small shape. It uses only Foundation, so it is tested without CEF |
-| Host | `Sources/YardletBrowserHost/`, `Sources/YardletCEFBridge/`, `Sources/YardletCEFHelper/` | CEF initialization and handlers, frame copying, command handling, accessibility forwarding (`AccessibilityForwarder`), the renderer's password field notices (`FocusedField.c`). Compiled only when `YARDLET_CEF_DIR` is set |
+| Host | `Sources/YardletBrowserHost/`, `Sources/YardletCEFBridge/`, `Sources/YardletCEFHelper/` | CEF initialization and handlers, frame copying, command handling, accessibility forwarding (`AccessibilityForwarder`), the renderer's focused field notices (`FocusedField.c`). Compiled only when `YARDLET_CEF_DIR` is set |
 
 Transport is a 4-byte length + JSON over the host's standard input (commands) and standard output (events). The JSON is
 Swift Codable's default form `{"<case>": {<fields>}}`, and `BrowserHostProtocolTests` pins its shape. As soon as it
@@ -245,10 +245,16 @@ change and when Yardlet quits (`StateFileWriter`). Chromium's own `History` in e
   154's windowless view does not give the browser process the kind of the focused field (`on_virtual_keyboard_requested`
   gives only `inputmode`, and only when the input method is brought up). So the Helper's renderer handler
   (`YardletCEFHelper/FocusedField.c`) sends a process message whenever a frame's focus changes
-  (`on_focused_node_changed`, the standard CEF path cefclient uses for editable-field notices), saying whether the newly
-  focused element is a password field, and the host emits a `passwordField` event for each tab only when the value
-  changes. When a new document comes into the main frame (or the frame that had the password field), the host turns the
-  state off and asks that renderer for the field focused now. This is because a page restored from the back-forward
+  (`on_focused_node_changed`, the standard CEF path cefclient uses for editable-field notices), saying what the newly
+  focused element takes: no text (buttons, checkboxes, selects, date pickers, disabled or read-only fields), a password
+  (`<input type=password>`, whatever its `inputmode`), or text and the keyboard it asks for by its type or `inputmode`
+  (`email`, `url`, `tel`, `numeric`, `decimal`, `search`; `contenteditable` is text). The host emits a `passwordField`
+  event for each tab only when its password state changes, and an `editableField` event (`kind`, and `focusMoved` when
+  focus went into a text field) when the kind changes or focus moves into a text field, which a remote device uses
+  to raise its keyboard (docs/REMOTE_PROTOCOL.md, "15.25 A task's browser tabs"). When a new document comes into the
+  main frame (or the frame that had the focused field), the host turns the state off and asks that renderer for the
+  field focused now. Only the frame that holds the focused field clears it: focus that moves into another frame's field
+  can be told before the old frame's blur. A removed iframe that held the focused field clears it as it detaches. This is because a page restored from the back-forward
   cache comes back with focus in a field and reports no focus change. Reports from frames a new document replaced
   (`is_valid` false) are dropped, and the state turns off when the renderer ends. The tab holds the last value and uses
   it when the panel shows it again.

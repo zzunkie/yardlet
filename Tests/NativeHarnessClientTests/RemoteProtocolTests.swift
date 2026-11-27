@@ -415,12 +415,37 @@ final class RemoteProtocolTests: XCTestCase {
         let tabs = #"""
         {"re": "40", "ok": true, "taskId": "4C1F…", "tabId": "9B21…",
          "tabs": [{"tabId": "9B21…", "title": "Sign in to GitHub", "url": "https://github.com/login", "active": true,
-                   "waiting": "handoff", "requestId": "h", "reason": "Sign in", "passwordField": true}]}
+                   "waiting": "handoff", "requestId": "h", "reason": "Sign in", "passwordField": true,
+                   "editableField": true, "inputMode": "password", "editableFocusCount": 2}]}
         """#
         let watching = try JSONDecoder().decode(RemoteResponse.self, from: Data(tabs.utf8))
         XCTAssertEqual(watching.tabs, [RemoteBrowserTab(tabId: "9B21…", title: "Sign in to GitHub", url: "https://github.com/login",
                                                         active: true, waiting: "handoff", requestId: "h", reason: "Sign in",
-                                                        passwordField: true)])
+                                                        passwordField: true, editableField: true, inputMode: "password",
+                                                        editableFocusCount: 2)])
+        // An older Mac's tab, with none of the focused field's words, still decodes.
+        let older = try JSONDecoder().decode(RemoteBrowserTab.self, from: Data(#"{"tabId": "9B21…", "passwordField": true}"#.utf8))
+        XCTAssertNil(older.editableField)
+        XCTAssertNil(older.editableFocusCount)
+    }
+
+    /// §15.25 "What a phone needs": the keyboard comes up when a text field takes focus, again when the count goes up,
+    /// and goes down when the field loses focus; where the Mac says nothing of the field, the person's keyboard stays.
+    func testAPhonesKeyboardFollowsTheWatchedTabsFocusedField() {
+        func state(_ tab: String = "a", editable: Bool?, count: Int? = nil) -> RemoteTabKeyboard {
+            RemoteTabKeyboard(RemoteBrowserTab(tabId: tab, editableField: editable, editableFocusCount: count))
+        }
+        let change = RemoteTabKeyboard.change
+        XCTAssertEqual(change(state(editable: nil), state(editable: true, count: 1)), .raise)
+        XCTAssertEqual(change(nil, state(editable: true, count: 4)), .raise, "a tab first seen with a focused field")
+        XCTAssertNil(change(state(editable: true, count: 1), state(editable: true, count: 1)), "the same focus")
+        XCTAssertEqual(change(state(editable: true, count: 1), state(editable: true, count: 2)), .raise,
+                       "another field, or a tap in the same one, after the person put the keyboard away")
+        XCTAssertEqual(change(state(editable: true, count: 2), state(editable: nil)), .dismiss)
+        XCTAssertNil(change(state(editable: nil), state(editable: nil)), "an older Mac: the keyboard stays as the person left it")
+        XCTAssertEqual(change(state("a", editable: true, count: 3), state("b", editable: true, count: 1)), .raise)
+        XCTAssertEqual(change(state("a", editable: true, count: 3), state("b", editable: nil)), .dismiss)
+        XCTAssertEqual(change(state(editable: true, count: 3), nil), .dismiss)
     }
 
     /// §15.22 and §15.27 as the contract writes them: the reads read and write back the same JSON and are not commands,

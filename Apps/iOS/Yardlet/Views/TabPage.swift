@@ -277,29 +277,53 @@ final class TabPageView: UIView, UIGestureRecognizerDelegate {
 @MainActor
 final class TabTyping {
     fileprivate weak var field: TabTypingTextField?
+    /// A keyboard asked for and not yet up; an end, a clear or another ask cancels it.
+    private var raiseTask: Task<Void, Never>?
 
     /// What the field holds goes to the page now, composing or not, and the field empties: a tap moves on.
     func commit() { field?.commitAll() }
 
     /// Empties the field without sending what it holds: another tab, or the page's field changed.
-    func clear() { field?.clear() }
+    func clear() {
+        raiseTask?.cancel()
+        field?.clear()
+    }
 
-    /// What was typed goes to the page, and the keyboard goes down.
+    /// The keyboard comes up for the field, after the update under way has given the field the page field's kind (secure
+    /// or not, and its keyboard), so the keyboard that comes up is that one.
+    func beginTyping() {
+        raiseTask?.cancel()
+        raiseTask = Task { @MainActor [weak self] in
+            guard !Task.isCancelled, let field = self?.field, !field.isFirstResponder else { return }
+            field.becomeFirstResponder()
+        }
+    }
+
+    /// What was typed goes to the page, and the keyboard goes down. Only while the field has the keyboard: what it holds
+    /// otherwise was not meant for the page's field now.
     func endTyping() {
-        field?.commitAll()
-        field?.resignFirstResponder()
+        raiseTask?.cancel()
+        guard let field else { return }
+        if field.isFirstResponder {
+            field.commitAll()
+            field.resignFirstResponder()
+        } else {
+            field.clear()
+        }
     }
 }
 
-/// The phone's own field under the tab's picture (§15.25), a UIKit field so the keyboard's commits, its composition
+/// The phone's own field for typing into the tab's page (§15.25), drawn nowhere: what is typed shows on the page's
+/// picture, as the page's own field takes it. A UIKit field so the keyboard's commits, its composition
 /// (`markedTextRange`) and its keys can be told apart: committed text goes to the page as `text`, and Return, Backspace
-/// on an empty field and Tab as keys. While the page's focused field is a password field, it hides what it shows, takes
-/// no corrections or suggestions, and the keyboard learns nothing from it. It keeps nothing: emptied when it leaves the
-/// screen, and never saved.
+/// on an empty field and Tab as keys. It shows the keyboard the page's field asks for (`inputMode`). While the page's
+/// focused field is a password field, it hides what it holds, takes no corrections or suggestions, and the keyboard
+/// learns nothing from it. It keeps nothing: emptied when it leaves the screen, and never saved.
 struct TabTypingField: UIViewRepresentable {
     let typing: TabTyping
     let isPassword: Bool
-    let placeholder: String
+    /// The page field's `inputMode` (§15.25); nil for plain text.
+    let inputMode: String?
     let typed: (TypedText.Typed) -> Void
     let key: (String) -> Void
     /// Whether the keyboard is up for the field.
@@ -318,12 +342,20 @@ struct TabTypingField: UIViewRepresentable {
         field.key = key
         field.editingChanged = editing
         field.isPassword = isPassword
+        field.keyboard = Self.keyboardType(isPassword ? nil : inputMode)
         field.isEnabled = context.environment.isEnabled
-        if field.placeholder != placeholder {
-            // The placeholder in the palette's secondary words, which keep 4.5:1 where the system's grey does not.
-            field.attributedPlaceholder = NSAttributedString(string: placeholder, attributes: [
-                .foregroundColor: YardletPalette.onSurfaceVariantUIColor
-            ])
+    }
+
+    /// The phone's keyboard for the page field's `inputMode`, as a phone's browser picks it.
+    static func keyboardType(_ inputMode: String?) -> UIKeyboardType {
+        switch inputMode {
+        case "email": .emailAddress
+        case "url": .URL
+        case "tel": .phonePad
+        case "numeric": .numberPad
+        case "decimal": .decimalPad
+        case "search": .webSearch
+        default: .default
         }
     }
 
@@ -341,6 +373,14 @@ final class TabTypingTextField: UITextField, UITextFieldDelegate {
             guard isPassword != oldValue else { return }
             clear()
             isSecureTextEntry = isPassword
+            if isFirstResponder { reloadInputViews() }
+        }
+    }
+    /// A keyboard of another kind shows at once, as the page's focus moves.
+    var keyboard: UIKeyboardType = .default {
+        didSet {
+            guard keyboard != oldValue else { return }
+            keyboardType = keyboard
             if isFirstResponder { reloadInputViews() }
         }
     }

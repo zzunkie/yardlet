@@ -1926,6 +1926,81 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertEqual(signals.changes.count, told, "a tab no one watches tells nothing")
     }
 
+    /// §15.25 `editableField`: the host's word on the focused field lists the tab with the keyboard it asks for and tells
+    /// the list, and the count goes up for each focus that moves into a text field and for a tap that lands in the
+    /// focused one once it settles; a tap that blurs the field within that time does not count.
+    func testATextFieldThatTakesFocusIsListedForTheDevicesKeyboard() async throws {
+        let settle = RemoteTabBridge.tapSettle
+        RemoteTabBridge.tapSettle = .milliseconds(30)
+        defer { RemoteTabBridge.tapSettle = settle }
+        let task = SessionRecord(harness: .claudeCode, workspaceURL: URL(filePath: "/tmp/remote-bridge-keyboard", directoryHint: .isDirectory),
+                                 runtimeExecutableURL: URL(filePath: "/tmp/claude"), title: "Sign in")
+        let model = try Self.model(sessions: [task], transcripts: [:])
+        let connection = AnsweringHostConnection()
+        let client = BrowserHostClient(idleGrace: .seconds(60), agentVisibleWindow: .milliseconds(20)) { connection }
+        let bridge = AppModelRemoteBridge(model: model, browser: RemoteTabBridge.Environment(
+            client: { client }, usesMacEditingCommands: true, marksTypedSecrets: { true }))
+        let signals = SignalRecorder()
+        bridge.setChangeHandler { signals.record($0) }
+        let tab = try client.openTab(forSession: task.id, url: "https://github.com/login", viewport: .offscreenDefault)
+        connection.eventHandler?(.address(tab: tab.id, url: "https://github.com/login"))
+        let taskID = task.id.uuidString, tabID = tab.key.uuidString
+        await bridge.setWatchedTabs([RemoteTabWatch(taskID: taskID, tabID: tabID)])
+        func listed() async throws -> RemoteBrowserTab {
+            let tabs = try await bridge.browserTabs(taskID: taskID).get()
+            return try XCTUnwrap(tabs.first)
+        }
+        func told() -> Int { signals.changes.filter { $0 == .browserTabs(taskID) }.count }
+        func focus(_ field: BrowserEditableField?, moved: Bool = true) {
+            connection.eventHandler?(.editableField(tab: tab.id, kind: field?.rawValue ?? 0, focusMoved: moved))
+        }
+        func tap() async {
+            let refusal = await bridge.tabInput(taskID: taskID, tabID: tabID, input: .click(x: 20, y: 20), permit: RemoteTabPermit())
+            XCTAssertNil(refusal)
+        }
+
+        var entry = try await listed()
+        XCTAssertNil(entry.editableField)
+        XCTAssertNil(entry.editableFocusCount)
+        let quiet = told()
+        focus(.email)
+        XCTAssertEqual(told(), quiet + 1, "the list is told")
+        entry = try await listed()
+        XCTAssertEqual([entry.editableField, entry.inputMode, entry.editableFocusCount] as [AnyHashable?], [true, "email", 1])
+        // Focus that moves to another text field raises the keyboard again; the host's answer about the same field does not.
+        focus(.text)
+        focus(.text, moved: false)
+        entry = try await listed()
+        XCTAssertEqual([entry.editableField, entry.inputMode, entry.editableFocusCount] as [AnyHashable?], [true, nil, 2])
+
+        // A tap that lands in the focused field counts once it settles.
+        await tap()
+        try await waitUntil { try await listed().editableFocusCount == 3 }
+        // A tap elsewhere blurs the field before it settles: nothing counts, and the list says no field.
+        await tap()
+        focus(nil)
+        try await Task.sleep(for: .milliseconds(120))
+        entry = try await listed()
+        XCTAssertNil(entry.editableField)
+        XCTAssertNil(entry.editableFocusCount)
+        XCTAssertNil(entry.inputMode)
+        // A tap with no text field focused counts nothing either.
+        await tap()
+        try await Task.sleep(for: .milliseconds(120))
+        XCTAssertEqual(tab.editableFocusCount, 3)
+
+        // A password field: the Mac's own flag for its secure input, and a text field with the password keyboard.
+        connection.eventHandler?(.passwordField(tab: tab.id, isFocused: true))
+        focus(.password)
+        entry = try await listed()
+        XCTAssertEqual([entry.passwordField, entry.editableField, entry.inputMode, entry.editableFocusCount] as [AnyHashable?],
+                       [true, true, "password", 4])
+        // The page's renderer ends: no field, and none listed.
+        connection.eventHandler?(.discarded(tab: tab.id))
+        entry = try await listed()
+        XCTAssertNil(entry.editableField)
+    }
+
     /// What a remote device may not do through a task's tab, each checked where the input is sent (the security review of
     /// §15.25): keys outside characters and the editing and moving keys, and every spelling of the clipboard's commands;
     /// typing into a password field the page cannot be marked for; anything once its watch ended, or while a Chromium
