@@ -1,7 +1,7 @@
 #!/bin/zsh
 # Signs an assembled Yardlet bundle from the inside out (docs/BROWSER_HOST.md §7): the CEF
 # framework's libraries, the framework, the helper apps, the browser host, Sparkle's helpers and
-# framework, the MCP server, the lid helper, the simulator host, then the app. Each bundle keeps the
+# framework, the MCP server, the lid helper, the simulator host, Yardlet Agents, then the app. Each bundle keeps the
 # identifier in its own Info.plist, so a QA copy under another identifier
 # (scripts/browser-host-qa/prepare-qa.sh) signs the same way.
 #
@@ -43,6 +43,7 @@ CEF_BINARY="$CEF_FRAMEWORK/Versions/A/Chromium Embedded Framework"
 MCP="$APP/Contents/Helpers/yardlet-mcp"
 LID_HELPER="$APP/Contents/Helpers/yardlet-lid-helper"
 SIMULATOR_HOST="$APP/Contents/Helpers/Yardlet Simulator Host.app"
+AGENT_HOST="$APP/Contents/Helpers/Yardlet Agents.app"
 LAUNCH_DAEMONS="$APP/Contents/Library/LaunchDaemons"
 SPARKLE="$APP/Contents/Frameworks/Sparkle.framework"
 
@@ -74,6 +75,7 @@ if [[ "$IDENTITY" == "-" ]]; then
     # The lid helper's identifier is its launchd label, which the app's XPC connection requires.
     [[ -f "$LID_HELPER" ]] && sign "$APP_IDENTIFIER.lid-helper" "$LID_HELPER" --identifier "$APP_IDENTIFIER.lid-helper"
     [[ -d "$SIMULATOR_HOST" ]] && sign "$(plist_value CFBundleIdentifier "$SIMULATOR_HOST/Contents/Info.plist")" "$SIMULATOR_HOST"
+    [[ -d "$AGENT_HOST" ]] && sign "$(plist_value CFBundleIdentifier "$AGENT_HOST/Contents/Info.plist")" "$AGENT_HOST"
     # Its launch constraint names a team, which an ad-hoc signature has none of: without the
     # property list this build offers no helper (LidSleepHelperIdentity.peerRequirement).
     /bin/rm -rf "$LAUNCH_DAEMONS"
@@ -217,6 +219,9 @@ fi
 # The simulator host needs no entitlement: SimulatorKit and CoreSimulator, which it opens from Xcode at run time, are
 # Apple's, so the hardened runtime's library validation takes them.
 [[ -d "$SIMULATOR_HOST" ]] && sign_runtime "$SIMULATOR_HOST"
+# Yardlet Agents is the process macOS holds responsible for the agents it starts, so it carries the privacy
+# entitlements their commands ask for (AgentHost.entitlements).
+[[ -d "$AGENT_HOST" ]] && sign_runtime --entitlements "$ENTITLEMENTS/AgentHost.entitlements" "$AGENT_HOST"
 # launchd starts the root lid helper only as signed by this team with its identifier (SpawnConstraint
 # in its property list), so a changed executable in the user's bundle does not run as root.
 for daemon in "$LAUNCH_DAEMONS"/*.plist(N); do

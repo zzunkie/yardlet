@@ -1,15 +1,15 @@
 /* The system's Bluetooth permission prompt for passkeys on a phone (WebAuthn hybrid). */
 "NSBluetoothAlwaysUsageDescription" = "Yardlet's built-in browser uses Bluetooth to sign in with a passkey from your phone or tablet.";
 "NSBluetoothPeripheralUsageDescription" = "Yardlet's built-in browser uses Bluetooth to sign in with a passkey from your phone or tablet.";
-/* Privacy prompts for commands Yardlet runs (harnesses, their tools, the terminal) and for its built-in browser's
-   browser host, which macOS attributes to Yardlet. */
-"NSAppleEventsUsageDescription" = "A command running in Yardlet, such as a harness's tool or a program in the terminal, wants to control another app.";
-"NSMicrophoneUsageDescription" = "Yardlet's built-in browser, when you allow a site to use the microphone, or a command running in Yardlet, such as a harness's voice dictation or a program in the terminal, wants to use the microphone.";
-"NSCameraUsageDescription" = "Yardlet's built-in browser, when you allow a site to use the camera, or a command running in Yardlet, such as a harness's tool or a program in the terminal, wants to use the camera.";
+/* Privacy prompts for programs in Yardlet's terminal and for its built-in browser's browser host, which macOS
+   attributes to Yardlet. Agents ask as Yardlet Agents or in their own name (Packaging/AgentHost). */
+"NSAppleEventsUsageDescription" = "A program in Yardlet's terminal wants to control another app.";
+"NSMicrophoneUsageDescription" = "Yardlet's built-in browser, when you allow a site to use the microphone, or a program in Yardlet's terminal wants to use the microphone.";
+"NSCameraUsageDescription" = "Yardlet's built-in browser, when you allow a site to use the camera, or a program in Yardlet's terminal wants to use the camera.";
 /* Privacy prompts for the Apple Calendar, Reminders, and Contacts connectors, asked once when the person turns one
-   on, and for commands Yardlet runs, which macOS attributes to Yardlet. */
-"NSCalendarsFullAccessUsageDescription" = "Yardlet's Apple Calendar connector, when you turn it on, lets your tasks read and change your calendars, or a command running in Yardlet wants to use them.";
-"NSRemindersFullAccessUsageDescription" = "Yardlet's Apple Reminders connector, when you turn it on, lets your tasks read and add reminders, or a command running in Yardlet wants to use them.";
-"NSContactsUsageDescription" = "Yardlet's Apple Contacts connector, when you turn it on, lets your tasks look up your contacts, or a command running in Yardlet wants to use them.";
+   on, and for programs in Yardlet's terminal, which macOS attributes to Yardlet. */
+"NSCalendarsFullAccessUsageDescription" = "Yardlet's Apple Calendar connector, when you turn it on, lets your tasks read and change your calendars, or a program in Yardlet's terminal wants to use them.";
+"NSRemindersFullAccessUsageDescription" = "Yardlet's Apple Reminders connector, when you turn it on, lets your tasks read and add reminders, or a program in Yardlet's terminal wants to use them.";
+"NSContactsUsageDescription" = "Yardlet's Apple Contacts connector, when you turn it on, lets your tasks look up your contacts, or a program in Yardlet's terminal wants to use them.";
 /* The Local Network prompt: Bonjour that lets a phone or another Mac find this one, and this Mac find a host it connects to. */
 "NSLocalNetworkUsageDescription" = "When remote connections are on, your phone or another Mac can find this Mac on the same network. When this Mac connects to another Mac, Yardlet looks for that Mac on the same network.";

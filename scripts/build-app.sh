@@ -132,6 +132,8 @@ swift_build --product yardlet-mcp
 swift_build --product yardlet-lid-helper
 # The helper that shows and drives iOS simulators through Xcode's SimulatorKit, which it opens at run time.
 swift_build --product YardletSimulatorHost
+# The helper that starts agents so macOS asks for their privacy permissions in their own name (README "Permissions").
+swift_build --product YardletAgentHost
 if [[ -n "$CEF_DIR" ]]; then
     swift_build --product YardletCEFHelper
     swift_build --product YardletBrowserHost
@@ -332,6 +334,22 @@ sed -e "s|@BUNDLE_IDENTIFIER@|$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdent
     -e "s|@BUNDLE_VERSION@|$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$CONTENTS_DIR/Info.plist")|g" \
     "$PROJECT_ROOT/Packaging/SimulatorHost-Info.plist" > "$SIMULATOR_HOST_APP/Contents/Info.plist"
 /usr/bin/plutil -lint -s "$SIMULATOR_HOST_APP/Contents/Info.plist"
+# Yardlet Agents, the app the agents Yardlet starts ask for privacy permissions as (AgentLaunch): no Dock icon or menu
+# bar, Yardlet's icon in the system's prompts, and its usage descriptions in Yardlet's languages. Its identifier is the
+# app's with ".agents", which the helper reads to know which app may start it.
+AGENT_HOST_APP="$HELPERS_DIR/Yardlet Agents.app"
+rm -rf "$AGENT_HOST_APP"
+mkdir -p "$AGENT_HOST_APP/Contents/MacOS" "$AGENT_HOST_APP/Contents/Resources"
+install_executable YardletAgentHost "$AGENT_HOST_APP/Contents/MacOS/Yardlet Agents"
+sed -e "s|@BUNDLE_IDENTIFIER@|$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$CONTENTS_DIR/Info.plist").agents|g" \
+    -e "s|@SHORT_VERSION@|$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$CONTENTS_DIR/Info.plist")|g" \
+    -e "s|@BUNDLE_VERSION@|$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$CONTENTS_DIR/Info.plist")|g" \
+    "$PROJECT_ROOT/Packaging/AgentHost/Info.plist" > "$AGENT_HOST_APP/Contents/Info.plist"
+/usr/bin/plutil -lint -s "$AGENT_HOST_APP/Contents/Info.plist"
+cp "$RESOURCES_DIR/AppIcon.icns" "$AGENT_HOST_APP/Contents/Resources/AppIcon.icns"
+for localization in "$PROJECT_ROOT/Packaging/AgentHost"/*.lproj(N); do
+    /usr/bin/ditto "$localization" "$AGENT_HOST_APP/Contents/Resources/${localization:t}"
+done
 
 # A previous CEF build must not leave Chromium inside a bundle built without it.
 if [[ -e "$FRAMEWORKS_DIR" ]]; then

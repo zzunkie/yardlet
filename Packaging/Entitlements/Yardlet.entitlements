@@ -3,22 +3,23 @@
 <plist version="1.0">
 <dict>
     <!-- macOS asks for a child process's privacy permissions on behalf of the app that launched it,
-         so the harnesses, their tools and the terminal ask as Yardlet. Under the hardened runtime,
-         tccd denies without asking when that app lacks the service's entitlement ("Deny for missing
-         Hardened Runtime Entitlement"). Each key pairs with a usage string in Info.plist. -->
+         so programs in the terminal ask as Yardlet; agents ask as Yardlet Agents or in their own name
+         (AgentHost.entitlements). Under the hardened runtime, tccd denies without asking when that app
+         lacks the service's entitlement ("Deny for missing Hardened Runtime Entitlement"). Each key
+         pairs with a usage string in Info.plist. -->
 
-    <!-- osascript and other Apple Events from commands: Claude Code declares it, and the Claude app
-         has it "so commands you run in Claude can control other apps". -->
+    <!-- osascript and other Apple Events from programs in the terminal, as the Claude app has it "so
+         commands you run in Claude can control other apps". -->
     <key>com.apple.security.automation.apple-events</key>
     <true/>
-    <!-- Claude Code's voice dictation (it declares the microphone) and programs in the terminal. -->
+    <!-- Programs in the terminal, and sites in the built-in browser, whose host macOS attributes to Yardlet. -->
     <key>com.apple.security.device.audio-input</key>
     <true/>
     <!-- Programs in the terminal, as VS Code, Cursor and cmux allow theirs; both harness apps have it. -->
     <key>com.apple.security.device.camera</key>
     <true/>
     <!-- The Apple Calendar, Reminders, and Contacts connectors (EventKit and Contacts in Yardlet itself,
-         asked once when the person turns one on), and commands that use them, as osascript to Calendar.
+         asked once when the person turns one on), and programs in the terminal that use them.
          Reminders come under calendars. -->
     <key>com.apple.security.personal-information.calendars</key>
     <true/>

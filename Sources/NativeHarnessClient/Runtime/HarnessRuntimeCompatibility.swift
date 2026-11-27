@@ -91,7 +91,7 @@ enum HarnessRuntimeVersionProbe {
         }
         process.standardOutput = pipe
         process.standardError = pipe
-        let exit = try ProcessExit(running: process)
+        let exit = try ProcessExit(running: process, asAgent: true)
         let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard exit.waitBlockingThread(timeout: .seconds(10)) else {

@@ -40,7 +40,7 @@ struct CLIVerificationProbe: CLIVerifying {
             let listed = await antigravity(executable)
             guard listed == .passed else { return listed }
             let version = await CLIProcess.run(CLICommand(executable: executable, arguments: ["--version"],
-                                                          timeout: CLIUpdatePlan.versionTimeout))
+                                                          timeout: CLIUpdatePlan.versionTimeout, asAgent: true))
             let reported = version.succeeded ? CLIVersion.parse(version.stdout + "\n" + version.stderr) : nil
             // Its tasks run only over `agy acp`, so a version before it cannot run them.
             if let reported, AntigravityTransport.isTooOld(reported) {
@@ -85,7 +85,7 @@ struct CLIVerificationProbe: CLIVerifying {
 
     private func claude(_ executable: URL) async -> CLIVerification {
         let version = await CLIProcess.run(CLICommand(executable: executable, arguments: ["--version"],
-                                                      timeout: CLIUpdatePlan.versionTimeout))
+                                                      timeout: CLIUpdatePlan.versionTimeout, asAgent: true))
         guard version.succeeded, CLIVersion.parse(version.stdout) != nil else {
             return .failed(L10n.format("--version failed: %@", version.failureSummary))
         }
@@ -112,7 +112,7 @@ struct CLIVerificationProbe: CLIVerifying {
             attributes: [.posixPermissions: 0o700])
         defer { try? FileManager.default.removeItem(at: folder) }
         let result = await CLIProcess.run(CLICommand(executable: executable, arguments: ["models"],
-                                                     environment: Self.antigravityCheckEnvironment, timeout: timeout),
+                                                     environment: Self.antigravityCheckEnvironment, timeout: timeout, asAgent: true),
                                           currentDirectory: folder)
         guard result.succeeded else { return .failed(result.failureSummary) }
         return StructuredHeadlessAdapter.catalogChoices(in: result.stdout).isEmpty
@@ -126,7 +126,7 @@ struct CLIVerificationProbe: CLIVerifying {
 
     private func acp(_ executable: URL, arguments: [String], environment overrides: [String: String] = [:]) async -> CLIVerification {
         let version = await CLIProcess.run(CLICommand(executable: executable, arguments: ["--version"],
-                                                      timeout: CLIUpdatePlan.versionTimeout))
+                                                      timeout: CLIUpdatePlan.versionTimeout, asAgent: true))
         guard version.succeeded else { return .failed(L10n.format("--version failed: %@", version.failureSummary)) }
         guard let line = try? ACPWireCodec().encodeLine(ACPProtocol.initialize(id: 1)) else {
             return .failed(L10n.string("Yardlet could not write its request"))

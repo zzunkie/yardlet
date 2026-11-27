@@ -1,0 +1,8 @@
+/* Yardlet이 실행하는 에이전트(하네스와 그 명령)의 개인정보 권한 창. macOS는 이를 Yardlet이 아니라 Yardlet Agents의 요청으로 본다. */
+"NSAppleEventsUsageDescription" = "Yardlet에서 실행 중인 에이전트나 에이전트가 실행한 명령이 다른 앱을 제어하려고 합니다.";
+"NSMicrophoneUsageDescription" = "Yardlet에서 실행 중인 에이전트나 에이전트가 실행한 명령이 마이크를 사용하려고 합니다.";
+"NSCameraUsageDescription" = "Yardlet에서 실행 중인 에이전트나 에이전트가 실행한 명령이 카메라를 사용하려고 합니다.";
+"NSCalendarsFullAccessUsageDescription" = "Yardlet에서 실행 중인 에이전트나 에이전트가 실행한 명령이 캘린더를 사용하려고 합니다.";
+"NSRemindersFullAccessUsageDescription" = "Yardlet에서 실행 중인 에이전트나 에이전트가 실행한 명령이 미리 알림을 사용하려고 합니다.";
+"NSContactsUsageDescription" = "Yardlet에서 실행 중인 에이전트나 에이전트가 실행한 명령이 연락처를 사용하려고 합니다.";
+"NSLocalNetworkUsageDescription" = "Yardlet에서 실행 중인 에이전트나 에이전트가 실행한 명령이 로컬 네트워크의 기기에 연결하려고 합니다.";

@@ -187,7 +187,7 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding {
             Task { await self?.processDidTerminate(process, for: session.localSessionID) }
         }
 
-        try NativeProcessTree.run(process)
+        try NativeProcessTree.run(process, asAgent: true)
         processes[session.localSessionID] = process
         emit(.sessionStatusChanged(.running), for: session.localSessionID)
         readerTasks[session.localSessionID] = Task { [weak self] in
@@ -552,7 +552,7 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding {
             exitStatus.continuation.yield(process.terminationStatus)
             exitStatus.continuation.finish()
         }
-        try NativeProcessTree.run(process)
+        try NativeProcessTree.run(process, asAgent: true)
         pipe.fileHandleForReading.readChunks(into: chunks.continuation)
 
         let timeout = cursorChatTimeout
@@ -725,7 +725,7 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding {
         // A listing command left holding an inherited input waits on it (CLI 1.1.23).
         process.standardInput = FileHandle.childNullDevice()
         process.environment = RuntimeProcessEnvironment.values(executableURL: executableURL, overrides: environment)
-        let exit = try ProcessExit(running: process)
+        let exit = try ProcessExit(running: process, asAgent: true)
         let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
         let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
         let ended = exit.waitBlockingThread(timeout: .seconds(10))

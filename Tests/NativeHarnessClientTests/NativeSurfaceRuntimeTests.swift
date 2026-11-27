@@ -2,6 +2,7 @@ import AppKit
 import Darwin
 import Foundation
 import os
+import Security
 import SwiftTerm
 import XCTest
 @testable import NativeHarnessClient
@@ -246,45 +247,122 @@ final class NativeSurfaceRuntimeTests: XCTestCase {
         XCTAssertEqual(errno, ESRCH)
     }
 
+    /// A process tree ends whole, whether its root started directly or as an agent through Yardlet Agents
+    /// (`AgentLaunch`), which macOS then holds responsible for the program and what it starts in place of Yardlet. Through
+    /// the helper the program runs with the arguments, environment and folder Yardlet gave it, its exit status and an
+    /// interrupt reach Yardlet as the program's own, and a program started in its own name (`--own`) is the process
+    /// Yardlet holds, responsible for itself. A helper Yardlet did not start runs nothing.
     func testNativeProcessTreeStopsWrapperDescendants() async throws {
-        let pidFile = FileManager.default.temporaryDirectory
-            .appending(path: "nhc-process-tree-\(UUID().uuidString).pid")
-        defer { try? FileManager.default.removeItem(at: pidFile) }
+        let helper = Bundle(for: Self.self).bundleURL.deletingLastPathComponent().appending(path: "YardletAgentHost")
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: helper.path), "the test target builds the helper")
+        // A program responsible for itself would ask macOS before it reads a protected folder such as Desktop, which
+        // may hold this checkout: these run in the temporary folder, and the shell finds no such folder in PWD.
+        let temporary = FileManager.default.temporaryDirectory
+        func agent(_ executable: String, _ arguments: [String], helper: URL?) throws -> Process {
+            let process = Process()
+            process.executableURL = URL(filePath: executable)
+            process.arguments = arguments
+            process.currentDirectoryURL = temporary
+            process.environment = ["PATH": "/usr/bin:/bin", "PWD": temporary.path(percentEncoded: false)]
+            try AgentLaunch.run(process, helper: helper)
+            return process
+        }
+        for agentHelper in [nil, helper] {
+            let pidFile = FileManager.default.temporaryDirectory
+                .appending(path: "nhc-process-tree-\(UUID().uuidString).pid")
+            defer { try? FileManager.default.removeItem(at: pidFile) }
 
-        let process = Process()
-        process.executableURL = URL(filePath: "/bin/sh")
-        process.arguments = ["-c", "sleep 120 & echo $! > \(pidFile.path); wait"]
-        try process.run()
-        defer {
-            if process.isRunning {
-                _ = NativeProcessTree.terminate(process: process)
+            let process = try agent("/bin/sh", ["-c", "sleep 120 & echo $! > \(pidFile.path); wait"], helper: agentHelper)
+            XCTAssertEqual(process.arguments?.first, agentHelper == nil ? "-c" : "--host", "/bin/sh asks as Yardlet Agents")
+            defer {
+                if process.isRunning {
+                    _ = NativeProcessTree.terminate(process: process)
+                }
             }
+
+            var childPID: pid_t?
+            let startDeadline = ContinuousClock.now + testWaitLimit
+            while childPID == nil, ContinuousClock.now < startDeadline {
+                if let value = try? String(contentsOf: pidFile, encoding: .utf8)
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                   let parsed = Int32(value), parsed > 0 {
+                    childPID = parsed
+                } else {
+                    try await Task.sleep(for: .milliseconds(25))
+                }
+            }
+
+            let descendantPID = try XCTUnwrap(childPID)
+            XCTAssertEqual(Darwin.kill(descendantPID, 0), 0)
+            XCTAssertEqual(DisclaimedSpawn.responsibleProcess(for: descendantPID),
+                           agentHelper == nil ? DisclaimedSpawn.responsibleProcess(for: getpid()) : process.processIdentifier)
+            let terminationStartedAt = ContinuousClock.now
+            let exitCode = NativeProcessTree.terminate(process: process)
+            XCTAssertLessThan(ContinuousClock.now - terminationStartedAt, .seconds(3))
+            XCTAssertFalse(process.isRunning)
+            XCTAssertEqual(exitCode, process.terminationStatus)
+
+            try await waitUntil { Darwin.kill(descendantPID, 0) != 0 }
+            errno = 0
+            XCTAssertEqual(Darwin.kill(descendantPID, 0), -1)
+            XCTAssertEqual(errno, ESRCH)
         }
 
-        var childPID: pid_t?
-        let startDeadline = ContinuousClock.now + testWaitLimit
-        while childPID == nil, ContinuousClock.now < startDeadline {
-            if let value = try? String(contentsOf: pidFile, encoding: .utf8)
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-               let parsed = Int32(value), parsed > 0 {
-                childPID = parsed
-            } else {
-                try await Task.sleep(for: .milliseconds(25))
+        let exiting = try agent("/bin/sh", ["-c", "test \"$PWD\" = \"$(pwd)\" && test \"$PATH\" = /usr/bin:/bin && exit 7"],
+                                helper: helper)
+        try await waitUntil { !exiting.isRunning }
+        XCTAssertEqual(exiting.terminationReason, .exit)
+        XCTAssertEqual(exiting.terminationStatus, 7, "the program ran in its own folder with its own environment")
+
+        let interrupted = try agent("/bin/sleep", ["120"], helper: helper)
+        defer { if interrupted.isRunning { NativeProcessTree.terminate(process: interrupted) } }
+        try await waitUntil { NativeProcessTree.descendantProcessIDs(of: interrupted.processIdentifier).count == 1 }
+        NativeProcessTree.interrupt(process: interrupted)
+        try await waitUntil { !interrupted.isRunning }
+        XCTAssertEqual(interrupted.terminationReason, .uncaughtSignal)
+        XCTAssertEqual(interrupted.terminationStatus, SIGINT)
+
+        let unasked = try agent(helper.path(percentEncoded: false), ["--host"], helper: nil)
+        try await waitUntil { !unasked.isRunning }
+        XCTAssertEqual(unasked.terminationStatus, 126, "a helper Yardlet did not start for a launch runs nothing")
+
+        let own = try agent(helper.path(percentEncoded: false), ["--own", "/bin/sleep", "120"], helper: nil)
+        defer { if own.isRunning { NativeProcessTree.terminate(process: own) } }
+        try await waitUntil { Self.executablePath(of: own.processIdentifier) == "/bin/sleep" }
+        XCTAssertEqual(DisclaimedSpawn.responsibleProcess(for: own.processIdentifier), own.processIdentifier)
+
+        // A process Yardlet started for a launch gets it only when it runs the code the launch was recorded for.
+        func ask(asCodeOf program: URL) throws -> String {
+            var code: SecStaticCode?
+            var requirement: SecRequirement?
+            XCTAssertEqual(SecStaticCodeCreateWithPath(program as CFURL, [], &code), errSecSuccess)
+            XCTAssertEqual(SecCodeCopyDesignatedRequirement(try XCTUnwrap(code), [], &requirement), errSecSuccess)
+            let asking = Process()
+            let input = Pipe()
+            let output = Pipe()
+            asking.executableURL = URL(filePath: "/usr/bin/nc")
+            asking.arguments = ["-U", try XCTUnwrap(AgentHostLaunches.socketPath(for: getpid()))]
+            asking.standardInput = input
+            asking.standardOutput = output
+            try AgentHostLaunches.shared.listen()
+            try AgentHostLaunches.shared.start(Data("launch".utf8), for: try XCTUnwrap(requirement)) {
+                try asking.run()
+                return asking.processIdentifier
             }
+            try input.fileHandleForWriting.write(contentsOf: Data([1]))
+            try input.fileHandleForWriting.close()
+            let answer = output.fileHandleForReading.readDataToEndOfFile()
+            asking.waitUntilExit()
+            return String(decoding: answer, as: UTF8.self)
         }
+        XCTAssertEqual(try ask(asCodeOf: URL(filePath: "/usr/bin/nc")), "launch")
+        XCTAssertEqual(try ask(asCodeOf: helper), "", "a process running other code than the helper's gets nothing")
+    }
 
-        let descendantPID = try XCTUnwrap(childPID)
-        XCTAssertEqual(Darwin.kill(descendantPID, 0), 0)
-        let terminationStartedAt = ContinuousClock.now
-        let exitCode = NativeProcessTree.terminate(process: process)
-        XCTAssertLessThan(ContinuousClock.now - terminationStartedAt, .seconds(3))
-        XCTAssertFalse(process.isRunning)
-        XCTAssertEqual(exitCode, process.terminationStatus)
-
-        try await waitUntil { Darwin.kill(descendantPID, 0) != 0 }
-        errno = 0
-        XCTAssertEqual(Darwin.kill(descendantPID, 0), -1)
-        XCTAssertEqual(errno, ESRCH)
+    private static func executablePath(of process: pid_t) -> String? {
+        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        guard proc_pidpath(process, &buffer, UInt32(buffer.count)) > 0 else { return nil }
+        return String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 
     /// Waiting for a child holds no thread. More waits than the concurrency pool has threads all

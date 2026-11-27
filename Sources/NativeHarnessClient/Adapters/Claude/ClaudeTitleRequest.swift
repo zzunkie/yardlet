@@ -37,7 +37,7 @@ enum ClaudeTitleRequest {
             process.environment = ClaudeProcessTransport.environment(
                 base: RuntimeProcessEnvironment.values(executableURL: executableURL),
                 overrides: environment.merging([thinkingBudget: "0"]) { _, new in new })
-            let exit = try ProcessExit(running: process)
+            let exit = try ProcessExit(running: process, asAgent: true)
 
             let timeoutTask = Task {
                 do { try await Task.sleep(for: timeout) } catch { return false }

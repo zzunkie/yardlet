@@ -1,0 +1,8 @@
+/* Yardlet が実行するエージェント（ハーネスとそのコマンド）のプライバシー許可ダイアログ。macOS はこれを Yardlet ではなく Yardlet Agents の要求とみなす。 */
+"NSAppleEventsUsageDescription" = "Yardlet 内で実行中のエージェント、またはエージェントが実行したコマンドが他のアプリを制御しようとしています。";
+"NSMicrophoneUsageDescription" = "Yardlet 内で実行中のエージェント、またはエージェントが実行したコマンドがマイクを使用しようとしています。";
+"NSCameraUsageDescription" = "Yardlet 内で実行中のエージェント、またはエージェントが実行したコマンドがカメラを使用しようとしています。";
+"NSCalendarsFullAccessUsageDescription" = "Yardlet 内で実行中のエージェント、またはエージェントが実行したコマンドがカレンダーを使用しようとしています。";
+"NSRemindersFullAccessUsageDescription" = "Yardlet 内で実行中のエージェント、またはエージェントが実行したコマンドがリマインダーを使用しようとしています。";
+"NSContactsUsageDescription" = "Yardlet 内で実行中のエージェント、またはエージェントが実行したコマンドが連絡先を使用しようとしています。";
+"NSLocalNetworkUsageDescription" = "Yardlet 内で実行中のエージェント、またはエージェントが実行したコマンドがローカルネットワーク上のデバイスに接続しようとしています。";

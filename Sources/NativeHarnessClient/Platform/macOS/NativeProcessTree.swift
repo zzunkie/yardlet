@@ -6,9 +6,15 @@ import Foundation
 /// signal, so cleanup snapshots and signals descendants directly before reaping the root.
 enum NativeProcessTree {
     /// Starts a process Yardlet may end with `terminate(process:)`. On macOS the tree is found when it
-    /// ends, so the process just runs; the Windows layer also puts it in a job object.
-    static func run(_ process: Process) throws {
-        try process.run()
+    /// ends, so the process just runs; the Windows layer also puts it in a job object. An agent (a harness, or a
+    /// local MCP server started for one) starts through `AgentLaunch`, so macOS asks for its privacy permissions in
+    /// its own name rather than giving it Yardlet's.
+    static func run(_ process: Process, asAgent: Bool = false) throws {
+        if asAgent {
+            try AgentLaunch.run(process, helper: AgentLaunch.helper)
+        } else {
+            try process.run()
+        }
     }
 
     /// Stops a process the way Control-C would, for a CLI whose turn is the process itself and that has no request

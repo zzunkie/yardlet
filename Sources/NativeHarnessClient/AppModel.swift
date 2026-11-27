@@ -4838,7 +4838,7 @@ final class AppModel {
         for pageIndex in 0..<CodexCloudTasks.pageLimit {
             let result = await codexCloudCommand(CLICommand(
                 executable: codex, arguments: CodexCloudTasks.arguments(cursor: cursor),
-                environment: ["CODEX_HOME": home], timeout: .seconds(30)))
+                environment: ["CODEX_HOME": home], timeout: .seconds(30), asAgent: true))
             guard !Task.isCancelled else { return }
             guard result.succeeded, let page = CodexCloudTasks.page(from: result.stdout) else {
                 // A first page that fails keeps the old list; a later one keeps the pages read.

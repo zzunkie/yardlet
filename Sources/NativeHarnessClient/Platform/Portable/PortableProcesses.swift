@@ -4,8 +4,9 @@ import Foundation
 /// it started is left to end with it. A platform's own layer also ends the descendants; the Windows
 /// app has its own (Platform/Windows/NativeProcessTree.swift).
 enum NativeProcessTree {
-    /// Starts a process Yardlet may end with `terminate(process:)`; here it just runs.
-    static func run(_ process: Process) throws {
+    /// Starts a process Yardlet may end with `terminate(process:)`; here it just runs. `asAgent` matters on the Mac
+    /// alone, where an agent asks for macOS's privacy permissions in its own name.
+    static func run(_ process: Process, asAgent: Bool = false) throws {
         try process.run()
     }
 

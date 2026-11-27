@@ -72,7 +72,8 @@ final class LineDelimitedProcessChannel: @unchecked Sendable {
             output.processExited(process.processIdentifier, code: process.terminationStatus, drainGrace: drainGrace)
         }
         do {
-            try NativeProcessTree.run(process)
+            // Every process a channel runs is an agent: a harness, or a local MCP server started for one.
+            try NativeProcessTree.run(process, asAgent: true)
         } catch {
             output.stopReading()
             throw error

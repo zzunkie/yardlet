@@ -138,6 +138,8 @@ remove Yardlet's own data as well:
   (browser profiles, staged updates). `brew uninstall --zap --cask zzunkie/tap/yardlet` removes
   these together with Yardlet's caches and preferences.
 - `~/Library/Logs/Yardlet`, which holds the hang log described under Privacy.
+- `Yardlet Agents` in your user cache folder (`open "$(getconf DARWIN_USER_CACHE_DIR)"`), the copy of the
+  helper agents run under.
 - In Keychain Access, the items whose name starts with `Yardlet` (connector sign-ins, the phone
   remote, the password vault), and `Chromium Safe Storage` if you do not use Chromium itself.
 - Yardlet's entries in **System Settings > Privacy & Security**.
@@ -175,22 +177,30 @@ Yardlet is not sandboxed. The agents it starts run as you, as they would in a te
 own approval and sandbox settings. Yardlet uses the access below only for the feature named, and
 macOS asks you the first time:
 
-- **Camera and microphone:** a site you allow in the built-in browser, or a command running in a
-  task, such as an agent's voice dictation or a program in the terminal.
+- **Camera and microphone:** a site you allow in the built-in browser, or a program in the terminal.
 - **Bluetooth and USB:** passkeys from your phone or tablet, and security keys, in the built-in
   browser.
-- **Automation (Apple Events):** a command running in a task that asks to control another app.
+- **Automation (Apple Events):** a program in the terminal that asks to control another app.
 - **Calendars, Reminders and Contacts:** the Apple Calendar, Reminders and Contacts connectors, once
   you turn them on.
 - **Local network:** your phone finding this Mac on the same Wi-Fi, when the phone remote is on.
 
-Three helpers in the app bundle do work outside the main process:
+Agents ask in their own name. The agents Yardlet starts, and the local MCP servers it starts for them,
+do not use the permissions you gave Yardlet: Claude Code asks as itself, as it does in the Claude app,
+and every other agent asks as **Yardlet Agents**, which carries the same kinds of access listed above for
+commands. macOS asks the first time an agent needs a permission, such as a project folder on your Desktop,
+and lists each under its own name in **System Settings > Privacy & Security**. Programs you run in the
+terminal ask as Yardlet, as they would in Terminal.
+
+Four helpers in the app bundle do work outside the main process:
 
 - **The browser host** runs the built-in Chromium (CEF) browser in its own processes, with its
   profiles under `~/Library/Application Support/Yardlet`.
 - **`yardlet-mcp`** is a small stdio MCP server that Yardlet adds to each agent session it starts,
   through that agent's per-session option, never its settings files. It forwards the agent's calls
   to browser tools, connectors and session tools to the running Yardlet over a local socket.
+- **Yardlet Agents** starts the agents (see above). It runs from a copy in your user cache folder, which
+  it checks against its own signature, and runs only what the Yardlet that started it asks for.
 - **The lid helper** runs only while **Settings > General > Keep tasks working with the lid closed**
   is on, which it is not by default. It is a launch daemon that runs as root, because the system
   setting that keeps a Mac awake with its lid closed needs it. It turns that setting on only while
@@ -395,9 +405,17 @@ YARDLET_SIGNING_IDENTITY="Developer ID Application: <name> (<team>)" ./scripts/b
   puts the stapled app beside a link to /Applications in a disk image (`--output <file.dmg>`), signs
   the image with the app's certificate, submits and staples it, and runs `spctl` on both.
 - Entitlements: the Renderer and GPU helpers `cs.allow-jit` (as Chrome's); the browser host Bluetooth
-  and USB for passkeys; the app Bluetooth for the host it launches, and Apple Events, microphone and
-  camera for the commands it runs (harnesses, their tools, the terminal), which macOS attributes to
-  Yardlet; each has its usage string in `Info.plist`.
+  and USB for passkeys; the app Bluetooth for the host it launches, and Apple Events, microphone,
+  camera, calendars and contacts for programs in the terminal, which macOS attributes to Yardlet;
+  Yardlet Agents the same privacy entitlements for the agents it starts. Each has its usage string in
+  its `Info.plist`.
+- Yardlet Agents (`Contents/Helpers/Yardlet Agents.app`) is signed with `<app identifier>.agents` as its
+  identifier. It takes each program, with its arguments, environment and folder, from the Yardlet that
+  started it, over a local socket. Yardlet gives them only to a process running the helper's own code, by
+  its designated requirement; signed by a team, the helper takes them only from the app with that
+  identifier signed by the same team. An agent whose own signature has a team and the Apple Events entitlement
+  (Claude Code) starts responsible for itself instead, asking in its own name. A build without the
+  helper starts agents as Yardlet's own children.
 - The lid helper behind Settings › General › "Keep tasks working with the lid closed"
   (`Contents/Helpers/yardlet-lid-helper`, with its launchd property list in
   `Contents/Library/LaunchDaemons`) is signed with its label, `<app identifier>.lid-helper`, as its

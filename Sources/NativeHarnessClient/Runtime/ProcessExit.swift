@@ -21,17 +21,17 @@ final class ProcessExit: @unchecked Sendable {
     private var waiters: [Int: @Sendable () -> Void] = [:]
     private var nextWaiter = 0
 
-    /// Starts `process` with `NativeProcessTree.run(_:)` and watches for its end. A termination
+    /// Starts `process` with `NativeProcessTree.run(_:asAgent:)` and watches for its end. A termination
     /// handler set before this still runs, before any wait returns; set none after it, as that
     /// would replace the one this watches with.
-    init(running process: Process) throws {
+    init(running process: Process, asAgent: Bool = false) throws {
         let handler = process.terminationHandler
         process.terminationHandler = { [self] process in
             handler?(process)
             end()
         }
         do {
-            try NativeProcessTree.run(process)
+            try NativeProcessTree.run(process, asAgent: asAgent)
         } catch {
             process.terminationHandler = handler
             throw error
