@@ -94,6 +94,12 @@ extension AppModel {
                 return .failed(error.localizedDescription)
             }
         }
+        // The run's turn is the run's once its message went and the task works on it, said before anything below is
+        // awaited. A message held until a limit resets or an account moves, or a turn already over, starts none.
+        if case let .started(taskID, _) = result, let task = store.sessions.first(where: { $0.id == taskID }),
+           Self.isWorking(task) {
+            scheduledTasks.runTurnStarted(for: schedule.id, in: taskID)
+        }
         if trigger == .missed, let slot, case let .started(taskID, _) = result {
             await announceMissedRun(of: schedule, slot: slot, taskID: taskID)
         }

@@ -71,8 +71,10 @@ anywhere and no model is asked anything.
   project whose folder holds its folder, else to the folder's name.
 - **Schedules:** a request in a turn a schedule's run started counts for that schedule as well, in the task the run
   started or continued, from the run's start to the end of that turn (`ScheduledTaskRun.endedAt`). The person's own
-  turns in the same task count for none. A session's turns are asked about with its account, and again as soon as a
-  run starts or ends a turn. History read when counting is turned on counts for a schedule only the turns of the runs
+  turns in the same task count for none. A run's turn starts as its message goes, if the task is then working on it,
+  so a turn that ends before the run is recorded is still the run's. A run whose message waits for a usage limit to
+  reset or an account to move starts no turn. A session's turns are asked about with its account, and again as soon as
+  a run starts or ends a turn. History read when counting is turned on counts for a schedule only the turns of the runs
   it still keeps (its last 50) that ended: not a turn a quit cut off, nor a run from before Yardlet kept its end.
 
 ## Prices

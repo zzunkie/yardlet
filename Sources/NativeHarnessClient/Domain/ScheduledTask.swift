@@ -214,8 +214,9 @@ struct ScheduledTaskRun: Codable, Equatable, Identifiable, Sendable {
     var mode: ScheduleDestination.Mode?
     /// The account it went to instead of the schedule's or the task's own, which was nearly spent.
     var account: AccountAssignment?
-    /// When the turn it started in its task ended; nil while that turn runs, when a quit cut it off, and in
-    /// a run kept before this was (`ScheduledTaskCenter.turns(inTasks:)`).
+    /// When the turn it started in its task ended (`ScheduledTaskCenter.turns(inTasks:)`). Nil while that turn runs,
+    /// when a quit cut it off, when it started no turn (its message was held until a limit resets or an account
+    /// moves, or the turn was over before its message's send returned), and in a run kept before this was.
     var endedAt: Date?
 }
 

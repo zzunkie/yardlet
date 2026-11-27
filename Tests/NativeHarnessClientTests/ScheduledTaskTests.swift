@@ -291,6 +291,66 @@ final class ScheduledTaskTests: XCTestCase {
         XCTAssertNil(relaunched.schedules.first?.state.runs.first?.endedAt)
     }
 
+    /// A run's turn is the run's from the moment its message goes, before its start waits on anything else. A turn
+    /// that ends while a missed run's notification is posted, before the run is recorded, ends the run's turn, so the
+    /// person's next turn in that task is not the schedule's.
+    func testATurnThatEndsBeforeItsRunIsRecordedIsTheRunsTurn() async throws {
+        let notifications = SchedulePostingNotifications()
+        let clock = Clock(date(14, 20))
+        let model = makeModel(notifications: notifications, clock: clock)
+        let project = model.projects.ensureProject(forRoot: try folder("issues"))
+        model.scheduledTasks.create(dailySchedule(project: project))
+        let quickEnd = date(17, 12, 0, 30)
+        notifications.whilePosting = { notification in
+            guard let task = notification.target.sessionID else { return }
+            await model.turnEnded(task, as: .completed, cause: .providerStatus, at: quickEnd)
+        }
+
+        // Yardlet was closed since the 14th: the 17th's slot runs late, and its notice is posted.
+        clock.now = date(17, 12)
+        await model.scheduledTasks.checkDue()
+        let schedule = try XCTUnwrap(model.scheduledTasks.schedules.first)
+        let run = try XCTUnwrap(schedule.state.runs.first)
+        XCTAssertEqual(run.trigger, .missed)
+        let task = try XCTUnwrap(run.taskID)
+        XCTAssertEqual(run.endedAt, quickEnd, "The run keeps the end its turn reached before it was recorded")
+
+        try await model.store.updateSession(id: task, status: .running)
+        await model.turnEnded(task, as: .completed, cause: .providerStatus, at: date(17, 13))
+        XCTAssertEqual(model.scheduledTasks.turns(inTasks: [task]),
+                       [task: [ScheduledTurn(scheduleID: schedule.id, start: run.at, end: quickEnd)]],
+                       "The person's turn after it is not the run's")
+        await model.shutdown()
+    }
+
+    /// A continuing run whose message waits for the task's usage limit to reset starts no turn of its own: the
+    /// message goes later, after the continue, and the person may write first. Nothing in the task is the run's.
+    func testARunWhoseMessageWaitsForAResetStartsNoTurn() async throws {
+        let clock = Clock(date(16, 20))
+        let model = makeModel(clock: clock)
+        let target = try await model.store.createSession(
+            harness: .claudeCode, workspaceURL: try folder("limited"), runtimeExecutableURL: URL(filePath: "/usr/bin/true"),
+            title: "Limited")
+        model.continuations.setUsageLimitAutoContinue(true, resetsAt: Date().addingTimeInterval(3_600), for: target)
+        model.scheduledTasks.create(ScheduledTask(
+            name: "Heartbeat", prompt: "Any new failures since last time?",
+            trigger: .interval(hours: 2, anchor: date(16, 22), days: []),
+            destination: ScheduleDestination(mode: .continueTask, harness: .claudeCode, targetTaskID: target.id)))
+
+        clock.now = date(17, 0, 0, 10)
+        await model.scheduledTasks.checkDue()
+        let run = try XCTUnwrap(model.scheduledTasks.schedules.first?.state.runs.first)
+        XCTAssertEqual(run.outcome, .started)
+        XCTAssertEqual(model.followUps.queue(for: target.id).count, 1, "The message waits for the continue")
+        XCTAssertEqual(model.scheduledTasks.turns(inTasks: [target.id]), [:])
+
+        try await model.store.updateSession(id: target.id, status: .running)
+        await model.turnEnded(target.id, as: .completed, cause: .providerStatus, at: date(17, 1))
+        XCTAssertNil(model.scheduledTasks.schedules.first?.state.runs.first?.endedAt)
+        XCTAssertEqual(model.scheduledTasks.turns(inTasks: [target.id]), [:], "The person's turn is not the run's")
+        await model.shutdown()
+    }
+
     /// A schedule says what its runs used only where that is counted. Token usage reads Claude Code's and Codex's
     /// transcripts, so a schedule whose runs go to another harness and has nothing counted shows no Usage row, rather
     /// than "0 tokens". A schedule that continues a task goes by that task's harness.
@@ -1109,4 +1169,13 @@ final class ScheduleNotificationRecorder: SystemNotificationCenter {
     func requestAuthorization() async -> Bool { true }
     func post(title: String, body: String, identifier: String) async {}
     func post(_ notification: SystemNotification) async { posts.append(notification) }
+}
+
+/// Does something while a notification is posted, as a turn that ends meanwhile, authorized.
+final class SchedulePostingNotifications: SystemNotificationCenter {
+    var whilePosting: ((SystemNotification) async -> Void)?
+    func authorization() async -> SystemNotificationAuthorization { .authorized }
+    func requestAuthorization() async -> Bool { true }
+    func post(title: String, body: String, identifier: String) async {}
+    func post(_ notification: SystemNotification) async { await whilePosting?(notification) }
 }
