@@ -314,7 +314,8 @@ struct ImageViewer: View {
                 .controlSize(.small)
                 .allowsHitTesting(false)
         case let .image(image, _):
-            ImageViewerCanvas(model: model, image: image, name: model.item?.name ?? "", close: close)
+            ImageViewerCanvas(model: model, image: image, name: model.item?.name ?? "",
+                              markUp: request.markUp, close: close)
         case .unavailable:
             Text(L10n.string("The image could not be opened."))
                 .font(.system(size: 13 * interfaceScale))
@@ -417,6 +418,7 @@ private struct ImageViewerCanvas: NSViewRepresentable {
     let model: ImageViewerModel
     let image: NSImage
     let name: String
+    let markUp: (() -> Void)?
     let close: () -> Void
 
     func makeNSView(context: Context) -> ImageViewerCanvasView {
@@ -427,6 +429,8 @@ private struct ImageViewerCanvas: NSViewRepresentable {
 
     func updateNSView(_ view: ImageViewerCanvasView, context: Context) {
         let model = model
+        let close = close
+        let markUp = markUp
         view.onZoom = { zoom, fits in
             model.zoom = zoom
             model.fitsWindow = fits
@@ -434,6 +438,21 @@ private struct ImageViewerCanvas: NSViewRepresentable {
         view.onClose = close
         view.onPrevious = { model.showPrevious() }
         view.onNext = { model.showNext() }
+        let fileURL: URL? = {
+            guard case let .url(url) = model.item?.source, url.isFileURL else { return nil }
+            return url
+        }()
+        view.setContextActions(
+            copyImage: { _ = model.copy() },
+            saveImage: { [weak view] in model.save(over: view?.window ?? NSApp.keyWindow) },
+            showInFinder: fileURL.map { url in
+                { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+            },
+            zoomActualSize: { model.zoom(.actualSize) },
+            zoomFit: { model.zoom(.fit) },
+            markUp: markUp.map { run in { close(); run() } },
+            canShowMenu: { model.hasImage }
+        )
         view.show(image, name: name)
     }
 }
@@ -609,6 +628,35 @@ final class ImageViewerCanvasView: NSScrollView {
         onClose?()
     }
 
+    // MARK: Context menu
+
+    /// Passes the right-click menu through to the image view, so a click on the scroll view's margin
+    /// still opens the image's menu.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        imageView.menu(for: event)
+    }
+
+    /// The right-click menu the canvas would build now, for tests.
+    var contextMenu: NSMenu? { imageView.makeContextMenu() }
+
+    /// The closures the image's right-click menu runs. `showInFinder` and `markUp` are nil when the
+    /// image is not a file on disk (the Finder entry) or when the request did not offer markup.
+    func setContextActions(copyImage: @escaping () -> Void,
+                           saveImage: @escaping () -> Void,
+                           showInFinder: (() -> Void)?,
+                           zoomActualSize: @escaping () -> Void,
+                           zoomFit: @escaping () -> Void,
+                           markUp: (() -> Void)?,
+                           canShowMenu: @escaping () -> Bool) {
+        imageView.copyImage = copyImage
+        imageView.saveImage = saveImage
+        imageView.showInFinder = showInFinder
+        imageView.zoomActualSize = zoomActualSize
+        imageView.zoomFit = zoomFit
+        imageView.markUpImage = markUp
+        imageView.canShowMenu = canShowMenu
+    }
+
     /// ⌘+ (or ⌘=) and ⌘− zoom in steps and ⌘0 fits again, as in the Codex app, wherever the keyboard is
     /// in the window while the viewer shows.
     private func zoom(forKey event: NSEvent) -> Bool {
@@ -643,12 +691,60 @@ private final class ImageViewerClipView: NSClipView {
     }
 }
 
-private final class ImageViewerImageView: NSImageView {
+final class ImageViewerImageView: NSImageView {
     var onDoubleClick: ((NSPoint) -> Void)?
+
+    // The right-click menu's actions. `showInFinder` and `markUpImage` are nil when the image is not
+    // a file on disk or when the request did not offer markup; those items are left out of the menu.
+    var copyImage: (() -> Void)?
+    var saveImage: (() -> Void)?
+    var showInFinder: (() -> Void)?
+    var zoomActualSize: (() -> Void)?
+    var zoomFit: (() -> Void)?
+    var markUpImage: (() -> Void)?
+    var canShowMenu: () -> Bool = { false }
 
     override var acceptsFirstResponder: Bool { false }
 
     override func mouseDown(with event: NSEvent) {
         if event.clickCount == 2 { onDoubleClick?(convert(event.locationInWindow, from: nil)) }
     }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        makeContextMenu()
+    }
+
+    /// The right-click menu for the image: Copy and Save; Show in Finder for a file on disk;
+    /// Actual Size and Zoom to Fit; and Mark Up when the request offered it. Returns nil before an
+    /// image has been loaded, so the menu does not open over the loading or unavailable placeholder.
+    func makeContextMenu() -> NSMenu? {
+        guard canShowMenu() else { return nil }
+        let menu = NSMenu()
+        add(to: menu, title: L10n.string("Copy Image"), action: #selector(runCopyImage))
+        add(to: menu, title: L10n.string("Save Image…"), action: #selector(runSaveImage))
+        if showInFinder != nil {
+            add(to: menu, title: L10n.string("Show in Finder"), action: #selector(runShowInFinder))
+        }
+        menu.addItem(.separator())
+        add(to: menu, title: L10n.string("Actual Size"), action: #selector(runActualSize))
+        add(to: menu, title: L10n.string("Zoom to Fit"), action: #selector(runZoomFit))
+        if markUpImage != nil {
+            menu.addItem(.separator())
+            add(to: menu, title: L10n.string("Mark Up"), action: #selector(runMarkUp))
+        }
+        return menu
+    }
+
+    private func add(to menu: NSMenu, title: String, action: Selector) {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        menu.addItem(item)
+    }
+
+    @objc private func runCopyImage() { copyImage?() }
+    @objc private func runSaveImage() { saveImage?() }
+    @objc private func runShowInFinder() { showInFinder?() }
+    @objc private func runActualSize() { zoomActualSize?() }
+    @objc private func runZoomFit() { zoomFit?() }
+    @objc private func runMarkUp() { markUpImage?() }
 }
