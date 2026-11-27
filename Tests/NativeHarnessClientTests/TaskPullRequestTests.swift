@@ -503,6 +503,16 @@ final class TaskPullRequestTests: XCTestCase {
         XCTAssertNil(monitor.pullRequest(for: first.taskID))
         XCTAssertNil(monitor.pullRequest(for: second.taskID))
         XCTAssertNil(monitor.pullRequest(for: third.taskID))
+
+        // A pull request on the branch merges: tasks that share the checkout all show it merged, so
+        // "Archive N tasks with merged pull requests…" counts every one of them when they are nested
+        // under one task and nothing holds them back (`SidebarMergedNestedTasks`).
+        answers.value = .init(status: 0, output: Self.ghJSON(state: "MERGED", number: 13), errorText: "")
+        clock.now += 400
+        await monitor.lookAtShownTasks()
+        let sharing = [first, second, third].map(\.taskID)
+        XCTAssertEqual(SidebarMergedNestedTasks(nested: sharing, pullRequest: { monitor.pullRequest(for: $0) },
+                                                isHeld: { _ in false })?.taskIDs, sharing)
     }
 
     @MainActor

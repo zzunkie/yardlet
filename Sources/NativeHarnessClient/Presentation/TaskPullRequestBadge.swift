@@ -170,6 +170,10 @@ struct TaskPullRequestRowMark: Equatable, Sendable {
 /// asks nothing. A task something holds back is left out too (`isHeld`, `AppModel.isArchiveHeld(_:)`):
 /// it works or waits for the person, or archiving would drop its queued messages or unsent draft,
 /// which a collapsed family hides from view.
+///
+/// A task whose transcript names no pull request takes the one of its folder's current branch
+/// (`TaskPullRequestSources.branchToAsk`). Nested tasks that share one checkout, rather than a
+/// worktree each, therefore all show that branch's pull request, and all count once it merges.
 struct SidebarMergedNestedTasks: Equatable, Sendable {
     /// In the order the sidebar lists them.
     let taskIDs: [UUID]
