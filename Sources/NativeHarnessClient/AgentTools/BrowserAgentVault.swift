@@ -679,21 +679,41 @@ enum VaultPageScripts {
         })();
         """
 
-    /// The field the person's fill goes to: the focused field, else the page's first password field,
-    /// else its first username field, else its first one-time code field. For the code bar
-    /// (`codeOnly`), the focused code field, else the first code field.
+    /// The field the person's fill goes to: the focused field, else the page's first visible password field, else its
+    /// first visible username or email field (Apple's `#account_name_text_field` and the like, which a multi-step
+    /// sign-in's first page shows while hiding the password field for its next step), else its first one-time code
+    /// field. For the code bar (`codeOnly`), the focused code field, else the first code field. A field hidden by
+    /// `display: none`, `visibility: hidden`, `opacity: 0`, zero size, `disabled` or `readonly` is not picked, so a
+    /// page's placeholder for the next step does not stand in for the one the person sees.
     static func personTarget(codeOnly: Bool) -> String {
         """
         (() => {
           \(codeFieldTests)
-          const visible = e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+          const visible = e => {
+            if (!(e instanceof Element) || e.disabled || e.readOnly) return false;
+            if (!e.isConnected) return false;
+            const r = e.getBoundingClientRect();
+            if (r.width <= 0 || r.height <= 0) return false;
+            const s = getComputedStyle(e);
+            return s.visibility !== 'hidden' && s.display !== 'none' && s.opacity !== '0';
+          };
           const focused = document.activeElement;
           const inputs = Array.from(document.querySelectorAll('input')).filter(visible);
           if (\(codeOnly)) {
             return isCodeField(focused) ? focused : inputs.find(looksLikeCodeField) || inputs.find(isCodeField) || null;
           }
-          if (focused instanceof HTMLInputElement) return focused;
-          return inputs.find(e => e.type === 'password') || inputs.find(e => (e.autocomplete || '').includes('username'))
+          if (focused instanceof HTMLInputElement && visible(focused)) return focused;
+          const textTypes = ['text', 'email', 'tel', 'url', ''];
+          const autocompleteOf = e => (e.getAttribute('autocomplete') || '').toLowerCase().split(/\\s+/);
+          const usernameWords = /user|e-?mail|login|account|아이디|이메일|계정/i;
+          const fieldWords = e => ' ' + [e.name, e.id, e.placeholder, e.title, e.getAttribute('aria-label')]
+            .map(p => p || '').join(' ').replace(/(\\p{Ll})(\\p{Lu})/gu, '$1 $2')
+            .toLowerCase().replace(/[^\\p{L}\\p{N}]+/gu, ' ') + ' ';
+          const looksLikeUsername = e => e.type === 'email'
+            || autocompleteOf(e).some(t => t === 'username' || t === 'email')
+            || (textTypes.includes(e.type) && usernameWords.test(fieldWords(e)));
+          return inputs.find(e => e.type === 'password')
+            || inputs.find(e => textTypes.includes(e.type) && looksLikeUsername(e))
             || inputs.find(looksLikeCodeField) || null;
         })()
         """
@@ -712,10 +732,25 @@ enum VaultPageScripts {
               if (!(target instanceof HTMLInputElement)) return '';
               if (looksLikeCodeField(target)) return 'code';
               const autocomplete = (target.getAttribute('autocomplete') || '').toLowerCase().split(/\\s+/);
-              const visible = e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+              const visible = e => {
+                if (!(e instanceof Element) || e.disabled || e.readOnly) return false;
+                if (!e.isConnected) return false;
+                const r = e.getBoundingClientRect();
+                if (r.width <= 0 || r.height <= 0) return false;
+                const s = getComputedStyle(e);
+                return s.visibility !== 'hidden' && s.display !== 'none' && s.opacity !== '0';
+              };
               const scope = target.form || target.closest('form') || document;
+              // A text/email field with a username-shaped name (Apple's `#account_name_text_field`) names a sign-in, even
+              // when the page hides the password field for its next step.
+              const usernameWords = /user|e-?mail|login|account|아이디|이메일|계정/i;
+              const fieldWords = e => ' ' + [e.name, e.id, e.placeholder, e.title, e.getAttribute('aria-label')]
+                .map(p => p || '').join(' ').replace(/(\\p{Ll})(\\p{Lu})/gu, '$1 $2')
+                .toLowerCase().replace(/[^\\p{L}\\p{N}]+/gu, ' ') + ' ';
+              const textTypes = ['text', 'email', 'tel', 'url', ''];
               const signIn = target.type === 'password' || (window.__yardletWasPassword || new WeakSet()).has(target)
                 || target.type === 'email' || autocomplete.some(t => ['username', 'email', 'current-password'].includes(t))
+                || (textTypes.includes(target.type) && usernameWords.test(fieldWords(target)))
                 || (!isCodeField(target) && Array.from(scope.querySelectorAll('input[type=password]')).some(visible));
               return signIn ? 'signIn' : '';
             }
@@ -946,21 +981,44 @@ enum VaultPageScripts {
 
     /// The tab's frames as the browser reports them, the main frame first and the rest in the order of its tree: the
     /// frames of the tab's own process, then those of each frame session (`frameSessions`) with the frames of its
-    /// process, or of `sessions` alone. A frame session that does not answer is left out with its frames, which then take
-    /// no fill. Throws when the tab's own tree cannot be read.
+    /// process, or of `sessions` alone. A frame session's root frame (an out-of-process iframe, OOPIF) carries no
+    /// `parentId` in its own tree, so its parent is read from the session it attached from (`BrowserFrameSession.parent`);
+    /// without this the chain from an OOPIF up to the main frame would break and the frame would take no fill. A frame
+    /// session that does not answer is left out with its frames. Throws when the tab's own tree cannot be read.
     static func frames(_ cdp: any BrowserAgentCDP, sessions: [String]? = nil, timeout: Duration) async throws -> [VaultFrame] {
         let attached = cdp.frameSessions
         let remote = Set(attached.map(\.frameID))
-        var frames: [VaultFrame] = []
-        for session in [nil] + (sessions ?? attached.map(\.id)).map(Optional.some) {
-            let tree: JSONValue
+        let sessionsByID = Dictionary(uniqueKeysWithValues: attached.map { ($0.id, $0) })
+        let order: [String?] = [nil] + (sessions ?? attached.map(\.id)).map(Optional.some)
+        var trees: [String?: JSONValue] = [:]
+        for session in order {
             do {
-                tree = try await cdp.send("Page.getFrameTree", [:], session: session,
-                                          timeout: session == nil ? timeout : min(timeout, .seconds(5)))
+                let tree = try await cdp.send("Page.getFrameTree", [:], session: session,
+                                              timeout: session == nil ? timeout : min(timeout, .seconds(5)))
+                trees[session] = tree
             } catch {
                 if session == nil { throw error }
                 continue
             }
+        }
+        // The frame that holds an OOPIF: its id lives in the session the OOPIF attached from. Reads the parent session's
+        // tree for a node whose `childFrames` holds the OOPIF's own frameId, and returns that node's frame id.
+        func parentFrameID(of frameID: String, in parentSession: String?) -> String? {
+            guard let tree = trees[parentSession], let root = tree["frameTree"] else { return nil }
+            var pending: [JSONValue] = [root]
+            while !pending.isEmpty {
+                let node = pending.removeFirst()
+                let currentID = node["frame"]?["id"]?.stringValue
+                for child in node["childFrames"]?.arrayValue ?? [] {
+                    if child["frame"]?["id"]?.stringValue == frameID { return currentID }
+                    pending.append(child)
+                }
+            }
+            return nil
+        }
+        var frames: [VaultFrame] = []
+        for session in order {
+            guard let tree = trees[session] else { continue }
             var pending = tree["frameTree"].map { [$0] } ?? []
             var isRoot = true
             while !pending.isEmpty {
@@ -971,7 +1029,18 @@ enum VaultPageScripts {
                 let main = session == nil && isRoot
                 // Only the main frame's origin falls back to its address: a frame's opaque origin stays one.
                 let origin = securityOrigin(of: frame) ?? (main ? frame["url"]?.stringValue.flatMap(VaultSite.origin(of:)) : nil) ?? ""
-                frames.append(VaultFrame(id: id, parentID: main ? nil : frame["parentId"]?.stringValue,
+                // An OOPIF session's own root has no `parentId` in its tree; its parent frame lives in the session it
+                // attached from. The main frame has no parent; a frame below the session's root carries its own `parentId`.
+                let parentID: String?
+                if main {
+                    parentID = nil
+                } else if isRoot, let session, let attached = sessionsByID[session] {
+                    parentID = parentFrameID(of: attached.frameID, in: attached.parent)
+                        ?? frame["parentId"]?.stringValue
+                } else {
+                    parentID = frame["parentId"]?.stringValue
+                }
+                frames.append(VaultFrame(id: id, parentID: parentID,
                                          loaderID: frame["loaderId"]?.stringValue ?? "", origin: origin,
                                          url: (frame["url"]?.stringValue ?? "") + (frame["urlFragment"]?.stringValue ?? ""),
                                          session: session))
@@ -1030,12 +1099,16 @@ enum VaultPageScripts {
 
     /// The field a person's fill goes to, among `frames` (`fillFrames`): the main frame's `target` (an expression that
     /// gives the field or null, such as `personTarget`), else that of the frame the page's keyboard focus is in, else
-    /// that of the first frame of the main frame's own origin with one. A frame of another origin, such as another
-    /// subdomain's, which the address field does not show, takes a fill only once the person put the focus in it. The
-    /// field's object is bound to its frame's vault world.
+    /// that of the first frame of the main frame's own origin with one, else that of the first trusted same-site
+    /// subframe with one. `frames` passes only subframes whose own origin and the origins around them are pages of
+    /// one saved item's sites (`fillFrames` enforces this), so once the person picks an item from the key button a
+    /// same-site subframe (such as Apple's `idmsa.apple.com` inside `account.apple.com`) may take the fill even without
+    /// the focus in it; a cross-site iframe never enters `frames` and so can never take a fill. The field's object is
+    /// bound to its frame's vault world.
     static func personField(_ cdp: any BrowserAgentCDP, in frames: [VaultFillFrame], target: String,
                             timeout: Duration) async -> (frame: VaultFillFrame, objectID: String)? {
         var sameOrigin: (frame: VaultFillFrame, objectID: String)?
+        var trustedSameSite: (frame: VaultFillFrame, objectID: String)?
         for frame in frames {
             guard let context = try? await vaultWorld(cdp, frame: frame.frame.id, session: frame.frame.session, timeout: timeout),
                   let field = try? await cdp.send("Runtime.evaluate", [
@@ -1045,8 +1118,11 @@ enum VaultPageScripts {
             if frame.isMain { return (frame, objectID) }
             if await holdsFocus(frame.frame, in: frames.map(\.frame), cdp: cdp, timeout: timeout) { return (frame, objectID) }
             if sameOrigin == nil, frame.frame.origin == frames.first?.frame.origin { sameOrigin = (frame, objectID) }
+            // A subframe the item's sites may fill (`fillFrames`) is same-site end-to-end; the person already picked
+            // this site's item, so Yardlet fills its field without a click into the iframe first.
+            if trustedSameSite == nil { trustedSameSite = (frame, objectID) }
         }
-        return sameOrigin
+        return sameOrigin ?? trustedSameSite
     }
 
     /// Whether the page's keyboard focus is in `frame`'s document: from the main frame down, each document's focused
@@ -1892,6 +1968,9 @@ extension BrowserAgentTools {
             + "item's sites.")
         let own = "function() { return this instanceof HTMLElement && this.ownerDocument === document; }"
         let root = frames.first { $0.session == element.session }?.place
+        // The last error a child frame's lookup raised, kept so the refusal reports the real cause instead of masking
+        // every CDP error as "the browser did not describe the frame".
+        var childError: Error?
         for frame in frames where frame.session == element.session {
             let isRoot = frame.place == root
             guard let around = VaultPageScripts.origins(around: frame, in: frames) else {
@@ -1900,7 +1979,8 @@ extension BrowserAgentTools {
             }
             let place = VaultFillFrame(frame: frame, framedBy: around, pageLoaderID: main.loaderID)
             // The session's own frame answers as the page did before frames: a field that is gone, or a document that
-            // went away meanwhile, reads as a stale reference. A frame below it that does not answer is passed over.
+            // went away meanwhile, reads as a stale reference. A frame below it that does not answer is passed over,
+            // but its error is kept so the refusal below names what went wrong.
             do {
                 let world = try await send(page, "Page.createIsolatedWorld", [
                     "frameId": .string(frame.id), "worldName": .string(Self.vaultWorldName)
@@ -1920,8 +2000,10 @@ extension BrowserAgentTools {
                 throw error
             } catch {
                 if isRoot { throw error }
+                childError = error
             }
         }
+        if let childError { throw childError }
         throw refusal
     }
 
@@ -1963,8 +2045,13 @@ extension BrowserAgentTools {
           if (typeof origin === 'string' && location.origin !== origin) return { error: 'moved' };
           // The field may have been moved into another document of the page since it was found.
           if (!(target instanceof Node) || target.ownerDocument !== document) return { error: 'left its document' };
-          const visible = e => { const r = e.getBoundingClientRect(); const s = getComputedStyle(e);
-            return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; };
+          const visible = e => {
+            if (!e.isConnected) return false;
+            const r = e.getBoundingClientRect();
+            if (r.width <= 0 || r.height <= 0) return false;
+            const s = getComputedStyle(e);
+            return s.visibility !== 'hidden' && s.display !== 'none' && s.opacity !== '0';
+          };
           const textTypes = ['text', 'email', 'tel', 'url', ''];
           const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
           const put = (e, v) => {
@@ -1996,8 +2083,17 @@ extension BrowserAgentTools {
             if (isInput(target) && target.type !== 'password' && textTypes.includes(target.type)) {
               userField = target;
             } else {
+              // A password field hidden for the next step (`visible` filtered it out) gives `inputs.indexOf` -1, and
+              // `inputs.slice(0, -1)` would then drop the one username field the page is showing. The guard keeps the
+              // list whole and falls back to a text field named like a username or email (Apple's `#account_name_text_field`).
+              const passwordIndex = passwordField ? inputs.indexOf(passwordField) : -1;
+              const usernameWords = /user|e-?mail|login|account|아이디|이메일|계정/i;
+              const fieldWords = e => ' ' + [e.name, e.id, e.placeholder, e.title, e.getAttribute('aria-label')]
+                .map(p => p || '').join(' ').replace(/(\\p{Ll})(\\p{Lu})/gu, '$1 $2')
+                .toLowerCase().replace(/[^\\p{L}\\p{N}]+/gu, ' ') + ' ';
               userField = inputs.find(e => textTypes.includes(e.type) && (e.autocomplete || '').split(/\\s+/).includes('username'))
-                || (passwordField ? inputs.slice(0, inputs.indexOf(passwordField)).reverse().find(e => textTypes.includes(e.type)) : null);
+                || (passwordIndex > 0 ? inputs.slice(0, passwordIndex).reverse().find(e => textTypes.includes(e.type)) : null)
+                || inputs.find(e => (e.type === 'email' || textTypes.includes(e.type)) && usernameWords.test(fieldWords(e)));
             }
             if (!passwordField && !userField && !secretFields.length) return { error: 'no sign-in field' };
             if (typeof password === 'string' && passwordField) { put(passwordField, password); secret.push(passwordField); values.push(password); kinds.push('password'); }

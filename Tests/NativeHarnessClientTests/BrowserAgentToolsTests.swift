@@ -1793,7 +1793,9 @@ final class BrowserAgentToolsTests: XCTestCase {
             }
 
             // The person's key button, with the same item: the main frame has no field here but in the first case. A
-            // frame of another origin than the page's takes the fill once the person put the focus in it.
+            // trusted same-site frame (its own origin and the origins around it are pages of the item's sites) takes the
+            // fill even without the focus — the person already picked this site's item, and cross-site iframes never
+            // enter `fillFrames` in the first place.
             func personFills() async -> Bool {
                 filledInto = []
                 return await VaultPageScripts.fillForPerson(
@@ -1801,7 +1803,7 @@ final class BrowserAgentToolsTests: XCTestCase {
                     fills: page.vaultFills, username: "ada", password: "correct-horse-battery", code: nil)
             }
             let unfocused = await personFills()
-            XCTAssertEqual(unfocused, test.fills && field.origin == frames[0].origin, "\(test.name): without the focus in the frame")
+            XCTAssertEqual(unfocused, test.fills, "\(test.name): without the focus in the frame")
             var chain = field
             while let parent = chain.parent { focusChain.insert(chain.id); chain = frames.first { $0.id == parent }! }
             let byPerson = await personFills()
@@ -1831,6 +1833,98 @@ final class BrowserAgentToolsTests: XCTestCase {
             cdp.eventLog.append(("Page.frameNavigated", .object(["frame": .object([
                 "id": .string("main"), "loaderId": .string("doc-next"), "url": .string("https://www.example.com/next")])])))
         }
+    }
+
+    /// An out-of-process iframe (OOPIF) answers on a session of its own, and its tree names no parent frame, so the vault
+    /// reads the parent from the session it attached from (`BrowserFrameSession.parent`), matched up by frame id. Apple's
+    /// sign-in (`account.apple.com` showing `idmsa.apple.com` on its own target) is the case: the chain reaches the main
+    /// frame, both origins are same-site to the item, and the key button fills the field without a click into the iframe
+    /// first. A cross-site iframe stays refused whether its own tree names a parent or not.
+    func testAnOOPIFRootFrameIsLinkedToItsParentThroughTheSessionItAttachedFrom() async {
+        cdp.frameSessions = [BrowserFrameSession(id: "s1", frameID: "signin", parent: nil)]
+        cdp.responders["Page.getFrameTree"] = { _ in
+            .object(["frameTree": .object([
+                "frame": .object([
+                    "id": .string("main"), "loaderId": .string("doc-main"),
+                    "url": .string("https://account.example.com/"),
+                    "securityOrigin": .string("https://account.example.com")
+                ]),
+                "childFrames": .array([.object([
+                    // The parent session's tree names the OOPIF among its children — this is where the vault finds the
+                    // chain when the OOPIF's own tree carries no `parentId`.
+                    "frame": .object([
+                        "id": .string("signin"), "parentId": .string("main"),
+                        "url": .string("https://idmsa.example.com/signin"),
+                        "securityOrigin": .string("https://idmsa.example.com")
+                    ])
+                ])])
+            ])])
+        }
+        cdp.sessionResponder = { session, method, _ in
+            guard session == "s1", method == "Page.getFrameTree" else { throw BrowserDevToolsError.closed }
+            // The OOPIF's own tree names no parent frame, as a session root does.
+            return .object(["frameTree": .object(["frame": .object([
+                "id": .string("signin"), "loaderId": .string("doc-signin"),
+                "url": .string("https://idmsa.example.com/signin"),
+                "securityOrigin": .string("https://idmsa.example.com")
+            ])])])
+        }
+        let frames = try? await VaultPageScripts.frames(cdp, timeout: .seconds(2))
+        XCTAssertEqual(frames?.map(\.id), ["main", "signin"])
+        let signin = frames?.first { $0.id == "signin" }
+        XCTAssertEqual(signin?.parentID, "main", "the OOPIF is linked to its parent from the session it attached from")
+        XCTAssertEqual(signin?.session, "s1")
+        XCTAssertEqual(VaultPageScripts.origins(around: signin!, in: frames!), ["https://account.example.com"])
+
+        // The chain is used by `fillFrames` as a same-site match: both origins are pages of `example.com`.
+        let item = VaultItem(name: "Example", sites: ["example.com"], username: "ada", hasPassword: true, policy: .always)
+        let fill = VaultPageScripts.fillFrames(of: frames!, sites: item.sites)
+        XCTAssertEqual(fill.map(\.frame.id), ["main", "signin"])
+        XCTAssertEqual(fill.last?.framedBy, ["https://account.example.com"])
+
+        // A cross-site iframe whose own tree names a parent still gets refused by `fillFrames`.
+        cdp.frameSessions = [BrowserFrameSession(id: "s1", frameID: "signin", parent: nil)]
+        cdp.sessionResponder = { session, method, _ in
+            guard session == "s1", method == "Page.getFrameTree" else { throw BrowserDevToolsError.closed }
+            return .object(["frameTree": .object(["frame": .object([
+                "id": .string("signin"), "parentId": .string("main"), "loaderId": .string("doc-signin"),
+                "url": .string("https://login.other.test/"), "securityOrigin": .string("https://login.other.test")
+            ])])])
+        }
+        cdp.responders["Page.getFrameTree"] = { _ in
+            .object(["frameTree": .object([
+                "frame": .object([
+                    "id": .string("main"), "loaderId": .string("doc-main"),
+                    "url": .string("https://account.example.com/"),
+                    "securityOrigin": .string("https://account.example.com")
+                ]),
+                "childFrames": .array([.object([
+                    "frame": .object([
+                        "id": .string("signin"), "parentId": .string("main"),
+                        "url": .string("https://login.other.test/"),
+                        "securityOrigin": .string("https://login.other.test")
+                    ])
+                ])])
+            ])])
+        }
+        let crossFrames = try? await VaultPageScripts.frames(cdp, timeout: .seconds(2))
+        let crossFill = VaultPageScripts.fillFrames(of: crossFrames!, sites: item.sites)
+        XCTAssertEqual(crossFill.map(\.frame.id), ["main"], "a cross-site iframe never enters fillFrames")
+    }
+
+    /// `personTarget` and `personFieldKind` carry the same `visible` test: a field is a target only when it is in the
+    /// document, has size on screen, and `visibility`, `display`, `opacity`, `disabled` and `readOnly` do not turn it
+    /// off. A multi-step sign-in that hides its password field for the next step keeps it out of the target. The test
+    /// reads the script's text, since the behavior lives in a page's own JavaScript world and only the policy — the
+    /// same checks on both sides — can be pinned here.
+    func testPersonTargetAndFieldKindShareTheSameVisibleTest() {
+        let target = VaultPageScripts.personTarget(codeOnly: false)
+        for check in ["e.disabled", "e.readOnly", "e.isConnected", "r.width <= 0 || r.height <= 0",
+                      "s.visibility !== 'hidden'", "s.display !== 'none'", "s.opacity !== '0'"] {
+            XCTAssertTrue(target.contains(check), "personTarget's visible test keeps \(check)")
+        }
+        XCTAssertTrue(target.contains("user|e-?mail|login|account|아이디|이메일|계정"),
+                      "personTarget picks a text field named like a username when no password field shows")
     }
 
     /// A code fill on a page that shows a two-factor setup the vault does not hold (docs/BROWSER_VAULT_DESIGN.md §20)
