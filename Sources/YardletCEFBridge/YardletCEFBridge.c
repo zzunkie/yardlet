@@ -3338,8 +3338,15 @@ void yardlet_cef_set_hidden(int tab, int hidden) {
     cef_browser_host_t *host = host_for_tab(tab);
     if (host == NULL) return;
     host->was_hidden(host, hidden);
-    // A panel showing an existing tab needs a frame even if nothing on the page changed.
-    if (!hidden) host->invalidate(host, PET_VIEW);
+    if (!hidden) {
+        // A panel showing an existing tab needs a frame even if nothing on the page changed. `invalidate` only asks
+        // Chromium's capture to copy the page's last frame, and a tab hidden between a resize and its first frame at the
+        // new size has none to give: CEF holds further resizes until a frame of that size is painted while shown, and
+        // nothing asks the page for one. A new surface (what `notify_screen_info_changed` allocates, as Chromium does for
+        // a surface evicted while hidden) makes the page draw a frame at the view's size now, which also ends the hold.
+        host->notify_screen_info_changed(host);
+        host->invalidate(host, PET_VIEW);
+    }
     YARDLET_RELEASE(host);
 }
 

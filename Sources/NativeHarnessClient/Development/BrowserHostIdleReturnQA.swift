@@ -10,7 +10,8 @@ import SwiftUI
 /// The task's panel shows a page striped edge to edge on a white page (`/idle`), and first goes back and forth to a second tab
 /// (the person's new tab, a tab the page opens, the same with the task's views also kept out of the window, an agent's tab)
 /// and closes it. Then the page is hidden and shown again the ways an idle panel is: its window covered (the view hidden), resized meanwhile, the panel closed and opened again with a
-/// new view (the side panel showed another tab, or the task's views were built anew), at another size, the tab
+/// new view (the side panel showed another tab, or the task's views were built anew), at another size, the window
+/// resized and the panel hidden or out of the window before the page drew at its new size, the tab
 /// discarded by the memory saver meanwhile, the task's views out of the window while another task shows (and back
 /// before the window is on screen), Chromium's GPU process ended and started again (as after the Mac sleeps), and last
 /// a new panel opened off screen on a tab the agent used a moment ago, which its engine still draws. Chromium is told
@@ -62,6 +63,7 @@ final class BrowserHostIdleReturnQA {
         await switchTabs(controller, tab)
         await occludeAndReturn(controller, tab)
         await resizeWhileHidden(controller, tab)
+        await resizedThenHidden(controller, tab)
         await reopen(tab, step: "reopened", discarding: false)
         await reopen(tab, step: "reopened-resized", discarding: false, resizing: true)
         await reopen(tab, step: "reopened-discarded", discarding: true)
@@ -232,6 +234,50 @@ final class BrowserHostIdleReturnQA {
         check("resized while occluded: the panel paints the page at its new size", hid && shown,
               "hidden \(hid), " + describe(controller, framesSince: before))
         save(view, as: "resized-while-occluded")
+    }
+
+    /// The window is resized and the panel leaves the screen before the page drew at its new size (covered, or the window
+    /// shows another task): Chromium holds the tab's later resizes until it paints a frame of that size while shown, and
+    /// showing the tab again must make the page draw one at once, before the host's own retry 3 seconds later. Each way
+    /// runs twice, so the second round also starts from whatever the first left held. Other tasks' agents have their tabs
+    /// open and drawing meanwhile, as on a Mac that runs a few: without them the page drew in time on this Mac anyway.
+    private func resizedThenHidden(_ controller: BrowserHostPaneController, _ tab: BrowserTab) async {
+        let others = (0..<14).compactMap { index in
+            try? client.openTab(forSession: UUID(), url: base + "idle?n=\(index + 10)", viewport: .offscreenDefault, byAgent: true)
+        }
+        others.forEach { client.noteAgentActivity(on: $0) }
+        try? await Task.sleep(for: .seconds(10))
+        for (round, parking) in [false, true, false, true].enumerated() {
+            await resizedThenHidden(controller, tab, parking: parking, round: round / 2 + 1)
+        }
+        others.forEach { client.closeTab($0) }
+    }
+
+    private func resizedThenHidden(_ controller: BrowserHostPaneController, _ tab: BrowserTab, parking: Bool, round: Int) async {
+        let name = (parking ? "resized then parked " : "resized then occluded ") + "\(round)"
+        guard let view = controller.view, let window = view.window, let hosting = Self.taskHosting(of: view),
+              let container = hosting.superview else {
+            return check("\(name): the panel paints the page at once", false, "no task hosting view around the panel")
+        }
+        let hidden = events["hidden", default: 0]
+        // The resize and the hiding go in one turn of the main thread, so the page has not drawn at the new size yet.
+        resize(window)
+        let frame = hosting.frame
+        if parking { hosting.removeFromSuperview() } else { view.isHidden = true }
+        let hid = await waitUntil(.seconds(5)) { self.events["hidden", default: 0] > hidden }
+        try? await Task.sleep(for: .seconds(2))
+        let before = frames.count
+        if parking {
+            hosting.frame = frame
+            container.addSubview(hosting)
+        } else {
+            view.isHidden = false
+        }
+        let shown = await waitUntil(.milliseconds(2_500)) { self.frames.count > before && Self.showsPage(view) }
+        let fits = await waitUntil(.seconds(5)) { Self.fits(view) }
+        check("\(name): the panel paints the page at once, at its size", hid && shown && fits,
+              "hidden \(hid), painted within 2.5 s \(shown), fits \(fits), " + describe(controller, framesSince: before))
+        save(view, as: (parking ? "resized-then-parked-" : "resized-then-occluded-") + "\(round)")
     }
 
     /// The agent used the tab a moment ago, so its engine still draws it, when the panel opens off screen (its window
