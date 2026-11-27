@@ -63,6 +63,11 @@ the menu bar menu and the sidebar's account menu. Nothing is sent anywhere and n
   counts against the account each task is on at that time.
 - **Projects** are the sidebar's (a worktree counts with its project); a session Yardlet did not start goes to the
   project whose folder holds its folder, else to the folder's name.
+- **Schedules:** a request in a turn a schedule's run started counts for that schedule as well, in the task the run
+  started or continued, from the run's start to the end of that turn (`ScheduledTaskRun.endedAt`). The person's own
+  turns in the same task count for none. A session's turns are asked about with its account, and again as soon as a
+  run starts or ends a turn. History read when counting is turned on counts for a schedule only the turns of the runs
+  it still keeps (its last 50) that ended: not a turn a quit cut off, nor a run from before Yardlet kept its end.
 
 ## Prices
 
@@ -89,8 +94,9 @@ make, kept in memory only.
 ## What is kept
 
 `~/.yardlet/usage/usage.sqlite3`, one file: counts by day, harness, model, provider session, folder and account (tokens
-of each kind, requests and their cost); how far each transcript was read; and the response ids of the last 14 days.
-About 13 MB for two months of heavy use. Nothing else is written, and the folder goes when counting is turned off.
+of each kind, requests and their cost); the counts of schedules' turns by day and schedule; how far each transcript was
+read; and the response ids of the last 14 days. About 13 MB for two months of heavy use. Nothing else is written, and
+the folder goes when counting is turned off.
 
 ## Work on the main thread
 

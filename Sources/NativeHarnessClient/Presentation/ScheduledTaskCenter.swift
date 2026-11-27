@@ -38,6 +38,8 @@ final class ScheduledTaskCenter {
     @ObservationIgnored var start: ((ScheduledTask, ScheduledTaskRun.Trigger, Date?) async -> ScheduleStartResult)?
     /// Why a run may not start now (the previous run's task, or the continued task, is busy).
     @ObservationIgnored var busyReason: ((ScheduledTask) -> ScheduledTaskRun.SkipReason?)?
+    /// Told when a run starts a turn or its turn ends, which Token usage counts by (`turns(inTasks:)`).
+    @ObservationIgnored var turnsChanged: (() -> Void)?
     /// The longest the loop sleeps between looks.
     @ObservationIgnored var checkInterval: Duration = .seconds(60)
 
@@ -104,6 +106,7 @@ final class ScheduledTaskCenter {
               let run = schedules[index].state.runs.firstIndex(where: { $0.id == runID }) else { return false }
         schedules[index].state.runs[run].endedAt = date
         persist()
+        turnsChanged?()
         return true
     }
 
@@ -245,6 +248,7 @@ final class ScheduledTaskCenter {
                                        mode: schedule.destination.mode, account: account)
             runningTurns[taskID] = run.id
             record(run, for: schedule.id)
+            turnsChanged?()
         case let .failed(message, taskID):
             record(ScheduledTaskRun(slot: slot, at: at, trigger: trigger, outcome: .failed, failure: message,
                                     taskID: taskID), for: schedule.id)

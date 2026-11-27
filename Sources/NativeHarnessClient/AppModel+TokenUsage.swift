@@ -23,7 +23,7 @@ extension AppModel {
 
     func followTokenUsage(defaults: UserDefaults = .yardlet) {
         tokenUsage.setEnabled(TokenUsagePreference.isOn(in: defaults), roots: tokenUsageRoots()) { [weak self] sessions in
-            await self?.tokenUsageAccounts(for: sessions) ?? TokenUsageLedger.Attribution()
+            await self?.tokenUsageAttribution(for: sessions) ?? TokenUsageLedger.Attribution()
         }
     }
 
@@ -41,21 +41,28 @@ extension AppModel {
     }
 
     /// The accounts the sessions ran on, as the Usage lines name them: a task's own account, and the
-    /// default login for anything Yardlet did not start.
-    func tokenUsageAccounts(for sessions: Set<String>) -> TokenUsageLedger.Attribution {
+    /// default login for anything Yardlet did not start. And the turns schedules' runs started in the tasks.
+    func tokenUsageAttribution(for sessions: Set<String>) -> TokenUsageLedger.Attribution {
         let names = MenuBarMenuProjection.accountNames(
             choices: connections.menuBarUsageChoices(for: HarnessCatalog.builtIns.map(\.id)))
         var accounts: [String: String] = [:]
+        var providers: [UUID: String] = [:]
         for session in store.sessions {
-            guard let provider = session.providerSessionID, sessions.contains(provider),
-                  let name = names[session.connection?.id ?? AccountChoice.nativeID(for: session.harness)] else { continue }
-            accounts[provider] = name
+            guard let provider = session.providerSessionID, sessions.contains(provider) else { continue }
+            providers[session.id] = provider
+            if let name = names[session.connection?.id ?? AccountChoice.nativeID(for: session.harness)] {
+                accounts[provider] = name
+            }
         }
         var defaults: [HarnessKind: String] = [:]
         for harness in HarnessCatalog.builtIns.map(\.id) {
             defaults[harness] = names[AccountChoice.nativeID(for: harness)]
         }
-        return TokenUsageLedger.Attribution(accounts: accounts, defaults: defaults)
+        var turns: [String: [ScheduledTurn]] = [:]
+        for (taskID, taskTurns) in scheduledTasks.turns(inTasks: Set(providers.keys)) {
+            if let provider = providers[taskID] { turns[provider, default: []] += taskTurns }
+        }
+        return TokenUsageLedger.Attribution(accounts: accounts, defaults: defaults, scheduledTurns: turns)
     }
 
     /// The accounts' limits as the Usage lines read them, each window with when it runs out at the pace

@@ -2,8 +2,9 @@ import Foundation
 
 /// Counts the tokens the harnesses' own transcripts on this Mac record (Claude Code's and Codex's),
 /// reading each file only past where it last stopped, and keeps the counts by day for a year in
-/// `TokenUsageStore`. It hands the app a summary of the last 30 days after each read that counted
-/// something. Nothing is sent anywhere; deleting its folder removes all it kept.
+/// `TokenUsageStore`, those of a turn a schedule's run started also by the schedule. It hands the app a
+/// summary of the last 30 days after each read that counted something. Nothing is sent anywhere;
+/// deleting its folder removes all it kept.
 actor TokenUsageLedger {
     /// The folders whose transcripts are read: Claude Code's `projects` and Codex's `sessions`, one
     /// entry per folder however many account folders link to it.
@@ -42,17 +43,19 @@ actor TokenUsageLedger {
     }
 
     /// Whose account each provider session ran on, as the app knows it when the session's requests are
-    /// read: Yardlet's tasks by their provider session, anything else on its harness's default login.
+    /// read: Yardlet's tasks by their provider session, anything else on its harness's default login. And
+    /// the turns schedules' runs started in each session, whose requests count for those schedules too.
     struct Attribution: Equatable, Sendable {
         var accounts: [String: String] = [:]
         var defaults: [HarnessKind: String] = [:]
+        var scheduledTurns: [String: [ScheduledTurn]] = [:]
 
         func account(_ harness: HarnessKind, session: String) -> String {
             accounts[session] ?? defaults[harness] ?? ""
         }
     }
 
-    /// Names the accounts of the sessions a read counted (the app's main actor answers).
+    /// Names the accounts and scheduled turns of the sessions a read counted (the app's main actor answers).
     typealias Resolve = @Sendable (Set<String>) async -> Attribution
 
     /// A year of days is kept; the responses counted in the last two weeks are remembered so a copy in
@@ -63,9 +66,12 @@ actor TokenUsageLedger {
     let directory: URL
     private var roots: Roots
     private let resolve: Resolve
-    /// The sessions' accounts as last asked, asked again after ten minutes as a task can move.
-    private var accounts: [String: (name: String, asked: Date)] = [:]
+    /// Each session's account and scheduled turns as last asked: asked again after ten minutes, as a task can
+    /// move, and once a schedule's run starts or ends a turn (`scheduledTurnsChanged`).
+    private var known: [String: (account: String, turns: [ScheduledTurn], asked: Date, generation: Int)] = [:]
     private var defaults: [HarnessKind: String] = [:]
+    /// Moves on each time a schedule's run starts or ends a turn.
+    private var turnsGeneration = 0
     private var pendingPaths: Set<String> = []
     private var needsFullScan = false
     private var isReading = false
@@ -130,6 +136,12 @@ actor TokenUsageLedger {
         sendSummary()
     }
 
+    /// A schedule's run started a turn or its turn ended: the sessions read next are asked about again, so a
+    /// turn's requests count for its schedule from its start and the person's after its end do not.
+    func scheduledTurnsChanged() {
+        turnsGeneration += 1
+    }
+
     /// One read at a time, so a file is never read twice from the same place: what arrives meanwhile
     /// waits for the read under way and goes next.
     private func readPending() async {
@@ -177,6 +189,7 @@ actor TokenUsageLedger {
     private struct Batch {
         var requests: [TokenUsageRequest] = []
         var rows: [String: TokenUsageStore.Row] = [:]
+        var scheduleRows: [String: TokenUsageStore.ScheduleRow] = [:]
         var seen: [(hash: Int64, output: Int64, day: Int)] = []
         var files: [String: TokenUsageStore.FileState] = [:]
     }
@@ -189,19 +202,24 @@ actor TokenUsageLedger {
         for (path, harness) in paths { read(path, harness: harness, into: &batch) }
         guard !batch.files.isEmpty else { return false }
         let asked = now()
+        // Taken before the app answers: a turn started or ended meanwhile has these asked again next time.
+        let generation = turnsGeneration
         let unknown = Set(batch.requests.map(\.session)).filter { session in
-            accounts[session].map { asked.timeIntervalSince($0.asked) > 600 } ?? true
+            known[session].map { asked.timeIntervalSince($0.asked) > 600 || $0.generation != generation } ?? true
         }
         if !unknown.isEmpty {
             let answer = await resolve(unknown)
             defaults = answer.defaults
-            for session in unknown { accounts[session] = (answer.accounts[session] ?? "", asked) }
+            for session in unknown {
+                known[session] = (answer.accounts[session] ?? "", answer.scheduledTurns[session] ?? [], asked, generation)
+            }
         }
         // The store may have closed while the app answered.
         guard let store else { return false }
         for request in batch.requests { count(request, into: &batch) }
         do {
-            try store.apply(rows: Array(batch.rows.values), seen: batch.seen, files: batch.files)
+            try store.apply(rows: Array(batch.rows.values), scheduleRows: Array(batch.scheduleRows.values),
+                            seen: batch.seen, files: batch.files)
             files.merge(batch.files) { $1 }
         } catch {
             // Nothing was recorded, so the same lines are read again next time.
@@ -269,30 +287,31 @@ actor TokenUsageLedger {
             seen[hash] = output
             batch.seen.append((hash, output, day))
         }
-        let named = accounts[request.session]?.name ?? ""
+        let session = known[request.session]
+        let named = session?.account ?? ""
         let account = named.isEmpty ? defaults[request.harness] ?? "" : named
-        let key = [String(day), request.harness.rawValue, request.model, request.session, request.folder, account]
-            .joined(separator: "\u{1F}")
-        var row = batch.rows[key] ?? TokenUsageStore.Row(
-            day: day, harness: request.harness.rawValue, model: request.model, session: request.session,
-            folder: request.folder, account: account, amount: TokenUsageAmount())
-        row.amount.freshInput += request.freshInput
-        row.amount.cacheWrite += request.cacheWrite + request.longCacheWrite
-        row.amount.cacheRead += request.cacheRead
-        row.amount.output += request.output
-        row.amount.requests += requests
+        var amount = TokenUsageAmount(freshInput: request.freshInput, cacheWrite: request.cacheWrite + request.longCacheWrite,
+                                      cacheRead: request.cacheRead, output: request.output, requests: requests)
         if let rates = TokenUsagePrices.rates(model: request.model, prompt: request.prompt, fast: request.fast,
                                               usOnly: request.usOnly) {
-            let cost: [TokenUsageKind: Double] = [
+            amount.kindCost = [
                 .freshInput: Double(request.freshInput) * rates.input / 1e6,
                 .cacheWrite: (Double(request.cacheWrite) * rates.cacheWrite
                               + Double(request.longCacheWrite) * rates.longCacheWrite) / 1e6,
                 .cacheRead: Double(request.cacheRead) * rates.cacheRead / 1e6,
                 .output: Double(request.output) * rates.output / 1e6
             ]
-            row.amount.kindCost.merge(cost, uniquingKeysWith: +)
         }
-        batch.rows[key] = row
+        let key = [String(day), request.harness.rawValue, request.model, request.session, request.folder, account]
+            .joined(separator: "\u{1F}")
+        batch.rows[key, default: TokenUsageStore.Row(
+            day: day, harness: request.harness.rawValue, model: request.model, session: request.session,
+            folder: request.folder, account: account, amount: TokenUsageAmount())].amount.add(amount)
+        // A request in a turn a schedule's run started counts for the schedule too.
+        if let schedule = session?.turns.first(where: { $0.contains(request.date) })?.scheduleID.uuidString {
+            batch.scheduleRows["\(day)\u{1F}\(schedule)", default: TokenUsageStore.ScheduleRow(
+                day: day, schedule: schedule, amount: TokenUsageAmount())].amount.add(amount)
+        }
     }
 
     /// FNV-1a of a response's id.
@@ -327,9 +346,11 @@ actor TokenUsageLedger {
     private var summarized: Int?
 
     private func sendSummary() {
-        guard let store, let publish, let rows = try? store.rows(since: day(daysBefore: 29)) else { return }
+        let since = day(daysBefore: 29)
+        guard let store, let publish, let rows = try? store.rows(since: since),
+              let scheduleRows = try? store.scheduleRows(since: since) else { return }
         summarized = day(daysBefore: 0)
-        publish(TokenUsageSummary(rows: rows, calendar: calendar, now: now()))
+        publish(TokenUsageSummary(rows: rows, scheduleRows: scheduleRows, calendar: calendar, now: now()))
     }
 }
 
@@ -345,16 +366,19 @@ struct TokenUsageSummary: Equatable, Sendable {
 
     var days: [TokenUsageDay]
     var groups: [TokenUsageRange: [TokenUsageGrouping: [Key: TokenUsageAmount]]]
+    /// Each range's counts of the turns schedules' runs started, by schedule id.
+    var schedules: [TokenUsageRange: [String: TokenUsageAmount]]
     var updatedAt: Date
 
     init(days: [TokenUsageDay], groups: [TokenUsageRange: [TokenUsageGrouping: [Key: TokenUsageAmount]]],
-         updatedAt: Date) {
+         schedules: [TokenUsageRange: [String: TokenUsageAmount]] = [:], updatedAt: Date) {
         self.days = days
         self.groups = groups
+        self.schedules = schedules
         self.updatedAt = updatedAt
     }
 
-    init(rows: [TokenUsageStore.Row], calendar: Calendar, now: Date) {
+    init(rows: [TokenUsageStore.Row], scheduleRows: [TokenUsageStore.ScheduleRow], calendar: Calendar, now: Date) {
         let today = calendar.startOfDay(for: now)
         let starts = (0..<30).reversed().compactMap { calendar.date(byAdding: .day, value: -$0, to: today) }
         func number(_ date: Date) -> Int {
@@ -379,7 +403,13 @@ struct TokenUsageSummary: Equatable, Sendable {
                 }
             }
         }
+        var schedules: [TokenUsageRange: [String: TokenUsageAmount]] = [:]
+        for row in scheduleRows {
+            for range in TokenUsageRange.allCases where row.day >= numbers[numbers.count - range.days] {
+                schedules[range, default: [:]][row.schedule, default: TokenUsageAmount()].add(row.amount)
+            }
+        }
         self.init(days: zip(starts, numbers).map { TokenUsageDay(start: $0, amount: byDay[$1] ?? TokenUsageAmount()) },
-                  groups: groups, updatedAt: now)
+                  groups: groups, schedules: schedules, updatedAt: now)
     }
 }

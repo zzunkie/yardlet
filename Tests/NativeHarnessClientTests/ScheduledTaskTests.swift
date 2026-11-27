@@ -235,6 +235,7 @@ final class ScheduledTaskTests: XCTestCase {
 
     /// The turn a run starts is the schedule's from the run's start until that turn ends, which the run keeps;
     /// the person's next turn in the same task is not, and a run's turn a quit cut off is not running after it.
+    /// Token usage reads those turns by the task's provider session, told as each one starts and ends.
     func testARunKeepsWhenTheTurnItStartedEnded() async throws {
         let file = root.appending(path: ".yardlet/schedules.json")
         let clock = Clock(date(16, 20))
@@ -248,6 +249,9 @@ final class ScheduledTaskTests: XCTestCase {
             trigger: .interval(hours: 2, anchor: date(16, 22), days: []),
             destination: ScheduleDestination(mode: .continueTask, harness: .openCode, targetTaskID: target.id)))
         let schedule = try XCTUnwrap(model.scheduledTasks.schedules.first)
+        var told = 0
+        let follow = model.scheduledTasks.turnsChanged
+        model.scheduledTasks.turnsChanged = { told += 1; follow?() }
 
         clock.now = date(17, 0, 0, 10)
         await model.scheduledTasks.checkDue()
@@ -257,18 +261,24 @@ final class ScheduledTaskTests: XCTestCase {
         XCTAssertEqual(model.scheduledTasks.turns(inTasks: [target.id]),
                        [target.id: [ScheduledTurn(scheduleID: schedule.id, start: run.at, end: nil)]])
         XCTAssertEqual(model.scheduledTasks.turns(inTasks: [UUID()]), [:])
+        let provider = try XCTUnwrap(model.store.sessions.first { $0.id == target.id }?.providerSessionID)
+        XCTAssertEqual(model.tokenUsageAttribution(for: [provider, "elsewhere"]).scheduledTurns,
+                       [provider: [ScheduledTurn(scheduleID: schedule.id, start: run.at, end: nil)]])
+        XCTAssertEqual(told, 1)
 
         try await model.store.updateSession(id: target.id, status: .running)
         await model.turnEnded(target.id, as: .completed, cause: .providerStatus, at: date(17, 0, 4))
         XCTAssertEqual(model.scheduledTasks.schedules.first?.state.runs.first?.endedAt, date(17, 0, 4))
         let ended = [target.id: [ScheduledTurn(scheduleID: schedule.id, start: run.at, end: date(17, 0, 4))]]
         XCTAssertEqual(model.scheduledTasks.turns(inTasks: [target.id]), ended)
+        XCTAssertEqual(told, 2)
 
         // The person's own turn after it ends without touching the run.
         try await model.store.updateSession(id: target.id, status: .running)
         await model.turnEnded(target.id, as: .completed, cause: .providerStatus, at: date(17, 1))
         XCTAssertEqual(model.scheduledTasks.schedules.first?.state.runs.first?.endedAt, date(17, 0, 4))
         XCTAssertEqual(model.scheduledTasks.turns(inTasks: [target.id]), ended)
+        XCTAssertEqual(told, 2)
 
         // The next run's turn, cut off by a quit: after it, that run has no turn running and keeps no end.
         clock.now = date(17, 2, 0, 10)

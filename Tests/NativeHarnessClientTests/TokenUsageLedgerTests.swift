@@ -169,6 +169,79 @@ final class TokenUsageLedgerTests: XCTestCase {
         await ledger.stop()
     }
 
+    /// What the app answers about the sessions a read counted, and how often it was asked.
+    @MainActor final class Answers {
+        var attribution: TokenUsageLedger.Attribution
+        var asked = 0
+
+        init(_ attribution: TokenUsageLedger.Attribution) {
+            self.attribution = attribution
+        }
+
+        func answer(_ sessions: Set<String>) -> TokenUsageLedger.Attribution {
+            asked += 1
+            return attribution
+        }
+    }
+
+    /// A request in a turn a schedule's run started counts for the schedule as well as everywhere else; the
+    /// person's turns before and after it in the same session, and another session meanwhile, do not. A session
+    /// is asked about once, and again as soon as a run starts or ends a turn, and the counts outlast the ledger.
+    func testCountsTheTurnsOfSchedulesRunsForTheirSchedules() async throws {
+        func ago(_ minutes: Double) -> Date { Date().addingTimeInterval(-minutes * 60) }
+        let schedule = UUID()
+        let answers = Answers(TokenUsageLedger.Attribution(scheduledTurns: [
+            "a": [ScheduledTurn(scheduleID: schedule, start: ago(20), end: ago(10))]]))
+        let main = claudeRoot.appending(path: "-work-app/session-a.jsonl")
+        let other = claudeRoot.appending(path: "-work-app/session-b.jsonl")
+        try write(try claude("msg_before", session: "a", output: 1, minutesAgo: 30)
+                  + claude("msg_run_1", session: "a", output: 20, minutesAgo: 18)
+                  + claude("msg_run_2", session: "a", output: 30, minutesAgo: 12)
+                  + claude("msg_after", session: "a", output: 4_000, minutesAgo: 5), to: main)
+        try write(try claude("msg_other", session: "b", output: 500, minutesAgo: 15), to: other)
+        let directory = root.appending(path: "usage")
+        let ledger = TokenUsageLedger(directory: directory, roots: roots, resolve: { await answers.answer($0) })
+        let box = try await start(ledger)
+        func scheduled() -> TokenUsageAmount? { box.summaries.last?.schedules[.week]?[schedule.uuidString] }
+
+        XCTAssertEqual(scheduled()?.requests, 2)
+        XCTAssertEqual(scheduled()?.output, 50)
+        XCTAssertEqual(box.summaries.last?.schedules[.week]?.count, 1)
+        XCTAssertEqual(box.counted.requests, 5, "They count everywhere else as before")
+        // Opus 5.5's output at $20 and cache reads at $0.20 per million, 1-hour writes at $8, input at $4.
+        XCTAssertEqual(try XCTUnwrap(scheduled()?.cost), (50 * 20 + 200_000 * 0.2 + 4_000 * 8 + 8 * 4) / 1e6, accuracy: 1e-9)
+        XCTAssertEqual(answers.asked, 1)
+        try write(try claude("msg_other_2", session: "b", output: 1, minutesAgo: 4), to: other, appending: true)
+        await ledger.changed([other.path])
+        try await waitUntil { box.counted.requests == 6 }
+        XCTAssertEqual(answers.asked, 1, "Nothing changed, so nothing was asked")
+
+        // The next run starts a turn: its request counts for the schedule.
+        answers.attribution.scheduledTurns["a"]?.append(ScheduledTurn(scheduleID: schedule, start: ago(3), end: nil))
+        await ledger.scheduledTurnsChanged()
+        try write(try claude("msg_run_3", session: "a", output: 7, minutesAgo: 2), to: main, appending: true)
+        await ledger.changed([main.path])
+        try await waitUntil { scheduled()?.requests == 3 }
+        XCTAssertEqual(answers.asked, 2)
+
+        // Its turn ends: the person's next request in the same task does not.
+        answers.attribution.scheduledTurns["a"] = [ScheduledTurn(scheduleID: schedule, start: ago(20), end: ago(10)),
+                                                   ScheduledTurn(scheduleID: schedule, start: ago(3), end: ago(1))]
+        await ledger.scheduledTurnsChanged()
+        try write(try claude("msg_after_2", session: "a", output: 9, minutesAgo: 0), to: main, appending: true)
+        await ledger.changed([main.path])
+        try await waitUntil { box.counted.requests == 8 }
+        XCTAssertEqual(scheduled()?.requests, 3)
+        XCTAssertEqual(scheduled()?.output, 57)
+        XCTAssertEqual(answers.asked, 3)
+        await ledger.stop()
+
+        let reopened = TokenUsageLedger(directory: directory, roots: roots)
+        let again = try await start(reopened)
+        XCTAssertEqual(again.summaries.last?.schedules[.week]?[schedule.uuidString]?.output, 57)
+        await reopened.stop()
+    }
+
     /// A long history (60,000 responses in 400 files) read once; then each new response costs one read of
     /// the bytes written and one publication, observed by what reads the counts (the band and the page)
     /// and not by what reads only whether counting is on (the window).
