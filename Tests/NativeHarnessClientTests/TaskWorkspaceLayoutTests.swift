@@ -125,14 +125,8 @@ final class TaskWorkspaceLayoutTests: XCTestCase {
         let turns = Int(ProcessInfo.processInfo.environment["NHC_HIDDEN_CONVERSATION_TURNS"] ?? "") ?? 40
         // Scrollers over the content, as with a trackpad. A scroller that takes room (a mouse, or a Mac without
         // a display, as on CI) leaves a disabled scroll view, and its messages are laid out at the width it gives up.
-        let arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
-        UserDefaults.standard.setVolatileDomain(arguments.merging(["AppleShowScrollBars": "WhenScrolling"]) { $1 },
-                                                forName: UserDefaults.argumentDomain)
-        NotificationCenter.default.post(name: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil)
-        defer {
-            UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
-            NotificationCenter.default.post(name: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil)
-        }
+        let restoreScrollers = WindowlessRender.overlayScrollers()
+        defer { restoreScrollers() }
         let area = HiddenConversationArea()
         let conversation = ConversationTimeline(
             source: .transcript(entries: LongConversationFixture.claude(turns: turns, seed: "hidden-conversation"),

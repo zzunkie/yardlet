@@ -1282,11 +1282,13 @@ final class WindowStructureQATests: XCTestCase {
             host.settle(passes: 6, interval: 0.03)
             await model.store.markRead(id: sessions[0].id)
             host.settle(passes: 6, interval: 0.03)
-            /// The task rows in view, by title, at their tops.
+            /// The task rows in view, by title, at their tops; a row's own controls, such as its "Task actions" menu,
+            /// are not rows.
+            let titles = Set(sessions.map(\.title) + ["Started elsewhere"])
             func rows() -> [String: CGFloat] {
                 Dictionary(elements(in: host).compactMap { control -> (String, CGFloat)? in
                     let title = String(control.label.prefix { $0 != "," })
-                    guard title.hasPrefix("Task ") || title == "Started elsewhere", control.frame.height > 0,
+                    guard titles.contains(title), control.frame.height > 0,
                           control.frame.minY < Self.size.height else { return nil }
                     return (title, control.frame.minY)
                 }, uniquingKeysWith: { first, _ in first })
