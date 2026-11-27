@@ -81,8 +81,8 @@ struct ScheduledRunRow: Identifiable, Equatable {
     }
 }
 
-/// The schedule shown beside the sidebar's list: what it runs, where and when, its actions, and its
-/// run history grouped by day.
+/// The schedule shown beside the sidebar's list: what it runs, where and when, what its runs used, its actions,
+/// and its run history grouped by day.
 struct ScheduledTaskDetail: View {
     @Environment(\.yardletInterfaceScale) private var interfaceScale
     let schedule: ScheduledTask
@@ -235,6 +235,9 @@ struct ScheduledTaskDetail: View {
         }
         rows.append((L10n.string("Next run"), nextRun.map { ScheduleText.moment($0, relativeTo: now, calendar: calendar) } ?? "—"))
         rows.append((L10n.string("Last run"), schedule.state.lastRunAt.map { ScheduleText.moment($0, relativeTo: now, calendar: calendar) } ?? "—"))
+        if let usage = context.usage(schedule) {
+            rows.append((L10n.string("Usage"), TokenUsageFormat.lastWeek(usage)))
+        }
         return rows
     }
 

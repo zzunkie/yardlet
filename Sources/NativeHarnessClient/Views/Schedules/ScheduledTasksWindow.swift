@@ -145,7 +145,8 @@ struct ScheduledTasksMain: View {
                 let id = schedule.destination.accountID ?? model.connections.selection[harness]
                     ?? AccountChoice.nativeID(for: harness)
                 return choices.first { $0.id == id }?.title
-            })
+            },
+            usage: { schedule in model.tokenUsage(ofSchedule: schedule.id) })
     }
 }
 

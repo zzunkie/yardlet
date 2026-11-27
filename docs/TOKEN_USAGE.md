@@ -2,7 +2,8 @@
 
 Yardlet counts the tokens Claude Code and Codex record in their own transcripts on this Mac and shows them
 with each account's plan limits: on Home's Projects view over the projects, in Settings › Usage, and on one line under Usage in
-the menu bar menu and the sidebar's account menu. Nothing is sent anywhere and no model is asked anything.
+the menu bar menu and the sidebar's account menu. Scheduled tasks says what each schedule's runs used. Nothing is sent
+anywhere and no model is asked anything.
 
 ## Where it shows
 
@@ -25,6 +26,9 @@ the menu bar menu and the sidebar's account menu. Nothing is sent anywhere and n
   - The prices' source and date, and the switch.
 - **Menus:** "5.48B tokens today · $2,124 API equivalent" first under Usage. In the sidebar's account menu it opens
   Settings › Usage.
+- **Scheduled tasks:** a schedule's details say, under Usage, what the turns its runs started used in the last 7 days:
+  "42.1M tokens in the last 7 days · $14.44 API equivalent" (see Schedules under How it counts). The line is not there
+  while counting is off, nor in another Mac's window.
 
 ## Turning it on and off
 
@@ -101,9 +105,9 @@ the folder goes when counting is turned off.
 ## Work on the main thread
 
 The reading, counting and summing run off the main thread. The app gets a summary of the last 30 days after a read that
-counted something, and publishes it only when it differs; only the Home band and the usage page read it, so a new count
-redraws them and nothing else (`TokenUsageLedgerTests`: 60,000 responses read once, then each new response one read of its
-own bytes and one publication).
+counted something, and publishes it only when it differs; only the Home band, the usage page and a schedule's details
+read it, so a new count redraws them and nothing else (`TokenUsageLedgerTests`: 60,000 responses read once, then each new
+response one read of its own bytes and one publication).
 
 A window on another Mac carries every range grouped every way, and its Settings page is built again for any change of a
 setting or the vault while it watches. The Mac keeps those rows until the counts, the projects or what a row shows of a

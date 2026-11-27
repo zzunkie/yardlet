@@ -84,6 +84,13 @@ extension AppModel {
         }
     }
 
+    /// What the turns a schedule's runs started used in the last 7 days; nil while counting is off or before its
+    /// first read. Read inside the schedule's details, so they redraw with a new count.
+    func tokenUsage(ofSchedule id: UUID) -> TokenUsageAmount? {
+        guard tokenUsage.isEnabled, let summary = tokenUsage.summary else { return nil }
+        return summary.schedules[.week]?[id.uuidString] ?? TokenUsageAmount()
+    }
+
     /// What the Home band and Settings › Usage draw. Read inside their bodies, so only they redraw when a
     /// new count or reading comes.
     func tokenUsageOverview() -> TokenUsageOverview {

@@ -3963,6 +3963,7 @@
 "At the last hour's pace this limit runs out %@." = "At the last hour's pace this limit runs out %@.";
 "Open Settings › Usage" = "Open Settings › Usage";
 "%@ tokens today" = "%@ tokens today";
+"%@ tokens in the last 7 days" = "%@ tokens in the last 7 days";
 "Plan limits" = "Plan limits";
 "Token usage" = "Token usage";
 "Range" = "Range";

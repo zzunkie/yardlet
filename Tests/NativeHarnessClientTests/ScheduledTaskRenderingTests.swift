@@ -4,8 +4,8 @@ import XCTest
 @testable import NativeHarnessClient
 
 /// Scheduled tasks drawn for review into `.build/schedules-qa/`, light and dark: the sidebar entry,
-/// the list in the task list's place beside the chosen schedule with its run history (a run that went
-/// to another account among them, and its task's hover card), the empty
+/// the list in the task list's place beside the chosen schedule with what its runs used and its run
+/// history (a run that went to another account among them, and its task's hover card), the empty
 /// place, the editor for each trigger (a weekly one at five times among them) and for continuing a
 /// task, and the other-app import sheet
 /// before and after an import. No provider, runtime or app file is touched; the import sheet draws a
@@ -31,6 +31,8 @@ final class ScheduledTaskRenderingTests: XCTestCase {
         let schedules: [String: ScheduledTask]
         /// The run that went to another account, and its task.
         let switchedRun: (task: SessionRecord, account: AccountAssignment)
+        /// What the morning check's runs used this week.
+        let morningUsage: TokenUsageAmount
     }
 
     private func makeFixture() async throws -> Fixture {
@@ -134,6 +136,12 @@ final class ScheduledTaskRenderingTests: XCTestCase {
                              systemNotificationCenter: ScheduleNotificationRecorder(), restoresIndexOnLaunch: false)
         // Drawn as at half past ten today, after the morning runs.
         model.scheduledTasks.now = { at(0, 10, 30) }
+        // The morning runs' turns this week, as the transcripts counted them: Claude Opus 5.5, mostly cache reads.
+        let morningUsage = TokenUsageAmount(
+            freshInput: 1_200, cacheWrite: 310_000, cacheRead: 41_600_000, output: 182_000, requests: 312,
+            kindCost: [.freshInput: 0.0048, .cacheWrite: 2.48, .cacheRead: 8.32, .output: 3.64])
+        model.tokenUsage = TokenUsageCenter(directory: root.appending(path: "usage"), summary: TokenUsageSummary(
+            days: [], groups: [:], schedules: [.week: [morning.id.uuidString: morningUsage]], updatedAt: now))
         let state = ScheduledTasksWindowState()
         state.isShowing = true
         state.selection = morning.id
@@ -141,7 +149,7 @@ final class ScheduledTaskRenderingTests: XCTestCase {
         state.expandedSections = [.off, .finished]
         return Fixture(model: model, state: state, project: project, releaseTask: releaseTask,
                        schedules: ["morning": morning, "standup": standup, "release": release, "nightly": nightly],
-                       switchedRun: (yesterdayRun, switched))
+                       switchedRun: (yesterdayRun, switched), morningUsage: morningUsage)
     }
 
     private func render<Content: View>(_ name: String, size: NSSize, appearances: [WindowlessRender.Appearance] = WindowlessRender.Appearance.allCases,
@@ -197,6 +205,7 @@ final class ScheduledTaskRenderingTests: XCTestCase {
             let text = outcome == .deferred ? "Waiting until the task is available"
                 : "Missed: the task was unavailable for 24 hours"
             XCTAssertTrue(shows(elements, L10n.string(text)))
+            XCTAssertFalse(elements.contains { $0.label == L10n.string("Usage") }, "Nothing counted, no line")
         }
         await fixture.model.shutdown()
     }
@@ -216,6 +225,7 @@ final class ScheduledTaskRenderingTests: XCTestCase {
             .background(ParityTheme.canvas)
         }
         XCTAssertTrue(shows(window, "Morning check"))
+        XCTAssertTrue(shows(window, TokenUsageFormat.lastWeek(fixture.morningUsage)), "What the morning runs used")
         XCTAssertTrue(shows(window, L10n.string("Paused")), "Branch cleanup is paused")
         XCTAssertTrue(shows(window, L10n.format("Turned off after %lld failed starts", Int64(3))))
         let ran = try XCTUnwrap(window.first { $0.label == "One-off migration check" })
@@ -282,6 +292,7 @@ final class ScheduledTaskRenderingTests: XCTestCase {
         }
         XCTAssertTrue(shows(release, L10n.format("Continues “%@”", "Release watch")))
         XCTAssertTrue(shows(release, L10n.string("Imported from the Codex app.")))
+        XCTAssertTrue(shows(release, TokenUsageFormat.lastWeek(TokenUsageAmount())), "Counted, and none this week")
 
         // A Codex schedule's permission, in the words of Codex's own control.
         fixture.state.selection = fixture.schedules["standup"]?.id
