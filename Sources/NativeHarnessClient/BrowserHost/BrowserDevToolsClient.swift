@@ -133,9 +133,15 @@ final class BrowserDevToolsClient {
             let params = value["params"] ?? .null
             let session = value["sessionId"]?.stringValue
             followFrameSessions(method, params, from: session)
+            // The vault watch runs in every attached session, including OOPIFs, so its binding reports have to reach
+            // the observer whichever session carries them (Chromium delivers `Runtime.bindingCalled` on the session
+            // whose world ran the call; a cross-site OOPIF's answer is already enforced by `showing`/`fillFrames`).
+            if method == "Runtime.bindingCalled" {
+                eventObservers.values.forEach { $0(method, params) }
+                return
+            }
             guard session == nil else { return }
-            // A binding's payload is for its observer alone: the vault's carries what the person typed into a sign-in.
-            if method != "Runtime.bindingCalled" { events.append((method, params)) }
+            events.append((method, params))
             if method == "Page.frameNavigated", params["frame"]?["parentId"] == nil,
                let id = params["frame"]?["id"]?.stringValue { mainFrameID = id }
             eventObservers.values.forEach { $0(method, params) }

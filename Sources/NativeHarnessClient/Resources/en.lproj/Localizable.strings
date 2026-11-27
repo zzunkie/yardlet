@@ -3066,7 +3066,6 @@
 "Sign in on %@ with a saved account?" = "Sign in on %@ with a saved account?";
 "Fill the password for “%@” on %@?" = "Fill the password for “%@” on %@?";
 "Fill a password for %@?" = "Fill a password for %@?";
-"Fill" = "Fill";
 "This page has no password field to fill." = "This page has no password field to fill.";
 "Yardlet could not make a password." = "Yardlet could not make a password.";
 "Saved the new password in “%@”." = "Saved the new password in “%@”.";

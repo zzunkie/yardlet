@@ -484,15 +484,20 @@ one, shows only as "Passkey · made <date>", and it is not created here (section
   right-click "Use Strong Password".
 - **Sign-in focus (§6.1):** when an empty username, email or password field takes the focus on a site the vault has
   an item for, the bar above the page: one saved item reads "Sign in as ada on github.com? [Not Now] [Fill]" at the
-  username step, or "Fill the password for “GitHub” on github.com? [Not Now] [Fill]" at the password step; several
-  items read "Sign in on github.com with a saved account? [Not Now] [Fill ▾]" with the accounts in the menu, in the
-  order the key button's list uses (an item the person already filled at this sign-in's earlier step
-  (`BrowserVaultSignInStep`) comes first). Focus alone fills nothing — the person has to click Fill, so this matches
-  Chrome's and Safari's at-the-field suggestion. Not Now keeps the bar off that page until the panel opens another
-  address; the key button beside the address field continues to work. The field must be in a document the item's
-  sites may fill (`fillFrames`, section 6.2) — a cross-site iframe never raises the bar — and the two-factor code
-  bar, the strong-password bar and the wallet fill bar take precedence at their fields. See `BrowserVaultSignInOffer`
-  and `BrowserHostPaneController.signInFieldFocused` in `BrowserHostPaneVault.swift`, and the watch's `signInFocus`
+  username step (the item's username when it has one, else its name), or "Fill the password for “GitHub” on
+  github.com? [Not Now] [Fill]" at the password step; several items read "Sign in on github.com with a saved
+  account? [Not Now] [Fill ▾]" with the accounts in the menu, in the order the key button's list uses
+  (`VaultCenter.pickerItems`: last-used first, then by account name; an item the person filled at this sign-in's
+  earlier step comes first — `BrowserVaultSignInStep`). Focus alone fills nothing — the person has to click Fill, so
+  this matches Chrome's and Safari's at-the-field suggestion. Not Now keeps the bar off the current page until the
+  panel opens another address; the key button beside the address field continues to work. The field must be in a
+  document the item's sites may fill (`fillFrames`, section 6.2) — a cross-site iframe never raises the bar — and
+  the two-factor code bar, the strong-password bar and the wallet fill bar take precedence at their fields. The
+  watch runs in every attached session, including OOPIFs (Apple's `idmsa.apple.com` on `account.apple.com`), so
+  `signInFocus` from an iframe in another process also reaches the panel; the chain is still refused for cross-site
+  OOPIFs. A new-password field (strong-password bar) and a one-time code field (code bar) never send `signInFocus`,
+  so the bars do not compete at the same field. See `BrowserVaultSignInOffer` and
+  `BrowserHostPaneController.signInFieldFocused` in `BrowserHostPaneVault.swift`, and the watch's `signInFocus`
   event in `BrowserAgentVault.swift` (`VaultPageScripts.watchScript`'s `focusin` handler).
 
 ### 8.4 When it is used

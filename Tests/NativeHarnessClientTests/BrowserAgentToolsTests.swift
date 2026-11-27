@@ -2163,19 +2163,38 @@ final class BrowserAgentToolsTests: XCTestCase {
 
     /// The watch raises `signInFocus` in the page's focusin handler when an empty username/email or password field
     /// takes the focus, so the host can show the sign-in offer bar (design §6.1). The bar never fills from focus
-    /// alone — the person's Fill click is what fills — and the test pins the watch's shape so that: the handler is
-    /// gated by `e.target.value` (empty fields only) and `shown(e.target)` (the same visibility test as every other
-    /// bar); a password field sends `step: 'password'`; a text/email field matched by the username helper sends
-    /// `step: 'username'`; and `passwordFocus` still fires alongside for the strong-password bar.
+    /// alone — the person's Fill click is what fills — and the test pins the watch's shape so that:
+    /// 1. both `step: 'password'` and `step: 'username'` are emitted, and `passwordFocus` still fires alongside
+    ///    for the strong-password bar;
+    /// 2. the handler is gated by `e.target.value` (empty fields only) and the strict visibility test
+    ///    (`checkVisibility`, `opacity: '0'`, `disabled`, `readOnly`), so a readOnly or ancestor-hidden field never
+    ///    raises the bar;
+    /// 3. new-password, one-time code, search and wallet fields are excluded (they have their own bars, or they
+    ///    are not sign-in fields at all);
+    /// 4. a wallet field returns before the sign-in branch runs — no double report.
     func testWatchScriptRaisesSignInFocusForEmptyUsernameOrPasswordFields() {
         let script = VaultPageScripts.watchScript
         for check in ["kind: 'signInFocus', step: 'password'", "kind: 'signInFocus', step: 'username'",
-                      "!e.target.value", "shown(e.target)",
+                      "kind: 'passwordFocus'", "!e.target.value",
                       "/user|e\\s?mail|login|account|아이디|이메일|계정/i",
                       "codeFieldWords(e.target)",
-                      "kind: 'passwordFocus'"] {
+                      "checkVisibility",
+                      "f.disabled || f.readOnly",
+                      "!isCodeField(e.target) && !looksLikeCodeField(e.target)",
+                      "e.target.type !== 'search' && e.target.getAttribute('role') !== 'searchbox'",
+                      "!newPasswordFields(e.target).length",
+                      "!ac.includes('one-time-code')"] {
             XCTAssertTrue(script.contains(check), "watchScript must include \(check)")
         }
+        // A wallet field returns before the sign-in branch runs, so `walletFocus` cannot fall through to a stray
+        // `signInFocus` report on the same event.
+        guard let walletRange = script.range(of: "if (which) {") else {
+            return XCTFail("walletFocus branch missing")
+        }
+        let walletTail = script[walletRange.upperBound...]
+        let signInIndex = walletTail.range(of: "signInFocus")!.lowerBound
+        let returnInBetween = walletTail[..<signInIndex].contains("return;")
+        XCTAssertTrue(returnInBetween, "the walletFocus branch must return before the signInFocus branch")
     }
 
     /// `BrowserVaultSignInOffer.Step` raw values stay stable so the watch's payload keeps matching the host's parser.
@@ -2183,6 +2202,51 @@ final class BrowserAgentToolsTests: XCTestCase {
     func testSignInOfferStepRawValues() {
         XCTAssertEqual(BrowserVaultSignInOffer.Step.username.rawValue, "username")
         XCTAssertEqual(BrowserVaultSignInOffer.Step.password.rawValue, "password")
+    }
+
+    /// `pickerItems` returns the site's items ordered the same way the key button's list orders them (last-used
+    /// first, then by account title), with the item the person filled at the sign-in's earlier step (`first:`) at
+    /// the front. The sign-in bar reuses this order and filters it by step — a username step keeps items with a
+    /// username, a password step keeps items with a password — which guards against the strict-weak-ordering trap
+    /// a hand-rolled `sorted` on `.id == step1` would risk. The test runs on a small in-memory vault to pin the
+    /// ordering, so a refactor cannot quietly break it.
+    func testSignInBarUsesPickerItemsOrderAndStepFilter() async throws {
+        let item1 = VaultItem(id: UUID(), name: "Z Later", sites: ["example.com"], username: "zed", hasPassword: true,
+                              policy: .always, lastUsedAt: Date(timeIntervalSince1970: 100))
+        let item2 = VaultItem(id: UUID(), name: "A Recent", sites: ["example.com"], username: "ada", hasPassword: true,
+                              policy: .always, lastUsedAt: Date(timeIntervalSince1970: 200))
+        // A sign-in with no username: `pickerItems(kind: .signIn)` keeps it (it has a password), the bar's password
+        // step keeps it, and the bar's username step drops it — a username field has nothing to fill from it.
+        let item3 = VaultItem(id: UUID(), name: "Nameless", sites: ["example.com"], username: "",
+                              hasPassword: true, policy: .always, lastUsedAt: Date(timeIntervalSince1970: 300))
+        let vault = VaultCenter(environment: VaultCenter.Environment(
+            secrets: InMemoryVaultSecretStore([item1.id: VaultSecret(password: "p1"),
+                                               item2.id: VaultSecret(password: "p2"),
+                                               item3.id: VaultSecret(password: "p3")]),
+            repository: InMemoryVaultRepository(items: [item1, item2, item3]),
+            hmac: MacVault.hmac, isAllowedBuild: true, defaults: .vaultTests()))
+        // Last-used first → item3, item2, item1. The sign-in bar's step filter keeps or drops item3 accordingly.
+        let all = vault.pickerItems(for: "https://www.example.com", matching: "", kind: .signIn, first: nil).here
+        XCTAssertEqual(all.map(\.name), ["Nameless", "A Recent", "Z Later"])
+        XCTAssertEqual(all.filter(\.hasPassword).map(\.name), ["Nameless", "A Recent", "Z Later"],
+                       "a password-step filter keeps every item with a password")
+        XCTAssertEqual(all.filter { !$0.username.isEmpty }.map(\.name), ["A Recent", "Z Later"],
+                       "a username-step filter drops an item that has no username to fill")
+        // `first:` puts the sign-in's earlier step item at the front, ahead of the last-used order.
+        let withFirst = vault.pickerItems(for: "https://www.example.com", matching: "", kind: .signIn, first: item1.id).here
+        XCTAssertEqual(withFirst.first?.name, "Z Later", "the `first:` item leads the order")
+    }
+
+    /// `BrowserVaultSignInOffer` carries only `Sendable` leaves and stays `Equatable`, so SwiftUI redraws the bar
+    /// only when a field of it changed. The tiny check pins both.
+    func testSignInOfferEqualityAndIdentity() {
+        let item = VaultItem(name: "Example", sites: ["example.com"], username: "ada", hasPassword: true)
+        let offer = BrowserVaultSignInOffer(origin: "https://www.example.com", page: "https://www.example.com/",
+                                            step: .username, items: [item])
+        XCTAssertEqual(offer, offer)
+        var updated = offer
+        updated.step = .password
+        XCTAssertNotEqual(offer, updated, "a step change makes the offer a different value for SwiftUI")
     }
 
     /// A code fill on a page that shows a two-factor setup the vault does not hold (docs/BROWSER_VAULT_DESIGN.md §20)
