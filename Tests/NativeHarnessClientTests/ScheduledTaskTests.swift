@@ -881,6 +881,15 @@ final class ScheduledTaskTests: XCTestCase {
         XCTAssertEqual(full.problem(now: now, calendar: seoul), L10n.string("Schedules run at most once an hour."))
         full.times = []
         XCTAssertEqual(full.problem(now: now, calendar: seoul), L10n.string("Choose a time."))
+
+        // Times less than an hour apart are a problem, and Add time passes over the hours that would be.
+        full.times = [ScheduleTime(hour: 9, minute: 0), ScheduleTime(hour: 9, minute: 30)]
+        XCTAssertEqual(full.problem(now: now, calendar: seoul), L10n.string("Schedules run at most once an hour."))
+        full.times = [ScheduleTime(hour: 0, minute: 15), ScheduleTime(hour: 23, minute: 0)]
+        XCTAssertNil(full.problem(now: now, calendar: seoul))
+        full.addTime()
+        XCTAssertEqual(full.times.last, ScheduleTime(hour: 2, minute: 0), "0:00 and 1:00 are less than an hour from 0:15")
+        XCTAssertNil(full.problem(now: now, calendar: seoul))
     }
 
     func testTheQuitConfirmationSaysSchedulesWaitForYardlet() {

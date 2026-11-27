@@ -114,13 +114,14 @@ struct ScheduleDraft: Equatable {
         }
     }
 
-    /// The time Add time adds: an hour after the latest time, at its minute, or the next hour after it the list
-    /// does not have yet. Nil once there are `ScheduleTrigger.maxTimes`, which also turns Add time off.
+    /// The time Add time adds: an hour after the latest time, at its minute, or the next hour after it that is
+    /// an hour or more from every time. Nil once there are `ScheduleTrigger.maxTimes` or no hour is left, which
+    /// also turns Add time off.
     var nextTime: ScheduleTime? {
         guard times.count < ScheduleTrigger.maxTimes else { return nil }
         guard let latest = times.max() else { return ScheduleTime(hour: 9, minute: 0) }
         return (1...23).lazy.map { ScheduleTime(hour: (latest.hour + $0) % 24, minute: latest.minute) }
-            .first { !times.contains($0) }
+            .first { next in times.allSatisfy { $0.minutes(from: next) >= ScheduleTrigger.minutesBetweenTimes } }
     }
 
     mutating func addTime() {

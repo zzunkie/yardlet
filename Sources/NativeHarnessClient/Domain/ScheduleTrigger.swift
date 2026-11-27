@@ -41,6 +41,15 @@ struct ScheduleTime: Codable, Hashable, Comparable, Sendable {
     static func ordered(_ times: some Sequence<ScheduleTime>) -> [ScheduleTime] {
         Set(times).sorted()
     }
+
+    /// Minutes since midnight.
+    var minuteOfDay: Int { hour * 60 + minute }
+
+    /// Minutes between two times of day, the shorter way round the clock.
+    func minutes(from other: ScheduleTime) -> Int {
+        let gap = abs(minuteOfDay - other.minuteOfDay)
+        return min(gap, 1_440 - gap)
+    }
 }
 
 /// Foundation's weekday numbers: Sunday 1 … Saturday 7.
@@ -75,6 +84,8 @@ enum ScheduleTrigger: Hashable, Sendable {
     static let intervalHours = 1...24
     /// The most times of day a daily or weekly trigger holds: one for each hour.
     static let maxTimes = 24
+    /// The least time between two of a trigger's times of day, in minutes, as it runs at most once an hour.
+    static let minutesBetweenTimes = 60
 
     /// Every day at one time.
     static func daily(_ time: ScheduleTime) -> ScheduleTrigger { .daily([time]) }
@@ -99,9 +110,12 @@ enum ScheduleTrigger: Hashable, Sendable {
         }
     }
 
-    /// Whether a daily or weekly trigger's times can be saved: at least one, and at most `maxTimes`.
+    /// Whether a daily or weekly trigger's times can be saved: at least one, at most `maxTimes`, and each
+    /// `minutesBetweenTimes` or more from the next, across midnight too.
     static func timesAreValid(_ times: [ScheduleTime]) -> Bool {
-        (1...maxTimes).contains(times.count)
+        guard (1...maxTimes).contains(times.count) else { return false }
+        let minutes = times.map(\.minuteOfDay).sorted()
+        return zip(minutes, minutes.dropFirst() + [minutes[0] + 1_440]).allSatisfy { $1 - $0 >= minutesBetweenTimes }
     }
 }
 

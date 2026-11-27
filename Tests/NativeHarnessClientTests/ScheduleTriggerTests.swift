@@ -89,6 +89,15 @@ final class ScheduleTriggerTests: XCTestCase {
         XCTAssertFalse(ScheduleTrigger.daily(hourly + [ScheduleTime(hour: 23, minute: 30)]).isValid, "At most 24 times")
         XCTAssertFalse(ScheduleTrigger.weekly(days: ScheduleWeekday.weekdays,
                                               times: hourly + [ScheduleTime(hour: 23, minute: 30)]).isValid)
+        // At most once an hour: each time at least an hour from the next, across midnight too.
+        XCTAssertFalse(ScheduleTrigger.daily([ScheduleTime(hour: 9, minute: 0), ScheduleTime(hour: 9, minute: 30)]).isValid)
+        XCTAssertFalse(ScheduleTrigger.weekly(days: [.monday], times: [
+            ScheduleTime(hour: 9, minute: 0), ScheduleTime(hour: 9, minute: 59),
+        ]).isValid)
+        XCTAssertFalse(ScheduleTrigger.daily([ScheduleTime(hour: 23, minute: 30), ScheduleTime(hour: 0, minute: 10)]).isValid,
+                       "40 minutes across midnight")
+        XCTAssertTrue(ScheduleTrigger.daily([ScheduleTime(hour: 23, minute: 30), ScheduleTime(hour: 0, minute: 30)]).isValid,
+                      "An hour across midnight")
 
         // 2026-03-08 02:00 PST becomes 03:00 PDT: the skipped 02:30 runs right after the gap, then 03:30 as usual.
         let la = calendar("America/Los_Angeles")
