@@ -3497,6 +3497,12 @@ final class AppModel {
         handlesBySessionID[sessionID] != nil
     }
 
+    /// Whether one of `sessions` is a Codex task attached now, which an archive confirmation names
+    /// ("Archive attached Codex tasks confirmation"), so the windows need not compare harnesses.
+    func containsAttachedCodexTask(_ sessions: [SessionRecord]) -> Bool {
+        sessions.contains { $0.harness == .codex && isAttached($0.id) }
+    }
+
     /// A harness's CLI changed under Yardlet (updated, back to an earlier version, or another chosen in
     /// Settings): tasks that attach from now on start it, and so does each idle attached task at its
     /// next message, as after a sign-in (`continueTasks(afterSignInOf:)`). A process keeps running the version it

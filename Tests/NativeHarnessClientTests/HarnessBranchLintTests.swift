@@ -34,7 +34,7 @@ final class HarnessBranchLintTests: XCTestCase {
         "Views/AppShell/TaskHeader.swift": 1,
         "Views/AppShell/TaskSurface.swift": 6,
         "Views/ImportConversationSheet.swift": 3,
-        "Views/MainWindow.swift": 6,
+        "Views/MainWindow.swift": 5,
         "Views/OtherAppImportSheet.swift": 1,
         "Views/ProviderConnectionsView.swift": 4,
         "Views/Remote/RemoteHostWindow.swift": 1,
