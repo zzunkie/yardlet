@@ -256,4 +256,111 @@ final class ComposerPasteAndDropTests: XCTestCase {
         XCTAssertEqual(received.count, 1)
         window.contentView = nil
     }
+
+    // MARK: - ComposerMarkdownTextView paste
+
+    /// Stages a `ComposerMarkdownTextView` inside an unshown window with first responder set to the
+    /// view, so `paste(_:)` and `validateUserInterfaceItem(_:)` run under the same conditions as
+    /// AppKit would exercise them.
+    private func makeStagedTextView() -> (ComposerMarkdownTextView, NSWindow) {
+        _ = NSApplication.shared
+        let view = ComposerMarkdownTextView()
+        view.frame = NSRect(x: 0, y: 0, width: 240, height: 80)
+        let window = NSWindow(contentRect: view.frame, styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.contentView = view
+        XCTAssertTrue(window.makeFirstResponder(view))
+        addTeardownBlock { @MainActor in window.contentView = nil }
+        return (view, window)
+    }
+
+    /// Replaces the general pasteboard's contents for the duration of `body` and puts the previous
+    /// contents back after, so a test paste does not leak into or out of the user's clipboard.
+    private func withGeneralPasteboard(_ body: (NSPasteboard) throws -> Void) rethrows {
+        let pasteboard = NSPasteboard.general
+        let snapshot: [(NSPasteboard.PasteboardType, Data)] = (pasteboard.types ?? []).compactMap { type in
+            pasteboard.data(forType: type).map { (type, $0) }
+        }
+        pasteboard.clearContents()
+        defer {
+            pasteboard.clearContents()
+            if !snapshot.isEmpty {
+                pasteboard.declareTypes(snapshot.map(\.0), owner: nil)
+                for (type, data) in snapshot { pasteboard.setData(data, forType: type) }
+            }
+        }
+        try body(pasteboard)
+    }
+
+    func testReadableAndAcceptableTypesListBothTheModernUtiAndTheLegacyStringType() {
+        let (view, _) = makeStagedTextView()
+        let legacy = ComposerMarkdownTextView.legacyStringPasteboardType
+        XCTAssertEqual(legacy.rawValue, "NSStringPboardType")
+        // AppKit's `pasteAsPlainText:` and its menu-item validation ask for `NSStringPboardType`;
+        // leaving it out of `readablePasteboardTypes` makes every text paste a silent no-op.
+        XCTAssertTrue(view.readablePasteboardTypes.contains(.string))
+        XCTAssertTrue(view.readablePasteboardTypes.contains(legacy))
+        // A text drag is sent to the text field (see `testTheTargetLetsClicksThroughAndPastesOnlyIntoItsOwnField`),
+        // so the drag types stay in step with the paste types.
+        XCTAssertTrue(view.acceptableDragTypes.contains(.string))
+        XCTAssertTrue(view.acceptableDragTypes.contains(legacy))
+    }
+
+    func testPasteFromTheGeneralPasteboardInsertsPlainText() {
+        let (view, _) = makeStagedTextView()
+        withGeneralPasteboard { pasteboard in
+            pasteboard.setString("hello 안녕", forType: .string)
+            view.paste(nil)
+        }
+        XCTAssertEqual(view.string, "hello 안녕")
+    }
+
+    func testPasteOfRichTextKeepsOnlyThePlainText() throws {
+        let (view, _) = makeStagedTextView()
+        let rtf = try XCTUnwrap(NSAttributedString(
+            string: "styled text",
+            attributes: [.foregroundColor: NSColor.systemRed, .font: NSFont.boldSystemFont(ofSize: 24)]
+        ).rtf(from: NSRange(location: 0, length: "styled text".utf16.count)))
+        withGeneralPasteboard { pasteboard in
+            pasteboard.declareTypes([.rtf, .string], owner: nil)
+            pasteboard.setData(rtf, forType: .rtf)
+            pasteboard.setString("styled text", forType: .string)
+            view.paste(nil)
+        }
+        XCTAssertEqual(view.string, "styled text")
+        // No style from the RTF leaks into the text view's own storage.
+        let storage = try XCTUnwrap(view.textStorage)
+        XCTAssertGreaterThan(storage.length, 0)
+        var effective = NSRange()
+        let attrs = storage.attributes(at: 0, effectiveRange: &effective)
+        XCTAssertNotEqual(attrs[.foregroundColor] as? NSColor, .systemRed,
+                          "A red run from the RTF would have survived the plain-text paste")
+        XCTAssertNotEqual((attrs[.font] as? NSFont)?.pointSize, 24,
+                          "The RTF's 24pt size would have survived the plain-text paste")
+    }
+
+    func testPasteFromAStringOnlyPasteboardInsertsText() {
+        let (view, _) = makeStagedTextView()
+        withGeneralPasteboard { pasteboard in
+            // A synthetic pasteboard writer may declare only the modern UTI; AppKit still makes
+            // `pasteAsPlainText:` go through the same intersection, so the legacy type must be
+            // in `readablePasteboardTypes` for the paste to land.
+            pasteboard.declareTypes([.string], owner: nil)
+            pasteboard.setString("string-only", forType: .string)
+            view.paste(nil)
+        }
+        XCTAssertEqual(view.string, "string-only")
+    }
+
+    func testValidateEnablesPasteAndPasteAsPlainTextWhenTextIsOnTheClipboard() {
+        let (view, _) = makeStagedTextView()
+        withGeneralPasteboard { pasteboard in
+            pasteboard.setString("ready", forType: .string)
+            let paste = NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "")
+            let matchStyle = NSMenuItem(title: "Paste and Match Style",
+                                        action: #selector(NSTextView.pasteAsPlainText(_:)), keyEquivalent: "")
+            XCTAssertTrue(view.validateUserInterfaceItem(paste))
+            XCTAssertTrue(view.validateUserInterfaceItem(matchStyle))
+        }
+    }
 }

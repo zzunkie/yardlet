@@ -521,9 +521,19 @@ final class ComposerMarkdownTextView: NSTextView {
         pasteAsPlainText(sender)
     }
 
-    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] { [.string] }
+    /// AppKit's own `pasteAsPlainText:` and its menu item validation ask for the legacy
+    /// `NSStringPboardType` as well as the UTI `.string`. Listing only one of them lets the
+    /// intersection with `readablePasteboardTypes` come up empty, which silently drops every
+    /// text paste and grays out `Edit › Paste and Match Style`.
+    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        [.string, Self.legacyStringPasteboardType]
+    }
 
-    override var acceptableDragTypes: [NSPasteboard.PasteboardType] { [.string] }
+    override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
+        [.string, Self.legacyStringPasteboardType]
+    }
+
+    static let legacyStringPasteboardType = NSPasteboard.PasteboardType("NSStringPboardType")
 
     // MARK: - Placeholder
 
