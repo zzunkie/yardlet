@@ -1998,6 +1998,10 @@
 "Allow it if the phone shows the same number." = "如果手机上显示相同的数字，请允许连接。";
 "Sign in with %@" = "使用 %@ 登录";
 "The sign-in did not finish." = "登录未完成。";
+"Finish signing in in your browser." = "请在浏览器中完成登录。";
+"Your Yardlet sign-in has expired. Sign in again." = "你的 Yardlet 登录已过期。请重新登录。";
+"The Yardlet server couldn't finish the request. Try again later." = "Yardlet 服务器未能完成请求。请稍后重试。";
+"The Yardlet server couldn't finish the request. Try again." = "Yardlet 服务器未能完成请求。请重试。";
 "Starting…" = "正在启动…";
 "Can't listen for connections: %@" = "无法监听连接：%@";
 "Pair a device" = "配对设备";
