@@ -1529,8 +1529,9 @@ actor FakeCodexTransport: CodexTransport {
     private var responses: [String: [JSONValue]]
     private var failures: [String: Int]
     private var errorResponses: [String: [JSONValue]]
-    private let stream: AsyncStream<CodexRawFrame>
-    private let continuation: AsyncStream<CodexRawFrame>.Continuation
+    private var stream: AsyncStream<CodexRawFrame>
+    private var continuation: AsyncStream<CodexRawFrame>.Continuation
+    private var stopped = false
     private(set) var requestMethods: [String] = []
     private(set) var requests: [CodexRPCRequest] = []
     private(set) var sentResponses: [CodexRPCResponse] = []
@@ -1549,7 +1550,15 @@ actor FakeCodexTransport: CodexTransport {
         self.continuation = pair.continuation
     }
 
-    func start() async throws {}
+    /// A start after a stop is the next App Server's, which `CodexAdapter` starts on the transport it was given
+    /// (`makeTransport`): it gets notifications of its own, as a new process would, not the stream the stop finished.
+    /// On that one the new App Server's notification loop would end at once and could mark the adapter's connection
+    /// ended before its first request went out.
+    func start() async throws {
+        guard stopped else { return }
+        stopped = false
+        (stream, continuation) = AsyncStream<CodexRawFrame>.makeStream()
+    }
 
     func request(_ request: CodexRPCRequest) async throws -> CodexRPCIncomingMessage {
         requestMethods.append(request.method)
@@ -1601,6 +1610,7 @@ actor FakeCodexTransport: CodexTransport {
 
     func stop() async {
         stopCount += 1
+        stopped = true
         continuation.finish()
     }
 

@@ -95,6 +95,17 @@ extension AppModel: ScheduleToolHandling {
         if let refusal = await scheduleAgentRefusal(destination, previous: nil, promptChanged: true, caller: caller) {
             return .failure("Nothing was created: \(refusal)", .refused, retry: .no)
         }
+        // A call made again after its answer never reached the agent, or a second call that waited on the same card,
+        // gets the schedule its task already made, still on, instead of one more that sends the same message at the same
+        // time. Nothing is awaited between this look and the create, so two such calls cannot both miss it.
+        if let same = scheduledTasks.schedules.first(where: {
+            $0.isEnabled && $0.agentTaskID == caller.hostTaskID && $0.name == name && $0.prompt == prompt
+                && $0.trigger == trigger && $0.destination == destination
+        }) {
+            return .text("Scheduled task \"\(ScheduleToolCatalog.oneLine(same.name))\" is already in Yardlet (scheduleId: "
+                + "\(same.id.uuidString)): this task made the same one before, so nothing new was created.\n\n"
+                + scheduleToolSummary(same))
+        }
         scheduledTasks.create(ScheduledTask(name: name, prompt: prompt, trigger: trigger, destination: destination,
                                             createdAt: now, agentTaskID: caller.hostTaskID))
         guard let schedule = scheduledTasks.schedules.last else {
