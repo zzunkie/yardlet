@@ -853,6 +853,51 @@ final class ScheduleToolTests: XCTestCase {
         await model.shutdown()
     }
 
+    /// A schedule that continues the calling task waits for mail from the sender the call names: the answer and the
+    /// listing say so, mail from that sender runs it as the task's own scheduled message with the sender and the account
+    /// after the prompt, and `mailFrom: ""` stops it.
+    func testAScheduleThatContinuesThisTaskRunsOnMailFromTheSenderItNames() async throws {
+        let fixture = try Fixture(root: root, calendar: seoul, now: date(17, 20))
+        let model = fixture.model
+        let created = await call(model, "create_scheduled_task", [
+            "name": "Reply check", "prompt": "Did the reply come?", "cronExpression": "0 9 * * *",
+            "continueTaskId": "self", "mailFrom": "Prof. Kim <prof@school.example>"
+        ], from: fixture.caller)
+        XCTAssertFalse(created.isError, created.text)
+        XCTAssertTrue(created.text.contains("**Also runs:** when new mail from prof@school.example reaches Yardlet's Mailbox "
+            + "(the Mailbox is off in Settings › General, so not until it is on)"), created.text)
+        let schedule = try XCTUnwrap(model.scheduledTasks.schedules.first)
+        XCTAssertEqual(schedule.mailFrom, "prof@school.example", "The address, without the name")
+        let listed = try JSONDecoder().decode(Listing.self, from: Data(
+            await call(model, "list_scheduled_tasks", [:], from: fixture.caller).text.utf8))
+        XCTAssertEqual(listed.scheduledTasks.map(\.mailFrom), ["prof@school.example"])
+
+        let account = MailFixture.work
+        model.mailbox.setAccounts([(account, FixtureMailTransport(account: account, threads: []))])
+        model.runSchedulesWaitingForMail([MailThreadSummary(
+            id: MailThreadKey(accountID: account.id, threadID: "thread-reply"), subject: "Re: Office hours",
+            senders: [MailAddress(name: "Prof. Kim", address: "prof@school.example")], snippet: "Thursday works.",
+            date: fixture.clock.now, messageCount: 2, isUnread: true, isStarred: false, hasAttachments: false,
+            hasDraft: false)])
+        await model.scheduledTasks.checkDue()
+        let runs = try JSONDecoder().decode(Runs.self, from: Data(
+            await call(model, "list_task_runs", ["scheduleId": schedule.id.uuidString], from: fixture.caller).text.utf8))
+        XCTAssertEqual(runs.runs.map(\.trigger), ["mail"])
+        XCTAssertEqual(runs.runs.first?.taskId, fixture.caller.id.uuidString)
+        let prompts = await fixture.adapter.prompts
+        XCTAssertEqual(prompts, [TaskMessage(senderID: fixture.caller.id.uuidString, senderName: "Deploy watch",
+                                             body: "Did the reply come?\n\n" + MailText.scheduledRun(from: "prof@school.example",
+                                                                                                    in: account),
+                                             relation: .itself).text(in: .yardlet)],
+                       "The task's own scheduled message, with the mail named after the prompt")
+
+        let stopped = await call(model, "update_scheduled_task", ["scheduleId": schedule.id.uuidString, "mailFrom": ""],
+                                 from: fixture.caller)
+        XCTAssertTrue(stopped.text.contains("updated: no longer runs on mail."), stopped.text)
+        XCTAssertNil(model.scheduledTasks.schedule(id: schedule.id)?.mailFrom)
+        await model.shutdown()
+    }
+
     func testContinuingThisTaskTargetsTheCaller() async throws {
         let fixture = try Fixture(root: root, calendar: seoul, now: date(17, 20))
         let model = fixture.model
@@ -896,51 +941,6 @@ final class ScheduleToolTests: XCTestCase {
         XCTAssertEqual(prompts, [TaskMessage(senderID: fixture.caller.id.uuidString, senderName: "Deploy watch",
                                              body: "Check whether the deploy finished.", relation: .itself).text(in: .yardlet)])
         XCTAssertEqual(TaskMessage.parse(prompts.first ?? "")?.relation, .itself)
-        await model.shutdown()
-    }
-
-    /// A schedule that continues the calling task waits for mail from the sender the call names: the answer and the
-    /// listing say so, mail from that sender runs it as the task's own scheduled message with the sender and the account
-    /// after the prompt, and `mailFrom: ""` stops it.
-    func testAScheduleThatContinuesThisTaskRunsOnMailFromTheSenderItNames() async throws {
-        let fixture = try Fixture(root: root, calendar: seoul, now: date(17, 20))
-        let model = fixture.model
-        let created = await call(model, "create_scheduled_task", [
-            "name": "Reply check", "prompt": "Did the reply come?", "cronExpression": "0 9 * * *",
-            "continueTaskId": "self", "mailFrom": "Prof. Kim <prof@school.example>"
-        ], from: fixture.caller)
-        XCTAssertFalse(created.isError, created.text)
-        XCTAssertTrue(created.text.contains("**Also runs:** when new mail from prof@school.example reaches Yardlet's Mailbox "
-            + "(the Mailbox is off in Settings › General, so not until it is on)"), created.text)
-        let schedule = try XCTUnwrap(model.scheduledTasks.schedules.first)
-        XCTAssertEqual(schedule.mailFrom, "prof@school.example", "The address, without the name")
-        let listed = try JSONDecoder().decode(Listing.self, from: Data(
-            await call(model, "list_scheduled_tasks", [:], from: fixture.caller).text.utf8))
-        XCTAssertEqual(listed.scheduledTasks.map(\.mailFrom), ["prof@school.example"])
-
-        let account = MailFixture.work
-        model.mailbox.setAccounts([(account, FixtureMailTransport(account: account, threads: []))])
-        model.runSchedulesWaitingForMail([MailThreadSummary(
-            id: MailThreadKey(accountID: account.id, threadID: "thread-reply"), subject: "Re: Office hours",
-            senders: [MailAddress(name: "Prof. Kim", address: "prof@school.example")], snippet: "Thursday works.",
-            date: fixture.clock.now, messageCount: 2, isUnread: true, isStarred: false, hasAttachments: false,
-            hasDraft: false)])
-        await model.scheduledTasks.checkDue()
-        let runs = try JSONDecoder().decode(Runs.self, from: Data(
-            await call(model, "list_task_runs", ["scheduleId": schedule.id.uuidString], from: fixture.caller).text.utf8))
-        XCTAssertEqual(runs.runs.map(\.trigger), ["mail"])
-        XCTAssertEqual(runs.runs.first?.taskId, fixture.caller.id.uuidString)
-        let prompts = await fixture.adapter.prompts
-        XCTAssertEqual(prompts, [TaskMessage(senderID: fixture.caller.id.uuidString, senderName: "Deploy watch",
-                                             body: "Did the reply come?\n\n" + MailText.scheduledRun(from: "prof@school.example",
-                                                                                                    in: account),
-                                             relation: .itself).text(in: .yardlet)],
-                       "The task's own scheduled message, with the mail named after the prompt")
-
-        let stopped = await call(model, "update_scheduled_task", ["scheduleId": schedule.id.uuidString, "mailFrom": ""],
-                                 from: fixture.caller)
-        XCTAssertTrue(stopped.text.contains("updated: no longer runs on mail."), stopped.text)
-        XCTAssertNil(model.scheduledTasks.schedule(id: schedule.id)?.mailFrom)
         await model.shutdown()
     }
 
