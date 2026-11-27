@@ -113,9 +113,9 @@ package enum TaskSuggestionToolCatalog {
                 "properties": .object([
                     "title": .object([
                         "type": .string("string"),
-                        "description": .string("Under 60 chars. Imperative action phrase (start with a verb), e.g. "
-                            + "\"Fix stale README badge\", \"Remove dead config option\". Shown as the chip label "
-                            + "and the new task's title.")
+                        "description": .string("Under 60 chars, in the language the person writes in. A short action "
+                            + "phrase, e.g. \"Fix stale README badge\", \"Remove dead config option\". Shown as the chip "
+                            + "label and the new task's title.")
                     ]),
                     "prompt": .object([
                         "type": .string("string"),
@@ -124,8 +124,8 @@ package enum TaskSuggestionToolCatalog {
                     ]),
                     "tldr": .object([
                         "type": .string("string"),
-                        "description": .string("One or two plain-English sentences shown on the suggestion card "
-                            + "under the title. Lead with why you are suggesting this now \u{2014} name what you "
+                        "description": .string("One or two plain sentences, in the language the person writes in, "
+                            + "shown on the suggestion card under the title. Lead with why you are suggesting this now \u{2014} name what you "
                             + "noticed in this task \u{2014} then say what the new task will do. Keep it readable: "
                             + "no file paths or code.")
                     ]),
