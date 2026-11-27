@@ -25,6 +25,28 @@ struct BrowserHostPaths: Sendable {
             downloads: downloads
         )
     }
+
+    /// Makes `directory` and gives its real path: absolute, through every link (`/tmp` is `/private/tmp`), without a
+    /// trailing slash. Chromium stops its process at once when it cannot create a cache folder, and opens a profile
+    /// on disk only inside the root cache, so the host gets folders that exist, named as Chromium resolves them, and
+    /// one that cannot be made is an error that names it.
+    static func makeDirectory(_ directory: URL) throws -> String {
+        let path = directory.path(percentEncoded: false)
+        func failure(_ reason: String, _ underlying: (any Error)? = nil) -> CocoaError {
+            var info: [String: Any] = [NSLocalizedDescriptionKey: "The browser's folder \(path) could not be created: \(reason)",
+                                       NSFilePathErrorKey: path]
+            info[NSUnderlyingErrorKey] = underlying
+            return CocoaError(.fileWriteUnknown, userInfo: info)
+        }
+        do {
+            try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+        } catch {
+            throw failure(error.localizedDescription, error)
+        }
+        guard let resolved = realpath(path, nil) else { throw failure(String(cString: strerror(errno))) }
+        defer { free(resolved) }
+        return String(cString: resolved)
+    }
 }
 
 /// macOS transport for the browser host contract: the CEF host runs as
@@ -62,6 +84,12 @@ final class CEFBrowserHostProcess: BrowserHostConnection {
     private let exited = DispatchSemaphore(value: 0)
 
     init(paths: BrowserHostPaths) throws {
+        // Before anything that needs undoing: a folder that cannot be made ends the start here.
+        let root = try BrowserHostPaths.makeDirectory(paths.root)
+        let profile = try BrowserHostPaths.makeDirectory(paths.profile)
+        let home = try BrowserHostPaths.makeDirectory(paths.home)
+        _ = try BrowserHostPaths.makeDirectory(paths.log.deletingLastPathComponent())
+
         // Unguessable, and distinct per app, process and launch, so an installed Yardlet and a
         // QA copy never share a name.
         var generator = SystemRandomNumberGenerator()
@@ -78,11 +106,6 @@ final class CEFBrowserHostProcess: BrowserHostConnection {
         }
         surfaces = BrowserSurfaceReceiver(port: port, token: token)
 
-        let fileManager = FileManager.default
-        for directory in [paths.profile, paths.home, paths.log.deletingLastPathComponent()] {
-            try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        }
-
         // A host that died must surface as an error, not a SIGPIPE that ends Yardlet; the end of
         // its commands, Yardlet going away, ends the host.
         let commands = Pipe.childInput()
@@ -91,8 +114,8 @@ final class CEFBrowserHostProcess: BrowserHostConnection {
         process.executableURL = Self.executableURL
         let browserLocale = L10n.cefBrowserLocale()
         process.arguments = [
-            "--root-cache", paths.root.path(percentEncoded: false),
-            "--profile", paths.profile.path(percentEncoded: false),
+            "--root-cache", root,
+            "--profile", profile,
             "--downloads", paths.downloads.path(percentEncoded: false),
             "--locale", browserLocale.locale,
             "--accept-languages", browserLocale.acceptLanguages
@@ -116,7 +139,7 @@ final class CEFBrowserHostProcess: BrowserHostConnection {
         environment["YARDLET_BROWSER_HOST_TOKEN"] = token.map { String(format: "%02x", $0) }.joined()
         // Chromium writes some per-user files outside its cache paths (CEF/User Data, Google/RLZ);
         // a home of its own keeps them inside Yardlet's folder.
-        environment["CFFIXED_USER_HOME"] = paths.home.path(percentEncoded: false)
+        environment["CFFIXED_USER_HOME"] = home
         process.environment = environment
         process.standardInput = commands
         process.standardOutput = events

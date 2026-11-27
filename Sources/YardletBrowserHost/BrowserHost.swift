@@ -896,11 +896,14 @@ final class BrowserHost {
     /// `frameWait`, host.log says so with what the engine did meanwhile, and the engine is asked again; when still none
     /// comes and the page is not loading, the tab is hidden and shown again, as Yardlet hides and shows it. A frame after
     /// either says which brought it. So a panel the engine leaves blank draws without a reload, and the log names the
-    /// step that was missing.
+    /// step that was missing. Showing a tab that still waits for its frame (Yardlet asks again every few seconds while
+    /// an agent's screenshot or scroll waits on one) keeps that wait and its steps; one restarted on each ask would
+    /// never get past the first.
     private func noteIfNoFrame(tab: Int) {
         let hiddenFor = hiddenSince.removeValue(forKey: tab).map(Self.seconds(since:))
         // A tab whose browser is still being made paints once its page loads.
         guard openTabs.contains(tab) else { return }
+        if let show = shownWithoutFrame[tab], show.steps < 3 { return }
         let shownAt = DispatchTime.now().uptimeNanoseconds
         shownWithoutFrame[tab] = UnpaintedShow(shownAt: shownAt, hiddenFor: hiddenFor,
                                                letterboxedBefore: yardlet_cef_letterboxed_frames(Int32(tab)))
