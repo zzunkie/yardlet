@@ -133,7 +133,7 @@ final class TaskProjectMoveTests: XCTestCase {
         let chat = try task("Finish the OpenAI Game 2026 web game", in: chatFolder)
         let model = try makeModel(sessions: [chat], projects: [thirteenProject, other])
         model.composerDrafts.tasks.draft(for: chat.id).text = "Next step"
-        XCTAssertTrue(ProjectProjection.isChat(chat, in: model.projects.projects, home: home))
+        XCTAssertTrue(ProjectProjection.isChat(chat, in: model.projects.projects))
 
         let asChat = model.projectMoveOptions(for: chat, visibleProjects: visibleProjects(model))
         XCTAssertEqual(Set(asChat.destinations.map(\.name)), ["13 Weeks", "Website"])
@@ -145,7 +145,7 @@ final class TaskProjectMoveTests: XCTestCase {
         XCTAssertEqual(moved.additionalRoots, [ProjectSidebarPresentation.normalizedPath(for: thirteen)],
                        "The project's folder comes along for the next start")
         XCTAssertEqual(unchangedFields(moved), unchangedFields(chat))
-        XCTAssertFalse(ProjectProjection.isChat(moved, in: model.projects.projects, home: home))
+        XCTAssertFalse(ProjectProjection.isChat(moved, in: model.projects.projects))
         XCTAssertTrue(model.projects.chats(sessions: model.store.sessions).isEmpty)
         XCTAssertEqual(model.projects.visibleGroups(sessions: model.store.sessions)
             .first { $0.project?.id == thirteenProject.id }?.sessions.map(\.id), [chat.id])
@@ -167,10 +167,6 @@ final class TaskProjectMoveTests: XCTestCase {
         XCTAssertEqual(unchangedFields(back), unchangedFields(chat))
         XCTAssertEqual(model.projects.chats(sessions: model.store.sessions).map(\.id), [chat.id])
         XCTAssertEqual(model.composerDrafts.tasks.draft(for: chat.id).text, "Next step")
-        // Making projects for tasks in none, as the window does, gives the chat's folder none.
-        let projectCount = model.projects.projects.count
-        model.projects.ensureProjects(forTasks: model.store.sessions)
-        XCTAssertEqual(model.projects.projects.count, projectCount)
     }
 
     /// A chat whose folder no project holds becomes a project of that folder ("Move to project" ›
@@ -215,7 +211,6 @@ final class TaskProjectMoveTests: XCTestCase {
         XCTAssertEqual(inProject.removableFrom?.id, project.id)
         let again = await model.makeProject(from: moved)
         XCTAssertNil(again)
-        model.projects.ensureProjects(forTasks: model.store.sessions)
         XCTAssertEqual(model.projects.projects.count, 2)
 
         // Moved to Chats from its project's folder, a task goes back to that project with a move.
@@ -238,6 +233,28 @@ final class TaskProjectMoveTests: XCTestCase {
         XCTAssertFalse(shownAgain.isHidden)
         XCTAssertEqual(model.store.sessions.first { $0.id == chat.id }?.projectID, project.id)
         XCTAssertEqual(model.projects.projects.count, 2, "No second project of the folder")
+    }
+
+    /// A chat in a folder of the person's own that is no project is offered as a project named after
+    /// that folder, as Add project names one, and becomes one under the name and with the other
+    /// folders the New project sheet confirmed. Until then nothing is made.
+    func testAChatInAFolderOfItsOwnBecomesTheProjectTheSheetConfirms() async throws {
+        let chat = try task("Fix the login bug", in: beta)
+        let model = try makeModel(sessions: [chat])
+        XCTAssertTrue(model.projects.isChat(chat), "A folder that is no project holds chats")
+        XCTAssertEqual(model.proposedProjectName(for: chat), "beta")
+        XCTAssertTrue(model.projectMoveOptions(for: chat, visibleProjects: visibleProjects(model)).canMakeProject)
+        XCTAssertTrue(model.projects.projects.isEmpty, "Offering the sheet makes nothing")
+
+        let result = await model.makeProject(from: chat, name: "  Website  ", additionalRoots: [alphaDocs])
+        let made = try XCTUnwrap(result)
+        XCTAssertEqual(made.name, "Website")
+        XCTAssertEqual(made.roots, [Project.canonical(beta), Project.canonical(alphaDocs)])
+        let moved = try XCTUnwrap(model.store.sessions.first { $0.id == chat.id })
+        XCTAssertEqual(moved.projectID, made.id)
+        XCTAssertEqual(moved.additionalRoots, [ProjectSidebarPresentation.normalizedPath(for: alphaDocs)],
+                       "The other folder comes along for the next start")
+        XCTAssertTrue(model.projects.chats(sessions: model.store.sessions).isEmpty)
     }
 
     /// A chat whose move is not saved stays a chat, and no project is left behind: the project is added
@@ -326,15 +343,6 @@ final class TaskProjectMoveTests: XCTestCase {
         let mirror = RemoteSidebarMirror(hostID: "host", projects: snapshot.projects, tasks: snapshot.tasks)
         XCTAssertEqual(mirror.chats.map(\.id), [moved.id], "Another Mac's window lists it under Chats")
         XCTAssertEqual(mirror.groups.first { $0.project?.id == alphaProject.id }?.sessions.map(\.id), [byFolder.id])
-
-        // The window gives each task in no project a project of its folder: none for this one, and
-        // the hidden project of its folder stays hidden.
-        model.projects.hide(alphaProject.id)
-        let projectCount = model.projects.projects.count
-        model.projects.ensureProjects(forTasks: model.store.sessions)
-        XCTAssertEqual(model.projects.projects.count, projectCount)
-        XCTAssertEqual(model.projects.project(id: alphaProject.id)?.isHidden, true)
-        model.projects.reveal(alphaProject.id)
 
         // In Chats it is in no project to leave, and its folder's project is a destination again.
         let asChat = model.projectMoveOptions(for: moved, visibleProjects: visibleProjects(model))
@@ -452,8 +460,6 @@ final class TaskProjectMoveTests: XCTestCase {
         let second = try makeModel(repository: try SQLiteSessionRepository(databaseURL: database),
                                projectRepository: projectFile, restores: true)
         await second.restoreIndex()
-        // The window gives each task in no project a project of its folder.
-        second.projects.ensureProjects(forTasks: second.store.sessions)
         XCTAssertEqual(second.projects.projects.count, projectCount, "No project is made for a moved task's folder")
 
         func restored(_ session: SessionRecord) throws -> SessionRecord {

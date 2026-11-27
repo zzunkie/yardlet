@@ -240,7 +240,10 @@ struct SuggestedTaskPlace: Equatable {
             return SuggestedTaskPlace(folder: folder, project: ProjectProjection.project(containingRoot: folder, in: projects),
                                       startsInNewWorktree: isRepository(folder))
         }
-        if ProjectProjection.isChat(source, in: projects, home: home) {
+        // A chat in a chat's folder, or one the person moved to Chats, suggests a chat; a chat in a
+        // folder of the person's own suggests a task in that folder, a chat there too.
+        if ProjectProjection.isChat(source, in: projects),
+           source.isMovedToChats || ChatWorkspaces.isChat(source.workspaceURL, home: home) {
             return SuggestedTaskPlace(folder: nil, project: nil, startsInNewWorktree: false)
         }
         let origin = source.originWorkspaceURL

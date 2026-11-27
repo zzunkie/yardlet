@@ -233,20 +233,21 @@ final class TaskProjectMoveRenderingTests: XCTestCase {
                              "The project's other task stays in it")
     }
 
-    /// A project just made of a chat opens for editing with the name it took from the chat in its
-    /// field, all of it selected, so Return keeps it and typing replaces it. Drawn into
-    /// `.build/move-project-qa` as `new-project-name-*.png`, light and dark.
-    func testAProjectMadeOfAChatOpensWithItsNameSelected() throws {
+    /// Making a chat a project asks first: the New project sheet opens with the name it offers in its
+    /// field, all of it selected, so Return keeps it and typing replaces it, the chat's folder as the
+    /// primary one, and Cancel beside Create. Nothing is made while it shows. Drawn into
+    /// `.build/move-project-qa` as `new-project-sheet-*.png`, light and dark.
+    func testMakingAChatAProjectAsksWithTheNewProjectSheet() throws {
         let home = URL(filePath: "/tmp/move-project-qa/home", directoryHint: .isDirectory)
         let folder = home.appending(path: "Documents/Yardlet/2026-11-20/new-chat-2", directoryHint: .isDirectory)
         let projects = ProjectStore(chatWorkspaceHome: home)
         let chat = SessionRecord(harness: .claudeCode, workspaceURL: folder, runtimeExecutableURL: URL(filePath: "/tmp/agent"),
                                  title: "Plan the weekend trip", titleOrigin: .provider, status: .ready)
         XCTAssertTrue(TaskProjectMove.options(for: chat, visibleProjects: [], projects: projects.projects).canMakeProject)
-        let project = projects.ensureProject(forRoot: folder, name: TaskProjectMove.projectName(for: chat))
+        let request = NewProjectRequest(session: chat, name: TaskProjectMove.projectName(for: chat))
         let size = NSSize(width: 520, height: 300)
         func sheet(_ scheme: ColorScheme) -> some View {
-            ProjectEditSheet(projects: projects, projectID: project.id, focusesName: true)
+            NewProjectSheet(request: request) { _, _ in XCTFail("Nothing is made before Create") }
                 .environment(\.colorScheme, scheme)
                 .frame(width: size.width, height: size.height, alignment: .top)
                 .background(ParityTheme.canvas)
@@ -259,9 +260,10 @@ final class TaskProjectMoveRenderingTests: XCTestCase {
         XCTAssertEqual(editor.string, "Plan the weekend trip")
         XCTAssertEqual(editor.selectedRange(), NSRange(location: 0, length: editor.string.utf16.count),
                        "All of the name is selected")
+        XCTAssertTrue(projects.projects.isEmpty)
 
         let directory = try WindowlessRender.directory("move-project-qa")
-        try WindowlessRender.hostedInBothAppearances("new-project-name", in: directory, size: size) { appearance in
+        try WindowlessRender.hostedInBothAppearances("new-project-sheet", in: directory, size: size) { appearance in
             sheet(appearance.colorScheme)
         }
     }

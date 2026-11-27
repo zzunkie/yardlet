@@ -14,15 +14,15 @@ final class SidebarProjectionTests: XCTestCase {
         let store = ProjectStore(repository: InMemoryProjectRepository(snapshot: ProjectSnapshot(projects: projects)),
                                  chatWorkspaceHome: sidebarHome)
         func fresh(_ sessions: [SessionRecord]) -> ([WorkspaceGroup], [SessionRecord]) {
-            (ProjectProjection.visibleGroups(sessions: sessions, projects: store.projects, home: sidebarHome),
-             ProjectProjection.chats(from: sessions, projects: store.projects, home: sidebarHome))
+            (ProjectProjection.visibleGroups(sessions: sessions, projects: store.projects),
+             ProjectProjection.chats(from: sessions, projects: store.projects))
         }
         XCTAssertEqual(store.visibleGroups(sessions: sessions), fresh(sessions).0)
         XCTAssertEqual(store.chats(sessions: sessions), fresh(sessions).1)
 
         // A task with new activity brings its group to the top.
         var moved = sessions
-        moved[2].updatedAt = Date(timeIntervalSince1970: 1_900_000_000)
+        moved[3].updatedAt = Date(timeIntervalSince1970: 1_900_000_000)
         XCTAssertNotEqual(store.visibleGroups(sessions: moved), store.visibleGroups(sessions: sessions))
         XCTAssertEqual(store.visibleGroups(sessions: moved), fresh(moved).0)
 

@@ -142,9 +142,8 @@ final class ProjectStoreTests: XCTestCase {
         )
         XCTAssertEqual(groups.first { $0.project?.id == project.id }?.displayName, "Legacy grouping")
         XCTAssertNil(legacy.projectID, "Display-time matching must not rewrite the stored task")
-        let folderGroup = try? XCTUnwrap(groups.first { $0.project == nil })
-        XCTAssertEqual(folderGroup?.workspaceURL, URL(filePath: "/tmp/no-project"))
-        XCTAssertEqual(folderGroup?.displayName, "no-project")
+        XCTAssertEqual(groups.count, 1, "A task in no project is a chat and makes no group")
+        XCTAssertTrue(ProjectProjection.isChat(unrelated, in: [project]))
     }
 
     func testStoredProjectIDWinsOverFolderMatchingForTaskGrouping() {
@@ -337,11 +336,8 @@ final class ProjectStoreTests: XCTestCase {
             repository,
             "The worktree's task shows under the original repository's project"
         )
-        XCTAssertEqual(
-            groups.first { $0.project == nil }?.workspaceURL,
-            URL(filePath: "/tmp/trees/green"),
-            "An unmatched worktree keeps its own folder group"
-        )
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertTrue(ProjectProjection.isChat(unrelated, in: [project]), "An unmatched worktree's task is a chat")
         XCTAssertNil(worktreeTask.projectID, "Display-time matching never rewrites the stored task")
     }
 

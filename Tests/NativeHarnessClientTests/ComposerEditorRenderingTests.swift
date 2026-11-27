@@ -136,7 +136,7 @@ final class ComposerEditorRenderingTests: XCTestCase {
             draft.attachments = attachments
             draft.notice = notice
             return AnyView(NewTaskHome(recentSessions: [], projects: [project], draft: draft, runtimeSelections: runtimes,
-                onSelectSession: { _ in }, onChooseWorkspace: { _ in }, onShowHarnesses: {},
+                onSelectSession: { _ in }, onShowHarnesses: {},
                 onCreate: { _ in nil }, onReadCommands: { _, _, _ in Self.commands }))
         }
         return [

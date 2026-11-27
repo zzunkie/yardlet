@@ -82,8 +82,13 @@ final class OtherAppImportTests: XCTestCase {
         let project = root.appending(path: "project")
         let repo = root.appending(path: "repo")
         let worktree = repo.appending(path: ".claude/worktrees/brave-otter")
+        let docs = root.appending(path: "docs")
         try writeSession(desktop, sessionFile(id: Self.ids[0], cwd: project, origin: project, title: "Newest",
-            model: "claude-opus-5-5", effort: "xhigh", permission: "bypassPermissions", activity: 3_000))
+            model: "claude-opus-5-5", effort: "xhigh", permission: "bypassPermissions", activity: 3_000,
+            extra: ["additionalDirectories": .array([.string(docs.path(percentEncoded: false)),
+                                                     .string(project.path(percentEncoded: false)),
+                                                     .string(docs.path(percentEncoded: false) + "/"),
+                                                     .string("relative/folder"), .integer(3)])]))
         try writeSession(desktop, sessionFile(id: Self.ids[1], cwd: worktree, origin: repo, title: "In a worktree",
             model: "claude-fable-5", effort: "high", permission: "default", activity: 2_000,
             extra: ["branch": .string("claude/brave-otter")]))
@@ -115,6 +120,9 @@ final class OtherAppImportTests: XCTestCase {
         XCTAssertEqual(found[1].providerOptions, [ClaudeLaunchOption.model: "claude-fable-5",
             ClaudeLaunchOption.effort: "high", ClaudeLaunchOption.permissionMode: ClaudePermissionMode.manual],
             "Claude's default permission mode is Yardlet's Manual")
+        XCTAssertEqual(found[0].additionalDirectories.map { path($0) }, [path(docs)],
+                       "The app's other folders, each once, without its own folder or a relative path")
+        XCTAssertEqual(found[1].additionalDirectories, [])
         XCTAssertEqual(path(found[1].workspaceURL), path(worktree))
         XCTAssertEqual(found[1].workspaceOrigin, WorkspaceGitOrigin(
             originWorkspacePath: ProjectSidebarPresentation.normalizedPath(for: repo),
@@ -240,9 +248,10 @@ final class OtherAppImportTests: XCTestCase {
 
     // MARK: - Placement
 
-    /// Chats go to no project, a Claude worktree to its repository's project, anything else to its
-    /// folder's. The task's folder stays the conversation's own.
-    func testPlacementSendsChatsToNoProjectWorktreesToTheirRepositoryAndOthersToTheirFolder() {
+    /// A conversation joins a project only when its folder, or its worktree's repository, is one the
+    /// person registered; a chat's folder and any other folder come in as chats. The task's folder
+    /// stays the conversation's own.
+    func testPlacementSendsWorktreesToTheirRepositoryAndAnyFolderThatIsNoProjectToChats() {
         let home = URL(filePath: "/Users/someone")
         func conversation(_ path: String, origin: String? = nil) -> ImportableConversation {
             var value = ImportableConversation(harness: .claudeCode, providerSessionID: Self.ids[0], title: "x",
@@ -250,22 +259,28 @@ final class OtherAppImportTests: XCTestCase {
             value.workspaceOrigin = origin.map { WorkspaceGitOrigin(originWorkspacePath: $0, worktreeName: "w") }
             return value
         }
+        let app = URL(filePath: "/Users/someone/w/app")
+        let roots = [app]
         XCTAssertEqual(ConversationImportPlacement.of(conversation("/Users/someone/Documents/Codex/2026-10-12/plan"),
-                                                      home: home), .chat)
+                                                      home: home, projectRoots: roots), .chat)
         XCTAssertEqual(ConversationImportPlacement.of(conversation(
             "/Users/someone/Library/Application Support/Claude/scratch-workspaces/abc"), home: home), .chat)
         XCTAssertEqual(ConversationImportPlacement.of(conversation("/Users/someone/w/app/.claude/worktrees/w",
-                                                                   origin: "/Users/someone/w/app"), home: home),
-                       .project(root: URL(filePath: "/Users/someone/w/app", directoryHint: .isDirectory)))
-        XCTAssertEqual(ConversationImportPlacement.of(conversation("/Users/someone/w/app"), home: home),
-                       .project(root: URL(filePath: "/Users/someone/w/app")))
-        XCTAssertEqual(ConversationImportPlacement.of(conversation("/Users/someone/Documents/Codex"), home: home),
-                       .project(root: URL(filePath: "/Users/someone/Documents/Codex")),
-                       "The chats folder itself is not a chat")
+                                                                   origin: "/Users/someone/w/app"),
+                                                      home: home, projectRoots: roots),
+                       .project(root: app))
+        XCTAssertEqual(ConversationImportPlacement.of(conversation("/Users/someone/w/app"), home: home, projectRoots: roots),
+                       .project(root: app))
+        XCTAssertEqual(ConversationImportPlacement.of(conversation("/Users/someone/w/app"), home: home), .chat,
+                       "A folder that is no project comes in as a chat")
+        let chats = URL(filePath: "/Users/someone/Documents/Codex/2026-10-12/plan")
+        XCTAssertEqual(ConversationImportPlacement.of(conversation(chats.path(percentEncoded: false)), home: home,
+                                                      projectRoots: [chats]),
+                       .project(root: chats), "A chat's folder the person added is a project")
     }
 
-    /// A conversation in a folder inside a project's folder, or inside another imported
-    /// conversation's, joins that project; the nearest one wins, and the home folder never counts.
+    /// A conversation in a folder inside a project's folder joins that project; the nearest one wins,
+    /// and the home folder never counts.
     func testAConversationInAFolderInsideAProjectsFolderJoinsThatProject() {
         let home = URL(filePath: "/Users/someone")
         func placement(_ path: String, roots: [String]) -> ConversationImportPlacement {
@@ -280,10 +295,10 @@ final class OtherAppImportTests: XCTestCase {
         XCTAssertEqual(placement("/Users/someone/w/rental/backend/api", roots: [workspace, workspace + "/backend"]),
                        .project(root: URL(filePath: workspace + "/backend")), "The nearest enclosing folder wins")
         XCTAssertEqual(placement(workspace, roots: [workspace]), .project(root: URL(filePath: workspace)))
-        XCTAssertEqual(placement("/Users/someone/w/rentals", roots: [workspace]),
-                       .project(root: URL(filePath: "/Users/someone/w/rentals")), "A sibling with a longer name is not inside")
-        XCTAssertEqual(placement("/Users/someone/w/shop", roots: ["/Users/someone", "/Users"]),
-                       .project(root: URL(filePath: "/Users/someone/w/shop")), "The home folder takes in nothing")
+        XCTAssertEqual(placement("/Users/someone/w/rentals", roots: [workspace]), .chat,
+                       "A sibling with a longer name is not inside")
+        XCTAssertEqual(placement("/Users/someone/w/shop", roots: ["/Users/someone", "/Users"]), .chat,
+                       "The home folder takes in nothing")
     }
 
     /// A conversation in a worktree another app made (the Codex app's `~/.codex/worktrees`) is given
@@ -309,15 +324,18 @@ final class OtherAppImportTests: XCTestCase {
         let resolved = listed.resolvingWorktreeOrigins(reader: reader)
         XCTAssertEqual(resolved.codex[0].workspaceOrigin?.originWorkspacePath, "/Users/someone/w/brain")
         XCTAssertEqual(resolved.codex[0].workspaceOrigin?.branch, "fix")
-        XCTAssertEqual(ConversationImportPlacement.of(resolved.codex[0], home: URL(filePath: "/Users/someone")),
-                       .project(root: URL(filePath: "/Users/someone/w/brain", directoryHint: .isDirectory)))
+        let brain = URL(filePath: "/Users/someone/w/brain")
+        XCTAssertEqual(ConversationImportPlacement.of(resolved.codex[0], home: URL(filePath: "/Users/someone"),
+                                                      projectRoots: [brain]),
+                       .project(root: brain))
         XCTAssertNil(resolved.claude[0].workspaceOrigin, "A folder that is no worktree keeps no origin")
     }
 
-    /// Importing a mixed list places each conversation (a chat makes no project, a worktree joins
-    /// its repository's project and keeps its origin even when the folder is gone, any other gets
-    /// its folder's project), carries the title, settings and account over, keeps the other app's
-    /// last activity, opens nothing, and adds no second task for one already imported.
+    /// Importing a mixed list places each conversation (a worktree joins its repository's project and
+    /// keeps its origin even when the folder is gone; a chat, and a conversation in a folder that is no
+    /// project, comes in under Chats and makes none), carries the title, settings, the Claude app's
+    /// other folders and the account over, keeps the other app's last activity, opens nothing, and
+    /// adds no second task for one already imported.
     func testBulkImportPlacesEachConversationAndAddsNoSecondTask() async throws {
         let fixture = try makeFixture()
         let repo = root.appending(path: "repo")
@@ -326,9 +344,11 @@ final class OtherAppImportTests: XCTestCase {
         let worktree = repo.appending(path: ".claude/worktrees/gone-otter")
         let claudeChat = Self.chatFolder("Claude")
         let codexChat = Self.chatFolder("Codex")
+        let docs = root.appending(path: "docs")
         try writeSession(fixture.desktop, sessionFile(id: Self.ids[0], cwd: fixture.project, origin: fixture.project,
             title: "Plain project", model: "claude-opus-5-5", effort: "xhigh", permission: "bypassPermissions",
-            activity: 1_791_000_000_000))
+            activity: 1_791_000_000_000,
+            extra: ["additionalDirectories": .array([.string(docs.path(percentEncoded: false))])]))
         try writeSession(fixture.desktop, sessionFile(id: Self.ids[1], cwd: worktree, origin: repo, title: "Worktree",
             model: "claude-fable-5", effort: "high", permission: "default", activity: 1_791_000_100_000,
             extra: ["branch": .string("claude/gone-otter")]))
@@ -347,7 +367,7 @@ final class OtherAppImportTests: XCTestCase {
         let listed = await fixture.model.otherAppConversations(claudeConnection: fixture.claudeAccount)
         XCTAssertEqual(listed.all.count, 5)
         XCTAssertEqual(Set(listed.all.map { fixture.model.importDestination(for: $0).name }),
-                       ["Repository", fixture.project.lastPathComponent, L10n.string("Chats")])
+                       ["Repository", L10n.string("Chats")])
         var reported: [String] = []
         let failures = await fixture.model.importConversations(listed.all, claudeConnection: fixture.claudeAccount) {
             reported.append($0.id)
@@ -360,8 +380,11 @@ final class OtherAppImportTests: XCTestCase {
         func task(_ id: String) throws -> SessionRecord { try XCTUnwrap(sessions.first { $0.providerSessionID == id }) }
 
         let plain = try task(Self.ids[0])
-        let plainProject = try XCTUnwrap(fixture.model.projects.project(containingRoot: fixture.project))
-        XCTAssertEqual(plain.projectID, plainProject.id)
+        XCTAssertNil(fixture.model.projects.project(containingRoot: fixture.project), "A folder is no project until added")
+        XCTAssertNil(plain.projectID)
+        XCTAssertTrue(fixture.model.projects.isChat(plain))
+        XCTAssertEqual(plain.additionalRoots, [ProjectSidebarPresentation.normalizedPath(for: docs)],
+                       "The Claude app's other folder comes along")
         XCTAssertEqual(plain.title, "Plain project")
         XCTAssertEqual(plain.titleOrigin, .provider)
         XCTAssertEqual(plain.connection, fixture.claudeAccount)
@@ -385,14 +408,14 @@ final class OtherAppImportTests: XCTestCase {
         XCTAssertNil(fixture.model.projects.project(containingRoot: claudeChat))
 
         let codexPlain = try task("t-plain")
-        XCTAssertEqual(codexPlain.projectID, plainProject.id)
+        XCTAssertNil(codexPlain.projectID)
         XCTAssertNil(codexPlain.connection, "Codex tasks use the default Codex login")
         XCTAssertTrue(codexPlain.providerOptions.isEmpty, "The thread keeps its own model")
         XCTAssertEqual(codexPlain.titleOrigin, .provider)
         let codexChatTask = try task("t-chat")
         XCTAssertNil(codexChatTask.projectID)
         XCTAssertNil(fixture.model.projects.project(containingRoot: codexChat))
-        XCTAssertEqual(fixture.model.projects.projects.count, projectsBefore + 1, "Only the plain folder became a project")
+        XCTAssertEqual(fixture.model.projects.projects.count, projectsBefore, "Importing makes no project")
 
         XCTAssertTrue(sessions.allSatisfy { !fixture.model.isAttached($0.id) })
         let resumed = await fixture.claude.calls
@@ -639,6 +662,8 @@ final class OtherAppImportTests: XCTestCase {
         let repo = root.appending(path: "yardlet")
         let worktree = repo.appending(path: ".claude/worktrees/brave-otter")
         let chat = Self.chatFolder("Claude")
+        // The repository is a project the person added; the other folders are not.
+        _ = model.projects.ensureProject(forRoot: repo)
         let rows: [(String, URL, URL, String, TimeInterval)] = [
             (Self.ids[0], fixture.project, fixture.project, "Polish the import sheet", 600),
             (Self.ids[1], worktree, repo, "Follow a conversation another app holds", 3_600),

@@ -3,9 +3,10 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// Where a chat goes: a task started or imported in a chat's folder gets no project, a new chat
-/// gets a folder of its own under `~/Documents/Yardlet/<yyyy-MM-dd>/new-chat`, and a folder the
-/// person added as a project stays one. Every folder here is in a temporary home.
+/// Where a chat goes: a task started or imported in a folder the person did not add as a project
+/// gets no project, a new chat gets a folder of its own under
+/// `~/Documents/Yardlet/<yyyy-MM-dd>/new-chat`, and a folder the person added as a project stays one.
+/// Every folder here is in a temporary home.
 @MainActor
 final class ChatPlacementTests: XCTestCase {
     private var root: URL!
@@ -129,7 +130,7 @@ final class ChatPlacementTests: XCTestCase {
         XCTAssertTrue(model.projects.projects.isEmpty)
     }
 
-    func testATaskInAChatFolderGetsNoProjectUnlessThePersonMadeItOne() async throws {
+    func testATaskInAFolderGetsNoProjectUnlessThePersonAddedIt() async throws {
         let fixture = try makeModel()
         let model = fixture.model
         let codexChat = home.appending(path: "Documents/Codex/2026-10-09/new-chat", directoryHint: .isDirectory)
@@ -152,10 +153,35 @@ final class ChatPlacementTests: XCTestCase {
         let ordinary = try XCTUnwrap(ordinaryResult)
         XCTAssertNil(chat.projectID)
         XCTAssertEqual(inProject.projectID, added.id, "A chat's folder the person added stays a project")
-        XCTAssertEqual(ordinary.projectID, model.projects.project(containingRoot: plain)?.id,
-                       "Any other folder still becomes a project")
-        XCTAssertEqual(Set(model.projects.projects.map(\.name)), ["Notes", "plain-project"])
-        XCTAssertEqual(model.projects.chats(sessions: model.store.sessions).map(\.id), [chat.id])
+        XCTAssertNil(ordinary.projectID, "Any other folder is no project until the person adds it")
+        XCTAssertFalse(ordinary.isMovedToChats)
+        XCTAssertEqual(model.projects.projects.map(\.name), ["Notes"])
+        XCTAssertEqual(Set(model.projects.chats(sessions: model.store.sessions).map(\.id)), [chat.id, ordinary.id])
+
+        // A project the person hid stays hidden with its tasks; a new task in its folder is a chat,
+        // kept in Chats, and shows it nowhere.
+        model.projects.hide(added.id)
+        let besideHiddenResult = await model.createSession(
+            harness: .claudeCode, workspaceURL: explicit, runtimeExecutableURL: fixture.cli, title: "After hiding")
+        let besideHidden = try XCTUnwrap(besideHiddenResult)
+        XCTAssertNil(besideHidden.projectID)
+        XCTAssertTrue(besideHidden.isMovedToChats)
+        XCTAssertEqual(model.projects.project(id: added.id)?.isHidden, true)
+        XCTAssertEqual(Set(model.projects.chats(sessions: model.store.sessions).map(\.id)),
+                       [chat.id, ordinary.id, besideHidden.id])
+        XCTAssertFalse(model.projects.visibleGroups(sessions: model.store.sessions).flatMap(\.sessions)
+            .contains { $0.id == inProject.id }, "Its earlier task stays hidden with it")
+
+        // So does a conversation imported or followed from another app in its folder.
+        let conversation = ImportableConversation(
+            harness: .claudeCode, providerSessionID: "55555555-2222-4333-8444-666666666666", title: "From the app",
+            workspaceURL: explicit, updatedAt: Date(), isOpenElsewhere: false)
+        XCTAssertEqual(model.importDestination(for: conversation), .chats)
+        let importedResult = await model.importConversation(conversation, connection: nil)
+        let imported = try XCTUnwrap(importedResult)
+        XCTAssertNil(imported.projectID)
+        XCTAssertTrue(imported.isMovedToChats)
+        XCTAssertEqual(model.projects.project(id: added.id)?.isHidden, true)
     }
 
     func testAConversationImportedFromAChatFolderStaysAChat() async throws {
@@ -202,7 +228,7 @@ final class ChatPlacementTests: XCTestCase {
         for appearance in WindowlessRender.Appearance.allCases {
             let host = WindowlessRender.Host(
                 NewTaskHome(recentSessions: [], projects: [project], draft: draft, runtimeSelections: runtimes,
-                            onSelectSession: { _ in }, onChooseWorkspace: { _ in }, onShowHarnesses: {},
+                            onSelectSession: { _ in }, onShowHarnesses: {},
                             onCreate: { _ in nil })
                     .environment(\.colorScheme, appearance.colorScheme)
                     .frame(width: 860, height: 300, alignment: .top)

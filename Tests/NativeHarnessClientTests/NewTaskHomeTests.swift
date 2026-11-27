@@ -257,7 +257,7 @@ final class NewTaskHomeTests: XCTestCase {
         XCTAssertFalse(draft.startsChat)
 
         // Choices made stay; preparing again does not undo them.
-        NewTaskDestination.select(second, draft: draft, onChooseWorkspace: { _ in })
+        NewTaskDestination.select(second, draft: draft)
         draft.setStartsInNewWorktree(true, projectID: second.id)
         draft.harness = .codex
         draft.prepare(defaultProject: first, availableHarnesses: [.claudeCode, .codex])

@@ -75,7 +75,7 @@ final class ComposerModelVisibilityRenderingTests: XCTestCase {
             try render(name: "new-task-\(harness == .codex ? "codex" : "claude")", size: NSSize(width: 820, height: 260)) {
                 NewTaskHome(recentSessions: [], projects: [project], draft: draft, runtimeSelections: runtimes,
                     connections: connections, models: NewTaskModelSource(catalogs: catalogs) { _, _, _, _ in },
-                    onSelectSession: { _ in }, onChooseWorkspace: { _ in }, onShowHarnesses: {},
+                    onSelectSession: { _ in }, onShowHarnesses: {},
                     onCreate: { _ in nil })
             }
         }

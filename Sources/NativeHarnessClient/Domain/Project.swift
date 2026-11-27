@@ -161,7 +161,7 @@ enum ProjectProjection {
     /// A task's project, in order: the ID it stored; none for a task the person moved to Chats
     /// (`SessionRecord.isMovedToChats`); the project that owns its cwd; and — for a task made in a
     /// linked worktree — the project that owns the repository the worktree came from. A task that
-    /// matches none of these keeps showing as a plain folder group, or under Chats when it is a chat.
+    /// matches none of these is a chat (`isChat`).
     static func project(for session: SessionRecord, in projects: [Project]) -> Project? {
         if let id = session.projectID, let match = projects.first(where: { $0.id == id }) {
             return match
@@ -215,60 +215,44 @@ enum ProjectProjection {
         }
     }
 
-    /// Whether the task is a chat: it is in no project, and the person moved it to Chats or its
-    /// folder is one a harness app makes for a conversation with no project (`ChatWorkspaces`). A
-    /// missing project ID alone does not make one: tasks written before projects existed carry none
-    /// and still belong to their folder's project.
-    static func isChat(_ session: SessionRecord, in projects: [Project],
-                       home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Bool {
-        project(for: session, in: projects) == nil && listsInChats(session, home: home)
-    }
-
-    /// Where a task in no project is listed: under Chats when the person moved it there or its
-    /// folder is a chat's, else as its folder's group.
-    private static func listsInChats(_ session: SessionRecord, home: URL) -> Bool {
-        session.isMovedToChats || ChatWorkspaces.isChat(session.workspaceURL, home: home)
+    /// Whether the task is a chat: it belongs to no project the person registered. A folder is a
+    /// project only when the person adds it (`ProjectStore.ensureProject(forRoot:)`); a task in any
+    /// other folder, a harness app's chat folder or one of the person's own, is listed under Chats.
+    /// Which folders a harness app makes for chats is a separate question (`ChatWorkspaces.isChat`).
+    static func isChat(_ session: SessionRecord, in projects: [Project]) -> Bool {
+        project(for: session, in: projects) == nil
     }
 
     /// The chats, most recent first: the Chats section's tasks.
-    static func chats(from sessions: [SessionRecord], projects: [Project],
-                      home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [SessionRecord] {
-        sessions.filter { isChat($0, in: projects, home: home) }.sorted { lhs, rhs in
+    static func chats(from sessions: [SessionRecord], projects: [Project]) -> [SessionRecord] {
+        sessions.filter { isChat($0, in: projects) }.sorted { lhs, rhs in
             if lhs.updatedAt == rhs.updatedAt { return lhs.id.uuidString < rhs.id.uuidString }
             return lhs.updatedAt > rhs.updatedAt
         }
     }
 
-    /// Groups tasks by project, falling back to the task's folder when it belongs to none. Chats
-    /// belong to no group; they are listed on their own (`chats(from:projects:home:)`).
-    static func workspaceGroups(
-        from sessions: [SessionRecord],
-        projects: [Project],
-        home: URL = FileManager.default.homeDirectoryForCurrentUser
-    ) -> [WorkspaceGroup] {
-        var projectsByKey: [String: Project] = [:]
-        var sessionsByKey: [String: [SessionRecord]] = [:]
-        var urlByKey: [String: URL] = [:]
+    /// Groups tasks by their project. A task in no project belongs to no group; it is a chat, listed
+    /// on its own (`chats(from:projects:)`).
+    static func workspaceGroups(from sessions: [SessionRecord], projects: [Project]) -> [WorkspaceGroup] {
+        var projectsByID: [UUID: Project] = [:]
+        var sessionsByID: [UUID: [SessionRecord]] = [:]
 
         for session in sessions {
-            let project = project(for: session, in: projects)
-            if project == nil, listsInChats(session, home: home) { continue }
-            let groupURL = project?.primaryRoot ?? session.workspaceURL.standardizedFileURL
-            let key = ProjectSidebarPresentation.folderKey(for: groupURL)
-            urlByKey[key] = groupURL
-            if let project { projectsByKey[key] = project }
-            sessionsByKey[key, default: []].append(session)
+            guard let project = project(for: session, in: projects) else { continue }
+            projectsByID[project.id] = project
+            sessionsByID[project.id, default: []].append(session)
         }
 
-        return sessionsByKey
-            .map { key, grouped in
-                WorkspaceGroup(
-                    workspaceURL: urlByKey[key] ?? grouped[0].workspaceURL,
+        return sessionsByID
+            .compactMap { id, grouped -> WorkspaceGroup? in
+                guard let project = projectsByID[id] else { return nil }
+                return WorkspaceGroup(
+                    workspaceURL: project.primaryRoot,
                     sessions: grouped.sorted { lhs, rhs in
                         if lhs.updatedAt == rhs.updatedAt { return lhs.id.uuidString < rhs.id.uuidString }
                         return lhs.updatedAt > rhs.updatedAt
                     },
-                    project: projectsByKey[key]
+                    project: project
                 )
             }
             .sorted { lhs, rhs in
@@ -281,12 +265,8 @@ enum ProjectProjection {
 
     /// The rendered sidebar order: projects with no task still appear, hidden projects do not,
     /// and pinned projects lead without otherwise disturbing recency order.
-    static func visibleGroups(
-        sessions: [SessionRecord],
-        projects: [Project],
-        home: URL = FileManager.default.homeDirectoryForCurrentUser
-    ) -> [WorkspaceGroup] {
-        var groups = workspaceGroups(from: sessions, projects: projects, home: home)
+    static func visibleGroups(sessions: [SessionRecord], projects: [Project]) -> [WorkspaceGroup] {
+        var groups = workspaceGroups(from: sessions, projects: projects)
         var represented = Set(groups.compactMap { $0.project?.id })
         for project in projects where represented.insert(project.id).inserted {
             groups.append(WorkspaceGroup(workspaceURL: project.primaryRoot, sessions: [], project: project))

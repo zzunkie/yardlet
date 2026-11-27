@@ -264,7 +264,7 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         let shop = fixture.projects[1].primaryRoot
         return NewTaskHome(
             recentSessions: [], projects: scene == .empty ? [] : scene == .few ? [fixture.projects[0]] : fixture.projects, draft: draft, runtimeSelections: runtimes,
-            onSelectSession: onOpen, onChooseWorkspace: { _ in }, onShowHarnesses: {}, onCreate: { _ in nil },
+            onSelectSession: onOpen, onShowHarnesses: {}, onCreate: { _ in nil },
             onImportConversation: {}, onImportFromOtherApps: {},
             projectName: { names[ProjectSidebarPresentation.normalizedPath(for: $0)] ?? $0.lastPathComponent },
             activity: activity,

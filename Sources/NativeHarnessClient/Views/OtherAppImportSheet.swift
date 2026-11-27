@@ -53,7 +53,7 @@ struct OtherAppImportSheet: View {
 
     /// Projects by their most recent conversation, then Chats; each group most recent first.
     private func grouped(_ conversations: [ImportableConversation]) -> [Group] {
-        Dictionary(grouping: conversations) { model.importDestination(for: $0, among: conversations) }
+        Dictionary(grouping: conversations) { model.importDestination(for: $0) }
             .map { destination, conversations in
                 Group(destination: destination, conversations: conversations.sorted { $0.updatedAt > $1.updatedAt })
             }

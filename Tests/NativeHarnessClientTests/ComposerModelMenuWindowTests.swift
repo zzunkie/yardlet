@@ -55,7 +55,7 @@ final class ComposerModelMenuWindowTests: XCTestCase {
                 let view = NewTaskHome(recentSessions: [], projects: [project], draft: draft, runtimeSelections: runtimes,
                     connections: connections,
                     models: NewTaskModelSource(catalogs: fixture.catalogs) { _, _, _, _ in fixture.arrive() },
-                    onSelectSession: { _ in }, onChooseWorkspace: { _ in }, onShowHarnesses: {}, onCreate: { _ in nil })
+                    onSelectSession: { _ in }, onShowHarnesses: {}, onCreate: { _ in nil })
                 try checkMenu(of: harness, in: view, size: NSSize(width: 1500, height: 640),
                               name: "new task \(harness.rawValue) \(arrival.rawValue)")
             }
@@ -87,7 +87,7 @@ final class ComposerModelMenuWindowTests: XCTestCase {
                 reads += 1
                 if reads > 1 { fixture.catalogs.recordAntigravity([HarnessModelOption(value: "fixture-pro", name: "Fixture Pro")]) }
             },
-            onSelectSession: { _ in }, onChooseWorkspace: { _ in }, onShowHarnesses: {}, onCreate: { _ in nil })
+            onSelectSession: { _ in }, onShowHarnesses: {}, onCreate: { _ in nil })
         let size = NSSize(width: 1500, height: 640)
         let host = WindowlessRender.Host(view.frame(width: size.width, height: size.height), size: size)
         defer {

@@ -649,8 +649,12 @@ final class AppModel {
                 ?? CodexEnvironmentPaths.live().nativeHomeURL.path()
             self.personalAgentReadings.forget(source: connection.id + "|" + home)
         }
-        if !restoresIndexOnLaunch { taskWorkspaces.restoreSelection(in: store) }
-        importFolderPreferencesIfNeeded(legacyProjectFolderPreferences)
+        if !restoresIndexOnLaunch {
+            taskWorkspaces.restoreSelection(in: store)
+            // Converted once, from the tasks there are: a launch that restores the index converts
+            // after reading it (`restoreIndex`).
+            importFolderPreferencesIfNeeded(legacyProjectFolderPreferences)
+        }
         splits.adopt(
             selection: store.selectedSessionID,
             knownSessionIDs: Set(store.sessions.map(\.id)),
@@ -685,15 +689,15 @@ final class AppModel {
     }
 
     /// Converts the folder-path keyed sidebar settings and every existing task's folder into
-    /// one-folder projects. The conversion is idempotent and only reads the old settings.
+    /// one-folder projects, once (`ProjectStore.importFolderPreferences`). It only reads the old settings.
     private func importFolderPreferencesIfNeeded(_ preferences: LegacyProjectFolderPreferences? = nil) {
         // A task a project already shows (by its ID, its folder or its worktree's origin) needs no
-        // project of its own folder, and a chat's never becomes one: its folder is a chat's or the
-        // person moved it to Chats.
+        // project of its own folder, and one the person moved to Chats gives none; neither does a
+        // chat's folder (`ProjectStore.importFolderPreferences`).
         projects.importFolderPreferences(
             preferences ?? legacyFolderPreferences,
             sessionWorkspaceURLs: store.sessions
-                .filter { projects.project(for: $0) == nil && !projects.isChat($0) }
+                .filter { projects.project(for: $0) == nil && !$0.isMovedToChats }
                 .map(\.workspaceURL)
         )
     }
@@ -757,18 +761,27 @@ final class AppModel {
     }
 
     /// The project a task about to start in this folder belongs to. The stored choice wins, then
-    /// the project that owns the folder itself, then — for a linked worktree — the project that
-    /// owns the repository it came from. Only the last resort creates a project, and never for a
-    /// chat's folder (`ProjectStore.ensureProject(forTaskIn:)`): a chat has no project.
+    /// the project that owns the folder itself, then (for a linked worktree) the project that owns
+    /// the repository it came from. None is made: a folder is a project only when the person adds
+    /// it, and a task in any other folder is a chat. A project the person hid stays hidden, and
+    /// its folder's new task is a chat too (`startsInChats(in:)`).
     func projectForNewTask(workspaceURL: URL, projectID: UUID?) -> Project? {
         if let chosen = projects.project(id: projectID) { return chosen }
-        if projects.project(containingRoot: workspaceURL) == nil,
-           let origin = store.workspaceOrigin(for: workspaceURL).originWorkspaceURL,
-           let owner = projects.project(containingRoot: origin) {
-            if owner.isHidden { projects.reveal(owner.id) }
-            return projects.project(id: owner.id) ?? owner
-        }
-        return projects.ensureProject(forTaskIn: workspaceURL)
+        guard let owner = folderProject(of: workspaceURL), !owner.isHidden else { return nil }
+        return owner
+    }
+
+    /// The project that owns `folder`, or, for a linked worktree, the repository it came from.
+    private func folderProject(of folder: URL) -> Project? {
+        projects.project(containingRoot: folder)
+            ?? store.workspaceOrigin(for: folder).originWorkspaceURL.flatMap { projects.project(containingRoot: $0) }
+    }
+
+    /// Whether a task that starts or comes in with no project in `folder` is kept in Chats
+    /// (`SessionRecord.isMovedToChats`): its folder belongs to a project the person hid. Listed by
+    /// its folder, it would go under that project, out of sight, and the project stays hidden.
+    func startsInChats(in folder: URL) -> Bool {
+        folderProject(of: folder)?.isHidden == true
     }
 
     /// Starts a task from the new-task composer. A task that runs in a new worktree gets the
@@ -881,14 +894,14 @@ final class AppModel {
     ) async -> SessionRecord? {
         // The task records its runtime; the harness's runtime stays the person's choice or the
         // newest install (`RuntimeSelectionStore`), not whichever runtime the last task started with.
-        // A folder chosen directly still belongs to a project: find the one that owns it, or
-        // make a one-folder project for it. The chosen folder stays the task's cwd. A folder
-        // that is a worktree of a repository a project already owns joins that project instead
-        // of becoming a second one; the task still runs in the worktree. A chat's folder gets no
-        // project, and its task no other roots; so does a task started beside one the person moved to
-        // Chats (`isMovedToChats`), which stays there with it.
+        // A folder chosen directly joins the project that owns it, if any; else the task is a chat
+        // in that folder, which stays the task's cwd either way. A folder that is a worktree of a
+        // repository a project already owns joins that project; the task still runs in the
+        // worktree. A chat gets no other roots; a task started beside one the person moved to
+        // Chats (`isMovedToChats`) stays there with it, and so does one in a hidden project's folder.
         let project = isMovedToChats ? nil : projectForNewTask(workspaceURL: workspaceURL, projectID: projectID)
         let primaryFolder = sourceFolder ?? workspaceURL
+        let staysInChats = isMovedToChats || (project == nil && startsInChats(in: primaryFolder))
         let additionalRoots = project.map { project in
             project.contains(root: primaryFolder)
                 ? project.roots
@@ -922,7 +935,7 @@ final class AppModel {
                 connection: connection,
                 projectID: project?.id,
                 additionalRoots: additionalRoots,
-                isMovedToChats: isMovedToChats,
+                isMovedToChats: staysInChats,
                 parentTaskID: parentTaskID
             )
             createdSessionID = session.id
@@ -3204,23 +3217,38 @@ final class AppModel {
         }
     }
 
+    /// The name the New project sheet offers for a chat made a project of its own folder: a
+    /// hidden project's own name, which the folder's project is shown again under; for a chat's
+    /// folder a harness app made (`ChatWorkspaces`), whose name says nothing, the chat's title
+    /// (`TaskProjectMove.projectName(for:)`); else the folder's name, as Add project names one.
+    func proposedProjectName(for session: SessionRecord) -> String {
+        if let existing = projects.project(containingRoot: session.workspaceURL) { return existing.name }
+        return projects.isChatFolder(session.workspaceURL)
+            ? TaskProjectMove.projectName(for: session)
+            : session.workspaceURL.lastPathComponent
+    }
+
     /// Makes a project of a task's own folder and moves the task into it, for a chat whose folder no
-    /// listed project holds (`TaskProjectMove.Options.canMakeProject`). A new project is named after
-    /// the task's title (`TaskProjectMove.projectName(for:)`), and the person renames it as any
-    /// project; a hidden project of the folder, which Remove project leaves, is shown again instead.
-    /// The move is `moveTask`'s: the task's folder stays its cwd, nothing on disk is moved or renamed,
-    /// and nothing is written to the provider. The project is added, as the sidebar's Add project adds
-    /// one for a folder, only once the move is saved, so a move that fails leaves no project and
-    /// returns nil. Other tasks in the folder that were not moved to Chats come along, as a project
-    /// lists the tasks in its folders.
+    /// listed project holds (`TaskProjectMove.Options.canMakeProject`), once the person confirms
+    /// the New project sheet: `name` (nil: `proposedProjectName(for:)`) and `additionalRoots`, the
+    /// other folders they added. A hidden project of the folder, which Remove project leaves, is
+    /// shown again instead, under that name and with those folders too. The move is `moveTask`'s:
+    /// the task's folder stays its cwd, nothing on disk is moved or renamed, and nothing is written
+    /// to the provider. The project is added, as the sidebar's Add project adds one for a folder,
+    /// only once the move is saved, so a move that fails leaves no project and returns nil. Other
+    /// tasks in the folder that were not moved to Chats come along, as a project lists the tasks in
+    /// its folders.
     @discardableResult
-    func makeProject(from session: SessionRecord) async -> Project? {
+    func makeProject(from session: SessionRecord, name: String? = nil, additionalRoots: [URL] = []) async -> Project? {
         guard let current = store.sessions.first(where: { $0.id == session.id }),
               projectMoveOptions(for: current, visibleProjects: projects.projects).canMakeProject else { return nil }
-        let project = projects.project(containingRoot: current.workspaceURL)
-            ?? Project(name: TaskProjectMove.projectName(for: current), primaryRoot: current.workspaceURL)
+        let root = current.workspaceURL
+        let existing = projects.project(containingRoot: root)
+        var target = existing ?? Project(name: "", primaryRoot: root)
+        target.name = Project.normalizedName(name ?? proposedProjectName(for: current), fallback: root)
+        for extra in additionalRoots { target.addRoot(extra) }
         // By its ID, as a move records it, so the task stays in the project whatever its folders become.
-        let moved = TaskProjectMove.moved(current, to: project)
+        let moved = TaskProjectMove.moved(current, to: target)
         do {
             _ = try await store.moveSession(id: current.id, toProject: moved.projectID,
                                             additionalRoots: moved.additionalRoots)
@@ -3228,7 +3256,12 @@ final class AppModel {
             bootstrapError = error.localizedDescription
             return nil
         }
-        return projects.ensureProject(project)
+        let saved = projects.ensureProject(target)
+        if existing != nil {
+            projects.rename(saved.id, to: target.name)
+            for extra in additionalRoots { projects.addRoot(extra, to: saved.id) }
+        }
+        return projects.project(id: saved.id) ?? saved
     }
 
     /// Delete a task with an explicit provider boundary. An attached task whose provider keeps its
@@ -4535,7 +4568,7 @@ final class AppModel {
         onEach: (ImportableConversation) -> Void = { _ in }
     ) async -> [String: String] {
         var failures: [String: String] = [:]
-        let roots = importProjectRoots(among: conversations)
+        let roots = importProjectRoots()
         for conversation in conversations {
             let connection: ProviderConnection? = switch conversation.harness {
             case .claudeCode: claudeConnection
@@ -4580,20 +4613,23 @@ final class AppModel {
         try connection?.validate(for: conversation.harness)
         // A folder found with a login becomes a saved account once a conversation comes in under it.
         try connections.saveIfFound(connection)
-        let project = importProject(for: conversation, projectRoots: projectRoots ?? importProjectRoots(among: []))
-        // A worktree stands in for its repository's folder; the project's other roots come along.
+        let project = importProject(for: conversation, projectRoots: projectRoots ?? importProjectRoots())
+        // A worktree stands in for its repository's folder; the project's other roots come along,
+        // and so do the other folders the other app gave the conversation.
         let primaryFolder = conversation.workspaceOrigin?.originWorkspaceURL ?? conversation.workspaceURL
-        let additionalRoots = project.map { project in
-            project.contains(root: primaryFolder)
-                ? project.roots.filter { !Project.isSamePath($0, primaryFolder) }
-                    .map { ProjectSidebarPresentation.normalizedPath(for: $0) }
-                : []
+        let projectRoots = project.map { project in
+            project.contains(root: primaryFolder) ? project.roots : []
         } ?? []
+        var seenRoots = Set([primaryFolder, conversation.workspaceURL].map(ProjectSidebarPresentation.folderKey(for:)))
+        let additionalRoots = (projectRoots + conversation.additionalDirectories)
+            .filter { seenRoots.insert(ProjectSidebarPresentation.folderKey(for: $0)).inserted }
+            .map { ProjectSidebarPresentation.normalizedPath(for: $0) }
         return try await store.createSession(
             harness: conversation.harness, workspaceURL: conversation.workspaceURL, runtimeExecutableURL: runtime,
             title: conversation.title, titleOrigin: .provider, providerSessionID: conversation.providerSessionID,
             environmentScope: .native, selectsSession: selects, providerOptions: conversation.providerOptions,
             connection: connection, projectID: project?.id, additionalRoots: additionalRoots,
+            isMovedToChats: project == nil && startsInChats(in: primaryFolder),
             workspaceOrigin: conversation.workspaceOrigin, lastActivityAt: lastActivityAt,
             parentTaskID: TaskLineage.task(continuing: conversation.parentProviderSessionID,
                                            harness: conversation.harness, among: store.sessions,
@@ -4658,30 +4694,18 @@ final class AppModel {
         }
     }
 
-    /// The folders a conversation in a folder inside them joins: the person's projects', and the
-    /// folders of the conversations imported with it.
-    private func importProjectRoots(among conversations: [ImportableConversation]) -> [URL] {
-        projects.projects.flatMap(\.roots) + conversations
-            .filter { !ChatWorkspaces.isChat($0.workspaceURL) }
-            .map(ConversationImportPlacement.folder(of:))
+    /// The folders a conversation in a folder inside them joins: the roots of the projects the
+    /// sidebar shows. A conversation in any other folder comes in as a chat.
+    private func importProjectRoots() -> [URL] {
+        projects.projects.filter { !$0.isHidden }.flatMap(\.roots)
     }
 
-    /// Where the import list says a conversation goes, without making a project: Chats, the project
-    /// that already owns its folder (or its worktree's repository, or a folder it is inside), else
-    /// the folder that would become one. `conversations` is the whole list, whose folders a
-    /// conversation in a folder inside them joins.
-    func importDestination(for conversation: ImportableConversation,
-                           among conversations: [ImportableConversation] = []) -> ConversationImportDestination {
-        switch ConversationImportPlacement.of(conversation, projectRoots: importProjectRoots(among: conversations)) {
-        case .chat:
-            return .chats
-        case let .project(root):
-            let owner = projects.project(containingRoot: root)
-                ?? store.workspaceOrigin(for: root).originWorkspaceURL.flatMap { projects.project(containingRoot: $0) }
-            if let owner { return ConversationImportDestination(id: owner.id.uuidString, name: owner.name) }
-            return ConversationImportDestination(id: ProjectSidebarPresentation.folderKey(for: root),
-                                                 name: root.lastPathComponent)
-        }
+    /// Where the import list says a conversation goes: the shown project that owns its folder (or
+    /// its worktree's repository, or a folder it is inside), else Chats.
+    func importDestination(for conversation: ImportableConversation) -> ConversationImportDestination {
+        guard case let .project(root) = ConversationImportPlacement.of(conversation, projectRoots: importProjectRoots()),
+              let owner = projects.project(containingRoot: root) else { return .chats }
+        return ConversationImportDestination(id: owner.id.uuidString, name: owner.name)
     }
 
     /// The conversations open in the Claude and Codex apps, to import them all at once. Claude's are

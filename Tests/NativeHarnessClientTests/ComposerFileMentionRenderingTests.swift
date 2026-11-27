@@ -185,7 +185,7 @@ final class ComposerFileMentionRenderingTests: XCTestCase {
         let harness = try mount(NewTaskHome(
             recentSessions: [], projects: [Project(name: "App", primaryRoot: workspace)], draft: draft,
             runtimeSelections: RuntimeSelectionStore(defaults: defaults),
-            onSelectSession: { _ in }, onChooseWorkspace: { _ in }, onShowHarnesses: {},
+            onSelectSession: { _ in }, onShowHarnesses: {},
             onCreate: { _ in nil }
         ))
         type("Explain @readme", into: harness)

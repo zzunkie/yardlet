@@ -21,8 +21,6 @@ struct TaskSuggestionOptionsContext {
     var isRepository: (URL) -> Bool
     /// The agent asked for a worktree (`useWorktree`): a folder outside Git says it starts locally.
     var asksForWorktree = false
-    /// A folder chosen from disk becomes a project, as the new-task screen's does.
-    var chooseWorkspace: (URL) -> Project?
     /// Keeps a choice for the chip's Start and its quiet summary.
     var save: (TaskSuggestionStartChoice) -> Void
     var start: (TaskSuggestionStartChoice) -> Void
@@ -88,7 +86,8 @@ extension TaskSuggestionOptionsContext: TaskSuggestionOptionsSource {
             },
             chooseFolder: {
                 guard let chosen = NewTaskDestination.askForFolder() else { return }
-                let project = context.chooseWorkspace(chosen)
+                // A folder chosen from disk joins the project that holds it; else the task is a chat there.
+                let project = context.projects.first { $0.contains(root: chosen) }
                 context.save(context.choice().moving(to: chosen, project: project, isRepository: context.isRepository))
             },
             run: run,

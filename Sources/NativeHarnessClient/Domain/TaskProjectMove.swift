@@ -15,7 +15,8 @@ enum TaskProjectMove {
         /// project holds stays in Chats because the move records it (`SessionRecord.isMovedToChats`),
         /// and keeps working in its folder.
         var removableFrom: Project?
-        /// Whether the task can become a project of its own folder (`AppModel.makeProject(from:)`):
+        /// Whether the task can become a project of its own folder, once the person confirms it
+        /// (`AppModel.makeProject(from:name:additionalRoots:)`):
         /// a task in no project, as a chat is, whose folder no listed project holds. A hidden project
         /// of the folder, which Remove project leaves, is shown again with the task in it. A task moved
         /// to Chats from its project's folder goes back with a move to that project instead.

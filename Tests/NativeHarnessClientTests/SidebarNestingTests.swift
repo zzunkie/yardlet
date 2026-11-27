@@ -34,15 +34,16 @@ final class SidebarNestingTests: XCTestCase {
     // MARK: - Projection
 
     func testProjectsNestTheirTasksAndAnEmptyProjectShowsNoChats() throws {
-        let projects = [Project(name: "Alpha", primaryRoot: alpha), Project(name: "Empty", primaryRoot: empty)]
+        let projects = [Project(name: "Alpha", primaryRoot: alpha), Project(name: "Empty", primaryRoot: empty),
+                        Project(name: "Beta", primaryRoot: beta)]
         let a1 = task("Newest", in: alpha, minutesAgo: 1, harness: .claudeCode)
         let a2 = task("Older", in: alpha, minutesAgo: 5)
-        let b1 = task("Folder task", in: beta, minutesAgo: 3)
+        let b1 = task("Beta task", in: beta, minutesAgo: 3)
         let all = groups([a1, a2, b1], projects: projects)
         let layout = SidebarProjection.layout(visibleGroups: all, allGroups: all, splits: [], isFiltering: false,
                                               disclosure: SidebarDisclosure(rowLimit: 5))
 
-        XCTAssertEqual(layout.sections.map(\.group.displayName), ["Alpha", "beta", "Empty"])
+        XCTAssertEqual(layout.sections.map(\.group.displayName), ["Alpha", "Beta", "Empty"])
         XCTAssertEqual(layout.sections[0].rows.map(\.id), [.session(a1.id), .session(a2.id)])
         XCTAssertFalse(layout.sections[0].showsEmptyState)
         XCTAssertEqual(layout.sections[0].hiddenRowCount, 0)
@@ -50,14 +51,14 @@ final class SidebarNestingTests: XCTestCase {
         XCTAssertTrue(emptySection.rows.isEmpty)
         XCTAssertTrue(emptySection.showsEmptyState)
         XCTAssertEqual(emptySection.disclosureKey, "project:\(projects[1].id.uuidString)")
-        XCTAssertEqual(layout.sections[1].disclosureKey, "folder:/tmp/sidebar-nesting/beta")
+        XCTAssertEqual(layout.sections[1].disclosureKey, "project:\(projects[2].id.uuidString)")
         XCTAssertEqual(layout.rows.map(\.id), [.session(a1.id), .session(a2.id), .session(b1.id)])
 
         // A project whose only task is pinned has tasks, so it lists nothing rather than "No chats".
         let pinnedOnly = groups([task("Pinned", in: empty, minutesAgo: 1, isPinned: true)], projects: projects)
         let pinnedLayout = SidebarProjection.layout(visibleGroups: pinnedOnly, allGroups: pinnedOnly, splits: [],
                                                     isFiltering: false, disclosure: SidebarDisclosure(rowLimit: 5))
-        XCTAssertEqual(pinnedLayout.sections.map(\.group.displayName), ["Empty", "Alpha"])
+        XCTAssertEqual(pinnedLayout.sections.map(\.group.displayName), ["Empty", "Alpha", "Beta"])
         XCTAssertFalse(pinnedLayout.sections[0].showsEmptyState)
         XCTAssertTrue(pinnedLayout.sections[1].showsEmptyState)
     }
@@ -68,7 +69,7 @@ final class SidebarNestingTests: XCTestCase {
         let a2 = task("A2", in: alpha, minutesAgo: 2)
         let b1 = task("B1", in: beta, minutesAgo: 3)
         let pinned = task("Pinned in alpha", in: alpha, minutesAgo: 4, isPinned: true)
-        let all = groups([a1, a2, b1, pinned], projects: [project])
+        let all = groups([a1, a2, b1, pinned], projects: [project, Project(name: "Beta", primaryRoot: beta)])
         let key = "project:\(project.id.uuidString)"
         let disclosure = SidebarDisclosure(collapsedKeys: [key], rowLimit: 5)
         let layout = SidebarProjection.layout(visibleGroups: all, allGroups: all, splits: [], isFiltering: false,
@@ -101,7 +102,8 @@ final class SidebarNestingTests: XCTestCase {
 
     func testFiveRowsShowBeforeShowMoreAndEachShowMoreAddsTen() throws {
         let many = (0..<18).map { task("Task \($0)", in: alpha, minutesAgo: Double($0)) }
-        let all = groups(many, projects: [])
+        let alphaProject = [Project(name: "Alpha", primaryRoot: alpha)]
+        let all = groups(many, projects: alphaProject)
         let key = SidebarProjection.disclosureKey(for: all[0])
 
         func section(_ disclosure: SidebarDisclosure, selection: WindowItem? = nil) -> SidebarSection {
@@ -125,12 +127,12 @@ final class SidebarNestingTests: XCTestCase {
         XCTAssertEqual(selected.hiddenRowCount, 12)
 
         // One row left behind "Show more" is listed instead.
-        let six = groups(Array(many.prefix(6)), projects: [])
+        let six = groups(Array(many.prefix(6)), projects: alphaProject)
         let sixLayout = SidebarProjection.layout(visibleGroups: six, allGroups: six, splits: [], isFiltering: false,
                                                  disclosure: SidebarDisclosure(rowLimit: 5))
         XCTAssertEqual(sixLayout.sections[0].rows.count, 6)
         XCTAssertEqual(sixLayout.sections[0].hiddenRowCount, 0)
-        let seven = groups(Array(many.prefix(7)), projects: [])
+        let seven = groups(Array(many.prefix(7)), projects: alphaProject)
         let sevenSelected = SidebarProjection.layout(
             visibleGroups: seven, allGroups: seven, splits: [], isFiltering: false,
             disclosure: SidebarDisclosure(rowLimit: 5), selection: .session(many[6].id)
@@ -199,7 +201,8 @@ final class SidebarNestingTests: XCTestCase {
         let chat = task("Chat", in: URL(filePath: "/tmp/sidebar-nesting/new-chat", directoryHint: .isDirectory),
                         minutesAgo: 5)
         let older = (0..<8).map { task("Older \($0)", in: beta, minutesAgo: Double(20 + $0)) }
-        let all = groups([parent, asking, running, unread, quiet, pinned] + older, projects: [project])
+        let all = groups([parent, asking, running, unread, quiet, pinned] + older,
+                         projects: [project, Project(name: "beta", primaryRoot: beta)])
         func layout(_ disclosure: SidebarDisclosure = SidebarDisclosure(rowLimit: 5), selection: WindowItem? = nil,
                     filtering query: String? = nil) -> SidebarProjection.Layout {
             SidebarProjection.layout(

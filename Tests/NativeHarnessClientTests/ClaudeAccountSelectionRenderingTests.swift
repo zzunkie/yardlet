@@ -124,7 +124,7 @@ final class ClaudeAccountSelectionRenderingTests: XCTestCase {
                 runtimeSelections: runtimes, connections: store,
                 accounts: NewTaskAccountSource(preview: { model.newTaskAccountPreview(harness: $0, model: $1) },
                                                pick: { _, _ in nil }),
-                onSelectSession: { _ in }, onChooseWorkspace: { _ in }, onShowHarnesses: {}, onCreate: { _ in nil })
+                onSelectSession: { _ in }, onShowHarnesses: {}, onCreate: { _ in nil })
                 .frame(width: 860, height: 300, alignment: .bottom),
                 size: NSSize(width: 860, height: 300), name: "new-task-automatic-line")
             XCTAssertEqual(composer.first { $0.label == L10n.string("Choose account") }?.value, L10n.string("Automatic"))

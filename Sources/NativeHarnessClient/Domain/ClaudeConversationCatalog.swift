@@ -20,6 +20,9 @@ struct ImportableConversation: Identifiable, Equatable, Sendable {
     /// The provider session it was started from, when the other app records one (`TaskLineage`):
     /// a Claude app session another session started, a forked Codex thread.
     var parentProviderSessionID: String? = nil
+    /// The other folders the other app gave the conversation besides its own (the Claude app's
+    /// `additionalDirectories`), which the task hands its harness as a project's other roots.
+    var additionalDirectories: [URL] = []
 
     var id: String { harness.rawValue + ":" + providerSessionID }
 }

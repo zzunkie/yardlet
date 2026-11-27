@@ -220,7 +220,7 @@ final class MainWindow {
 
     /// New task in a project, from its menu in the sidebar, as the Mac's.
     private func showNewTask(in folder: URL) {
-        let project = model.projects.ensureProject(forRoot: folder)
+        guard let project = model.projects.project(containingRoot: folder) else { return }
         let draft = model.composerDrafts.home
         draft.projectID = project.id
         draft.workspaceURL = project.primaryRoot

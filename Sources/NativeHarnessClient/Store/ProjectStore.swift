@@ -200,7 +200,7 @@ final class ProjectStore {
 
     /// Whether the sidebar lists the task under Chats (`ProjectProjection.isChat`).
     func isChat(_ session: SessionRecord) -> Bool {
-        ProjectProjection.isChat(session, in: projects, home: chatWorkspaceHome)
+        ProjectProjection.isChat(session, in: projects)
     }
 
     /// The main window, its title bar, the task menus and the Dock badge each read the sidebar's
@@ -209,7 +209,7 @@ final class ProjectStore {
     func visibleGroups(sessions: [SessionRecord]) -> [WorkspaceGroup] {
         let projects = projects
         if let groups = groupsMemo.value(for: sessions, projects) { return groups }
-        let groups = ProjectProjection.visibleGroups(sessions: sessions, projects: projects, home: chatWorkspaceHome)
+        let groups = ProjectProjection.visibleGroups(sessions: sessions, projects: projects)
         groupsMemo.keep(groups, for: sessions, projects)
         return groups
     }
@@ -218,7 +218,7 @@ final class ProjectStore {
     func chats(sessions: [SessionRecord]) -> [SessionRecord] {
         let projects = projects
         if let chats = chatsMemo.value(for: sessions, projects) { return chats }
-        let chats = ProjectProjection.chats(from: sessions, projects: projects, home: chatWorkspaceHome)
+        let chats = ProjectProjection.chats(from: sessions, projects: projects)
         chatsMemo.keep(chats, for: sessions, projects)
         return chats
     }
@@ -260,24 +260,25 @@ final class ProjectStore {
     // MARK: - Conversion from folder-path settings
 
     /// Converts the folder-path keyed settings and the existing tasks' folders into one-folder
-    /// projects. Running it again adds nothing and changes no existing project, and the original
-    /// settings record is only read.
+    /// projects, once: the sidebar of a version before projects showed each task's folder as a
+    /// group. After that a folder becomes a project only when the person adds it, so running it
+    /// again adds nothing, and the original settings record is only read.
     func importFolderPreferences(
         _ preferences: LegacyProjectFolderPreferences,
         sessionWorkspaceURLs: [URL] = [],
         now: Date = Date()
     ) {
+        guard !didImportFolderPreferences else { return }
         var candidates: [String] = preferences.registeredPaths
         var tail = Set(preferences.aliasesByPath.keys)
         tail.formUnion(preferences.pinnedPaths)
         tail.formUnion(preferences.hiddenPaths)
-        // A chat's folder is not a project because a task runs in it (`ensureProject(forTaskIn:)`).
+        // A chat's folder was never a group of its own.
         for url in sessionWorkspaceURLs where !isChatFolder(url) {
             tail.insert(ProjectSidebarPresentation.normalizedPath(for: url))
         }
         candidates.append(contentsOf: tail.sorted())
 
-        var didChange = false
         var seen = Set<String>()
         for path in candidates {
             guard seen.insert(path).inserted else { continue }
@@ -293,41 +294,16 @@ final class ProjectStore {
                     updatedAt: now
                 )
             )
-            didChange = true
         }
-
-        if !didImportFolderPreferences {
-            didImportFolderPreferences = true
-            didChange = true
-        }
-        if didChange { schedulePersist() }
+        didImportFolderPreferences = true
+        schedulePersist()
     }
 
     // MARK: - Writing
 
-    /// Gives each task that belongs to no project a project of its folder. A task already in one,
-    /// by its project ID, its folder, or its worktree's repository, adds none, so a worktree or a
-    /// subfolder imported into a project does not become a project of its own; a chat adds none.
-    func ensureProjects(forTasks sessions: [SessionRecord]) {
-        // A task the person moved to Chats keeps its folder, which makes no project and shows no
-        // hidden one again.
-        for session in sessions where project(for: session) == nil && !session.isMovedToChats {
-            ensureProject(forTaskIn: session.workspaceURL)
-        }
-    }
-
-    /// The project a task in `folder` belongs to: the one holding the folder, shown again if it was
-    /// hidden, or a new one-folder project. A chat's folder (`ChatWorkspaces`) that no project holds
-    /// gets none: its tasks are chats. This is the one place a task's folder becomes a project;
-    /// a folder the person adds or chooses as a project goes through `ensureProject(forRoot:)`.
-    @discardableResult
-    func ensureProject(forTaskIn folder: URL) -> Project? {
-        guard project(containingRoot: folder) != nil || !isChatFolder(folder) else { return nil }
-        return ensureProject(forRoot: folder)
-    }
-
-    /// Returns the project owning this folder, creating a one-folder project when none does.
-    /// Choosing a folder directly in the new-task screen goes through here.
+    /// Returns the project owning this folder, shown again if it was hidden, creating a one-folder
+    /// project when none does. This is how a folder becomes a project: the person adds it (Add
+    /// project, a chat made a project, `create_project`); a task running in a folder makes none.
     @discardableResult
     func ensureProject(forRoot root: URL, name: String? = nil) -> Project {
         if let existing = project(containingRoot: root) {

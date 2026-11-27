@@ -210,7 +210,7 @@ final class TaskSuggestionRenderingTests: XCTestCase {
                 codexHome: URL(filePath: "/tmp/suggestion-options-none/codex"),
                 codexYardletHome: URL(filePath: "/tmp/suggestion-options-none/y")), environment: [:])) { _, _, _, _ in },
             accounts: { _ in [account] }, runtimeURL: { _ in URL(filePath: "/usr/bin/true") }, defaults: { _ in [:] },
-            connection: { _ in nil }, isRepository: { _ in true }, chooseWorkspace: { _ in nil },
+            connection: { _ in nil }, isRepository: { _ in true },
             save: { saved.append($0) }, start: { started.append($0) })
         let directory = try WindowlessRender.directory("task-suggestion-qa")
         for appearance in WindowlessRender.Appearance.allCases {

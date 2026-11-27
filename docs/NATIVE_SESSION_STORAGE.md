@@ -556,17 +556,20 @@ homes, and stores the provider session ID, the `.native` scope and the account b
     `yardlet.codex.history.interactive`), and also drops from the response threads whose `source` is `exec` or
     `subAgent`, threads that have a `parentThreadId` and `ephemeral` threads. Codex app threads have the `vscode` source
     (codex-cli 0.157.1). The account is the default Codex sign-in (no binding).
-  - Placement is decided in one place, `ConversationImportPlacement`. Chat folders from `ChatWorkspaces` get no project
-    (no project is created), a Claude app worktree (`cwd` inside `originCwd`) goes to the original repository's project,
-    and the rest follow the same rule as new tasks (`projectForNewTask`). The task folder is always the conversation's
+  - Placement is decided in one place, `ConversationImportPlacement`, and creates no project: a conversation joins a
+    shown project whose root is its folder, its worktree's origin (a Claude app worktree, `cwd` inside `originCwd`) or
+    a folder it is inside, and otherwise comes in under Chats, in its own folder. A folder of a hidden project keeps
+    its conversation in Chats too (`moved_to_chats` 1), and the project stays hidden. The task folder is always the conversation's
     `cwd`, and the worktree's origin, name and branch go into the existing `origin_workspace_path`, `worktree_name` and
     `branch` columns. The folder's Git records come first, and if the folder does not exist, the session file's values
     are used.
-  - Values carried over: the title (`titleOrigin` provider), and Claude's model, effort and permissionMode
-    (`ClaudeLaunchOption` keys, `default` becomes `manual`, others stay as they are). Codex values are not carried over
+  - Values carried over: the title (`titleOrigin` provider), Claude's model, effort and permissionMode
+    (`ClaudeLaunchOption` keys, `default` becomes `manual`, others stay as they are), and the Claude app's
+    `additionalDirectories`, which join the task's `additional_roots` after its project's other roots. Codex values are not carried over
     because the thread holds the model. The task's recent activity is the other app's last activity.
-  - On relaunch, the folder-to-project conversion does not create projects for tasks already shown in a project (by ID,
-    folder or worktree origin) or for chat folders.
+  - The folder-to-project conversion of the folder settings from before projects runs once
+    (`didImportFolderPreferences` in `~/.yardlet/projects.json`); after that only Add project, New project on a chat
+    and `create_project` make a project, and a relaunch makes none.
 - **Claude conversations held by another app:** the Claude app keeps the CLI process of an open session alive, and one
   process streams only to its own client. Two processes must not both continue one conversation, so if a live process of
   another app holds that session ID in the chosen account's `sessions/<pid>.json` (child and grandchild processes
@@ -744,14 +747,15 @@ A chat can become a project of its own folder too: for a task in no project whos
 project"), and dropping its row on the sidebar's Projects title does the same. With no projects the sidebar lists no
 Projects title until a chat that can become one is dragged, and only while the drag lasts (`SidebarChatDrag`). SwiftUI
 tells the sidebar when a drag starts and ends from macOS 26; on macOS 15 the title stays as the projects list it, and
-the chat's menu offers New project. The project then opens in Edit project with its name selected
-(`ProjectEditSheet.focusesName`), so Return keeps the name and typing replaces it. Another Mac's window does not offer
-it. The storage contract is as follows.
+the chat's menu offers New project. Either way a New project sheet asks first (`NewProjectSheet`): the name, the
+chat's folder as the primary one and any other folders added there. Cancel makes nothing and leaves the chat in Chats;
+Create makes the project and moves the chat. Another Mac's window does not offer it. The storage contract is as follows.
 
-- **A chat made a project keeps its folder:** `AppModel.makeProject(from:)` moves the task by ID, as below, into a
-  new project of the task's folder, named after the task's title as Chats lists it
-  (`TaskProjectMove.projectName(for:)`: the agent's own title or Yardlet's fallback, so no model turn starts). A
-  hidden project of the folder, which Remove project leaves, is taken instead and shown again under its own name. The
+- **A chat made a project keeps its folder:** `AppModel.makeProject(from:name:additionalRoots:)` moves the task by ID,
+  as below, into a new project of the task's folder under the name the sheet confirmed. The sheet offers, for a chat's
+  folder (`ChatWorkspaces`), the task's title as Chats lists it (`TaskProjectMove.projectName(for:)`: the agent's own
+  title or Yardlet's fallback, so no model turn starts), and for any other folder its name, as Add project names one. A
+  hidden project of the folder, which Remove project leaves, is taken instead and shown again, its own name offered. The
   project is added, as Add project adds one for a folder, or shown again only once the move is saved, so a move that
   fails leaves the projects as they were. The folder stays where it is under its name (`new-chat-4`). Other tasks in
   the folder that were not moved to Chats are listed in the project too, by the folder rule below. A task moved to
@@ -766,15 +770,18 @@ it. The storage contract is as follows.
   is copied or moved, and nothing is written to the provider (no Codex `thread/metadata/update`).
 - **Where a task is listed:** a task's project is, in order, the one its stored ID names, none when `moved_to_chats`
   is 1, the one holding its folder, and the one holding its worktree's origin (`ProjectProjection.project(for:in:)`).
-  A task in no project is listed under Chats when `moved_to_chats` is 1 or its folder is a chat's (`ChatWorkspaces`),
-  and otherwise as its folder's group (`ProjectProjection.isChat`). The sidebar, the menu bar, `list_tasks`, the place
+  A folder is a project only when the person registers it (Add project, New project on a chat, `create_project`):
+  a task in no project is listed under Chats, whatever its folder (`ProjectProjection.isChat`). Which folders a harness
+  app makes for chats (`ChatWorkspaces.isChat`) only decides titles and the cleanup of an empty chat folder. A new
+  or imported task in the folder of a hidden project is kept in Chats (`moved_to_chats` 1, `AppModel.startsInChats`)
+  and does not show the project again; the project's earlier tasks stay hidden with it. The sidebar, the menu bar, `list_tasks`, the place
   a title bar or menu names (`ProjectStore.displayName(for:)`), the phone's snapshot and another Mac's window all
   follow this one rule. A task moved to Chats from a project's folder keeps working in that folder, without the
   project's other roots, as a chat has none; a task made from it (a fork, a new chat, a subagent, the original of an
   edited conversation, or `create_task` in its own place) is listed in Chats too.
 - **A relaunch does not undo it:** a moved task belongs to its project by ID, and a task moved to Chats keeps
-  `moved_to_chats`, so `ProjectStore.ensureProjects(forTasks:)` and the folder settings conversion do not create a
-  project from its folder or show a hidden project of its folder again. Rows written before the column read as 0 and
+  `moved_to_chats`, so the once-only folder settings conversion does not create a project from its folder or show a
+  hidden project of its folder again. Rows written before the column read as 0 and
   stay where their folder puts them. An earlier build ignores the column and its saves leave it as it is; a move to a
   project there sets `project_id`, which is read first. Importing again only opens the existing task with the same
   provider ID and does not change the row.

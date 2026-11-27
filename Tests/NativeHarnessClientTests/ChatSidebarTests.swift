@@ -3,9 +3,9 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// Chats, like the Codex app's: a task in a folder a harness app makes for a conversation with no
-/// project (`ChatWorkspaces`) that no project holds is listed under Chats, above the projects.
-/// The folder decides, not a missing project ID.
+/// Chats, like the Codex app's: a task in no project the person registered is listed under Chats,
+/// above the projects, whether its folder is one a harness app makes for a conversation
+/// (`ChatWorkspaces`) or one of the person's own. A missing project ID alone does not make one.
 final class ChatSidebarTests: XCTestCase {
     private let home = URL(filePath: "/Users/someone", directoryHint: .isDirectory)
     private let base = Date(timeIntervalSince1970: 1_000)
@@ -26,7 +26,7 @@ final class ChatSidebarTests: XCTestCase {
                       isPinned: isPinned, projectID: projectID)
     }
 
-    func testChatsAreTasksInAChatFolderThatNoProjectHolds() throws {
+    func testChatsAreTasksInNoRegisteredProject() throws {
         let notesProject = Project(name: "Notes", primaryRoot: yardletChat)
         let alphaProject = Project(name: "Alpha", primaryRoot: alpha)
         let projects = [notesProject, alphaProject]
@@ -36,34 +36,37 @@ final class ChatSidebarTests: XCTestCase {
         let inProjectChatFolder = task("Notes in a project", in: yardletChat, minutesAgo: 3)
         // An old task stored no project ID; its folder is a project's, so it is not a chat.
         let legacy = task("Legacy task", in: alpha, minutesAgo: 4)
+        // A folder of the person's own that is no project is a chat's too.
         let folderTask = task("Folder task", in: beta, minutesAgo: 5)
         let pinnedChat = task("Pinned chat", in: home.appending(path: "Documents/Codex/2026-10-09/new-chat-2"),
                               minutesAgo: 6, isPinned: true)
         let sessions = [codex, claude, inProjectChatFolder, legacy, folderTask, pinnedChat]
 
-        XCTAssertTrue(ProjectProjection.isChat(codex, in: projects, home: home))
-        XCTAssertFalse(ProjectProjection.isChat(inProjectChatFolder, in: projects, home: home))
-        XCTAssertFalse(ProjectProjection.isChat(legacy, in: projects, home: home))
+        XCTAssertTrue(ProjectProjection.isChat(codex, in: projects))
+        XCTAssertFalse(ProjectProjection.isChat(inProjectChatFolder, in: projects))
+        XCTAssertFalse(ProjectProjection.isChat(legacy, in: projects))
         XCTAssertNil(legacy.projectID)
-        XCTAssertFalse(ProjectProjection.isChat(folderTask, in: projects, home: home))
-        XCTAssertEqual(ProjectProjection.chats(from: sessions, projects: projects, home: home).map(\.id),
-                       [claude.id, codex.id, pinnedChat.id], "Most recent first")
+        XCTAssertTrue(ProjectProjection.isChat(folderTask, in: projects))
+        XCTAssertEqual(ProjectProjection.chats(from: sessions, projects: projects).map(\.id),
+                       [claude.id, codex.id, folderTask.id, pinnedChat.id], "Most recent first")
 
-        let groups = ProjectProjection.visibleGroups(sessions: sessions, projects: projects, home: home)
-        XCTAssertEqual(groups.map(\.displayName), ["Notes", "Alpha", "beta"], "A chat makes no folder group")
-        XCTAssertFalse(groups.flatMap(\.sessions).contains { [codex.id, claude.id, pinnedChat.id].contains($0.id) })
+        let groups = ProjectProjection.visibleGroups(sessions: sessions, projects: projects)
+        XCTAssertEqual(groups.map(\.displayName), ["Notes", "Alpha"], "A folder that is no project makes no group")
+        XCTAssertFalse(groups.flatMap(\.sessions).contains {
+            [codex.id, claude.id, folderTask.id, pinnedChat.id].contains($0.id)
+        })
 
-        let chats = ProjectProjection.chats(from: sessions, projects: projects, home: home)
+        let chats = ProjectProjection.chats(from: sessions, projects: projects)
         let layout = SidebarProjection.layout(visibleGroups: groups, allGroups: groups, chats: chats, splits: [],
                                               isFiltering: false, disclosure: SidebarDisclosure(rowLimit: 5))
         XCTAssertEqual(layout.pinned.map(\.id), [.session(pinnedChat.id)], "A pinned chat goes to Pinned")
-        XCTAssertEqual(layout.chats?.rows.map(\.id), [.session(claude.id), .session(codex.id)])
+        XCTAssertEqual(layout.chats?.rows.map(\.id), [.session(claude.id), .session(codex.id), .session(folderTask.id)])
         XCTAssertEqual(layout.chats?.hiddenRowCount, 0)
-        XCTAssertEqual(layout.sections.map(\.group.displayName), ["Notes", "Alpha", "beta"])
+        XCTAssertEqual(layout.sections.map(\.group.displayName), ["Notes", "Alpha"])
         // Keyboard order: Pinned, then Chats, then each project's tasks.
-        XCTAssertEqual(layout.rows.map(\.id), [pinnedChat, claude, codex, inProjectChatFolder, legacy, folderTask]
+        XCTAssertEqual(layout.rows.map(\.id), [pinnedChat, claude, codex, folderTask, inProjectChatFolder, legacy]
             .map { .session($0.id) })
-        XCTAssertEqual(SidebarProjection.adjacentRow(in: layout, selected: .session(codex.id), offset: 1),
+        XCTAssertEqual(SidebarProjection.adjacentRow(in: layout, selected: .session(folderTask.id), offset: 1),
                        .session(inProjectChatFolder.id))
         XCTAssertEqual(SidebarProjection.targetRow(in: layout, selected: .session(pinnedChat.id), offset: 1),
                        .session(claude.id))
@@ -73,15 +76,18 @@ final class ChatSidebarTests: XCTestCase {
         let none = SidebarProjection.layout(visibleGroups: groups, allGroups: groups, splits: [], isFiltering: false)
         XCTAssertNil(none.chats)
 
-        // A task the store keeps elsewhere (another home's chat folder) is not a chat here.
-        XCTAssertFalse(ProjectProjection.isChat(codex, in: projects, home: URL(filePath: "/Users/other")))
+        // A hidden project's tasks stay hidden with it: neither a group nor chats.
+        let hiddenProjects = [notesProject, Project(name: "Alpha", primaryRoot: alpha, isHidden: true)]
+        XCTAssertFalse(ProjectProjection.isChat(legacy, in: hiddenProjects))
+        XCTAssertEqual(ProjectProjection.visibleGroups(sessions: sessions, projects: hiddenProjects).map(\.displayName),
+                       ["Notes"])
     }
 
     func testChatsListFiveRowsAndShowMoreAddsTen() throws {
         let many = (0..<18).map {
             task("Chat \($0)", in: home.appending(path: "Documents/Codex/2026-10-09/chat-\($0)"), minutesAgo: Double($0))
         }
-        let chats = ProjectProjection.chats(from: many, projects: [], home: home)
+        let chats = ProjectProjection.chats(from: many, projects: [])
         func layout(_ disclosure: SidebarDisclosure, selection: WindowItem? = nil) -> SidebarProjection.Layout {
             SidebarProjection.layout(visibleGroups: [], allGroups: [], chats: chats, splits: [], isFiltering: false,
                                      disclosure: disclosure, selection: selection)
@@ -101,7 +107,7 @@ final class ChatSidebarTests: XCTestCase {
     func testASearchListsMatchingChatsAndASplitStaysWithItsChat() throws {
         let weather = task("Ask about the weather", in: codexChat, minutesAgo: 1, harness: .codex)
         let trip = task("Plan a trip", in: claudeChat, minutesAgo: 2)
-        let chats = ProjectProjection.chats(from: [weather, trip], projects: [], home: home)
+        let chats = ProjectProjection.chats(from: [weather, trip], projects: [])
         let found = TaskNavigationProjection.filteredSessions(chats, query: " trip ")
         XCTAssertEqual(found.map(\.id), [trip.id])
         XCTAssertTrue(TaskNavigationProjection.filteredSessions(chats, query: "new-chat").isEmpty,
@@ -151,41 +157,31 @@ final class ChatSidebarTests: XCTestCase {
         XCTAssertEqual(SidebarProjection.chatRowTitle(for: SidebarRow(content: .session(provider))), "new-chat · kept")
     }
 
-    /// A task that already belongs to a project, by its ID (a worktree or a subfolder imported into
-    /// its repository's project) or by its worktree's origin, gives its own folder no project; a
-    /// task in no project still makes one, and a chat makes none.
+    /// The folder settings from before projects, and the folders of the tasks there were, convert
+    /// once, with no project for a chat's folder or a task already shown in a project. After that a
+    /// task's folder makes no project, at a relaunch or anywhere else; a folder the person adds does.
     @MainActor
-    func testOnlyATaskInNoProjectMakesAProjectOfItsFolder() {
-        let store = ProjectStore(chatWorkspaceHome: home)
-        let repository = store.ensureProject(forRoot: alpha)
-        let worktree = alpha.appending(path: ".claude/worktrees/blue")
-        let subfolder = alpha.appending(path: "backend")
-        var byOrigin = task("Origin", in: URL(filePath: "/tmp/chat-sidebar/elsewhere/alpha-tree"), minutesAgo: 0)
-        byOrigin.originWorkspacePath = alpha.path(percentEncoded: false)
-        store.ensureProjects(forTasks: [
-            task("Worktree", in: worktree, minutesAgo: 0, projectID: repository.id),
-            task("Subfolder", in: subfolder, minutesAgo: 0, projectID: repository.id),
-            byOrigin,
-            task("Chat", in: codexChat, minutesAgo: 0),
-            task("Plain", in: beta, minutesAgo: 0)
-        ])
-        XCTAssertEqual(store.projects.map(\.name), ["alpha", "beta"])
-    }
-
-    @MainActor
-    func testATasksChatFolderBecomesNoProjectButAProjectsFolderStaysOne() {
-        let store = ProjectStore(chatWorkspaceHome: home)
-        XCTAssertNil(store.ensureProject(forTaskIn: codexChat))
-        XCTAssertTrue(store.projects.isEmpty)
-        XCTAssertEqual(store.ensureProject(forTaskIn: alpha)?.name, "alpha")
-        // Added explicitly, a chat's folder is a project, and its tasks join it.
-        let added = store.ensureProject(forRoot: yardletChat)
-        XCTAssertEqual(store.ensureProject(forTaskIn: yardletChat)?.id, added.id)
-
-        // Converting the old folder settings makes no project for a chat's folder either.
+    func testFoldersBecomeProjectsOnlyOnceAndThenOnlyWhenAdded() {
+        let repository = InMemoryProjectRepository()
+        let store = ProjectStore(repository: repository, chatWorkspaceHome: home)
         store.importFolderPreferences(LegacyProjectFolderPreferences(), sessionWorkspaceURLs: [claudeChat, beta])
-        XCTAssertEqual(Set(store.projects.map(\.name)), ["alpha", "new-chat", "beta"])
-        XCTAssertEqual(store.chats(sessions: [task("Trip", in: claudeChat, minutesAgo: 0)]).count, 1)
+        XCTAssertEqual(store.projects.map(\.name), ["beta"], "A chat's folder never became a group of its own")
+        XCTAssertTrue(store.didImportFolderPreferences)
+
+        // Later launches convert nothing more, though new tasks run in folders that are no project.
+        store.importFolderPreferences(LegacyProjectFolderPreferences(
+            pinnedPaths: [], aliasesByPath: [:], hiddenPaths: [], registeredPaths: [alpha.path(percentEncoded: false)]),
+                                      sessionWorkspaceURLs: [alpha, codexChat])
+        XCTAssertEqual(store.projects.map(\.name), ["beta"])
+        store.persistNow()
+        let relaunched = ProjectStore(repository: repository, chatWorkspaceHome: home)
+        relaunched.importFolderPreferences(LegacyProjectFolderPreferences(), sessionWorkspaceURLs: [alpha])
+        XCTAssertEqual(relaunched.projects.map(\.name), ["beta"], "The saved projects stay as they were")
+        XCTAssertEqual(relaunched.chats(sessions: [task("Alpha", in: alpha, minutesAgo: 0)]).count, 1)
+
+        // Added explicitly, a chat's folder is a project, and its tasks join it.
+        let added = relaunched.ensureProject(forRoot: yardletChat)
+        XCTAssertEqual(relaunched.project(for: task("Notes", in: yardletChat, minutesAgo: 0))?.id, added.id)
     }
 
     func testNewStringsAreLocalized() {

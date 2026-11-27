@@ -83,7 +83,7 @@ import XCTest
 
             func page(_ appearance: WindowlessRender.Appearance) -> some View {
                 NewTaskHome(recentSessions: [], projects: [project], draft: draft, runtimeSelections: runtime,
-                    connections: store, onSelectSession: { _ in }, onChooseWorkspace: { _ in }, onShowHarnesses: {},
+                    connections: store, onSelectSession: { _ in }, onShowHarnesses: {},
                     onCreate: { _ in nil })
                     .frame(width: size.width, height: size.height)
                     .background(ParityTheme.canvas).environment(\.colorScheme, appearance.colorScheme)

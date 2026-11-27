@@ -110,8 +110,9 @@ Call `snapshot` again after reconnecting, and after a refused one on the same co
 the next reconnection attempt.
 
 **Project:** `id`; `name` (as the sidebar names it); `kind`: `project` (a Yardlet project), `folder`
-(tasks of a folder outside any project) or `chats` (the sidebar's Chats, `id` `"chats"`, name in the
-Mac's language). Listed in sidebar order. No folder paths are sent.
+(tasks of a folder outside any project, sent only by a host from before such tasks were chats) or `chats` (the
+sidebar's Chats, `id` `"chats"`, name in the Mac's language; listed while there are chats or no project, so a
+new task always has somewhere to start). Listed in sidebar order. No folder paths are sent.
 
 **Task** — the tasks the Mac's sidebar lists (not archived), most recently active first:
 
