@@ -230,6 +230,9 @@ enum VaultPageScripts {
     /// - `typedSecret`: someone typed into a password field (trusted input), told once a document.
     /// - `passwordFocus`, with `page`, and `isNew` set for a new-password field still empty; `passwordBlur`:
     ///   a password field took or lost the focus.
+    /// - `signInFocus`, with `page` and `step` (`username` or `password`): an empty field of a sign-in form took the
+    ///   focus. The host offers to fill a saved item at the field (design §6.1); Yardlet fills nothing without the
+    ///   person's click on the bar.
     /// - `madeCleared`: the person emptied the fields that held a password the vault made (Chrome then drops it).
     /// - `codeField`, with `page`: a one-time code field showed.
     /// - `qr`, with `page`: a graphic the size and shape of a QR code showed; Yardlet reads the screen.
@@ -628,6 +631,23 @@ enum VaultPageScripts {
               const fields = walletFields(walletScope(e.target));
               const which = kind.startsWith('cc-') ? (isCardForm(fields) ? 'card' : '') : (isAddressForm(fields) ? 'address' : '');
               if (which) send({ kind: 'walletFocus', which, page: location.href });
+            }
+            // An empty username/email or password field (design §6.1): the host offers a saved sign-in in a bar. The
+            // target has to pass the same `shown` test (size on screen, visibility, display, opacity on the element),
+            // and the field must not already carry a value. The host decides whether to show the bar; Yardlet fills
+            // nothing without the person's click on it. Password fields continue to send `passwordFocus` for the
+            // strong-password bar — the host picks which bar takes precedence.
+            if (e.target instanceof HTMLInputElement && !e.target.value && shown(e.target)) {
+              if (isPasswordField(e.target)) {
+                send({ kind: 'signInFocus', step: 'password', page: location.href });
+              } else {
+                const autocomplete = (e.target.getAttribute('autocomplete') || '').toLowerCase().split(/\\s+/);
+                const looksLikeUsername = e.target.type === 'email'
+                  || autocomplete.some(t => t === 'username' || t === 'email')
+                  || (textTypes.includes(e.target.type)
+                      && /user|e\\s?mail|login|account|아이디|이메일|계정/i.test(codeFieldWords(e.target)));
+                if (looksLikeUsername) send({ kind: 'signInFocus', step: 'username', page: location.href });
+              }
             }
             if (!isPasswordField(e.target)) return;
             const fresh = newPasswordFields(e.target);

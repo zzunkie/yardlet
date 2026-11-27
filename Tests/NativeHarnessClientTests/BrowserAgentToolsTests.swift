@@ -2161,6 +2161,30 @@ final class BrowserAgentToolsTests: XCTestCase {
                        "an OOPIF with no resolvable parent is dropped from fillFrames (fail-closed)")
     }
 
+    /// The watch raises `signInFocus` in the page's focusin handler when an empty username/email or password field
+    /// takes the focus, so the host can show the sign-in offer bar (design §6.1). The bar never fills from focus
+    /// alone — the person's Fill click is what fills — and the test pins the watch's shape so that: the handler is
+    /// gated by `e.target.value` (empty fields only) and `shown(e.target)` (the same visibility test as every other
+    /// bar); a password field sends `step: 'password'`; a text/email field matched by the username helper sends
+    /// `step: 'username'`; and `passwordFocus` still fires alongside for the strong-password bar.
+    func testWatchScriptRaisesSignInFocusForEmptyUsernameOrPasswordFields() {
+        let script = VaultPageScripts.watchScript
+        for check in ["kind: 'signInFocus', step: 'password'", "kind: 'signInFocus', step: 'username'",
+                      "!e.target.value", "shown(e.target)",
+                      "/user|e\\s?mail|login|account|아이디|이메일|계정/i",
+                      "codeFieldWords(e.target)",
+                      "kind: 'passwordFocus'"] {
+            XCTAssertTrue(script.contains(check), "watchScript must include \(check)")
+        }
+    }
+
+    /// `BrowserVaultSignInOffer.Step` raw values stay stable so the watch's payload keeps matching the host's parser.
+    /// A drift here would silently drop the bar.
+    func testSignInOfferStepRawValues() {
+        XCTAssertEqual(BrowserVaultSignInOffer.Step.username.rawValue, "username")
+        XCTAssertEqual(BrowserVaultSignInOffer.Step.password.rawValue, "password")
+    }
+
     /// A code fill on a page that shows a two-factor setup the vault does not hold (docs/BROWSER_VAULT_DESIGN.md §20)
     /// asks the person to keep it before anything is saved: Save keeps it in the site's item and its first code goes
     /// in, Not Now keeps nothing and the agent hears so. The key never reaches a result, and the page is a filled one.
