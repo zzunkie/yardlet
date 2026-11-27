@@ -136,9 +136,14 @@ final class StructuredHeadlessAdapterTests: XCTestCase {
             let firstRequests = await requests()
             let declined = try XCTUnwrap(firstRequests.first)
             XCTAssertEqual(declined.actions.map(\.decision), [.allow, .deny])
+            // Trust lasts for the folder, so a remote device needs its Terminal permission to give it.
+            XCTAssertTrue(RemoteApprovalPolicy.allowsBeyondCall(.providerAction(declined.actions[0])))
             XCTAssertTrue(declined.detail?.contains(fixture.root.path(percentEncoded: false)) == true)
+            let readyBeforeDeclining = await recorder.payloads.filter { $0 == .sessionStatusChanged(.ready) }.count
             try await adapter.respond(to: declined.id, decision: .deny, in: handle)
-            try await waitUntil { await recorder.payloads.contains(.sessionStatusChanged(.ready)) }
+            try await waitUntil {
+                await recorder.payloads.filter { $0 == .sessionStatusChanged(.ready) }.count == readyBeforeDeclining + 1
+            }
             let afterDeclining = await recorder.payloads
             XCTAssertFalse(afterDeclining.contains { if case .error = $0 { true } else { false } })
 
@@ -167,6 +172,55 @@ final class StructuredHeadlessAdapterTests: XCTestCase {
             XCTAssertTrue(runs.last?.contains("--trust") == true)
             await adapter.close(handle)
         }
+    }
+
+    /// Only a run that printed nothing and did not carry `--trust` stands for Cursor's question; any other failure
+    /// stays a failure, whatever its stderr says. A stop while the question waits expires it.
+    func testOnlyARunThatNeverStartedAsksToTrustTheFolder() async throws {
+        let fixture = try makeFixtureExecutable(flavor: .cursor)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let adapter = StructuredHeadlessAdapter(kind: .cursorAgent, executableURL: fixture.executable)
+        let handle = try await adapter.createSession(CreateHarnessSessionRequest(
+            localSessionID: UUID(), workspaceURL: fixture.root, initialPrompt: nil))
+        let recorder = HeadlessPayloadRecorder()
+        let collector = Task {
+            for await event in await adapter.events(for: handle) { await recorder.append(event.payload) }
+        }
+        defer { collector.cancel() }
+        func requests() async -> [PermissionRequest] {
+            await recorder.payloads.compactMap { if case let .permissionRequested(request) = $0 { request } else { nil } }
+        }
+        func count(_ payload: HarnessEventPayload) async -> Int { await recorder.payloads.filter { $0 == payload }.count }
+        func errors() async -> Int { await recorder.payloads.filter { if case .error = $0 { true } else { false } }.count }
+
+        try await adapter.send("trust-words-after-output", to: handle)
+        try await waitUntil { await count(.sessionStatusChanged(.failed)) == 1 }
+        let requestsAfterOutput = await requests()
+        let errorsAfterOutput = await errors()
+        XCTAssertTrue(requestsAfterOutput.isEmpty)
+        XCTAssertEqual(errorsAfterOutput, 1)
+
+        try await adapter.send("needs-trust", to: handle)
+        try await waitUntil { await requests().count == 1 }
+        let waiting = await requests()
+        let stopped = try XCTUnwrap(waiting.first)
+        let readyBeforeStop = await count(.sessionStatusChanged(.ready))
+        try await adapter.interrupt(handle)
+        try await waitUntil { await count(.sessionStatusChanged(.ready)) == readyBeforeStop + 1 }
+        let afterStop = await recorder.payloads
+        XCTAssertTrue(afterStop.contains(.permissionExpired(stopped.id)))
+
+        try await adapter.send("never-trusted", to: handle)
+        try await waitUntil { await requests().count == 2 }
+        let allRequests = await requests()
+        let trusted = try XCTUnwrap(allRequests.last)
+        try await adapter.respond(to: trusted.id, decision: .allow, in: handle)
+        try await waitUntil { await count(.sessionStatusChanged(.failed)) == 2 }
+        let finalRequests = await requests()
+        let finalErrors = await errors()
+        XCTAssertEqual(finalRequests.count, 2)
+        XCTAssertEqual(finalErrors, 2)
+        await adapter.close(handle)
     }
 
     func testCursorCreateChatReadsAnIdentifierWrittenLateAcrossSeveralWrites() async throws {
@@ -767,6 +821,15 @@ final class StructuredHeadlessAdapterTests: XCTestCase {
                 printf '%s\\n' "$$" > "$0.pid"
                 sh -c 'printf "%s\\n" "$$" > "$1"; exec sleep 30' sh "$0.child"
                 exit 0
+                ;;
+              trust-words-after-output)
+                printf '%s\\n' '\(initLine)'
+                printf '%s\\n' 'Workspace Trust Required' >&2
+                exit 1
+                ;;
+              never-trusted)
+                printf '%s\\n' 'Workspace Trust Required' >&2
+                exit 1
                 ;;
               needs-trust)
                 case " $* " in

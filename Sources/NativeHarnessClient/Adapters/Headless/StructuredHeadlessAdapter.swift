@@ -25,6 +25,10 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding {
     private var promptsBySessionID: [UUID: String] = [:]
     /// The trust question each session waits on (`workspaceTrustRequest`).
     private var trustRequestsBySessionID: [UUID: String] = [:]
+    /// Sessions whose current run printed a stream-json line, and those whose current run carries `--trust`.
+    /// Cursor asks for trust before a run starts, so neither run's failure is its question.
+    private var streamedSessionIDs: Set<UUID> = []
+    private var trustedRunSessionIDs: Set<UUID> = []
 
     init(
         kind: HarnessKind,
@@ -144,6 +148,12 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding {
         stderrBySessionID.removeValue(forKey: session.localSessionID)
         completeOwnedActivities(for: session.localSessionID)
         promptsBySessionID[session.localSessionID] = prompt
+        streamedSessionIDs.remove(session.localSessionID)
+        if trustsWorkspace {
+            trustedRunSessionIDs.insert(session.localSessionID)
+        } else {
+            trustedRunSessionIDs.remove(session.localSessionID)
+        }
 
         let process = Process()
         let stdoutPipe = Pipe()
@@ -348,11 +358,14 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding {
         modelChoicesByLocalSessionID.removeValue(forKey: session.localSessionID)
         promptsBySessionID.removeValue(forKey: session.localSessionID)
         trustRequestsBySessionID.removeValue(forKey: session.localSessionID)
+        streamedSessionIDs.remove(session.localSessionID)
+        trustedRunSessionIDs.remove(session.localSessionID)
         eventChannel.close(session.localSessionID)
     }
 
     private func accept(_ data: Data, for localSessionID: UUID) {
         guard let value = try? JSONDecoder().decode(JSONValue.self, from: data) else { return }
+        streamedSessionIDs.insert(localSessionID)
         let projection = projector.project(
             value,
             hasAssistantText: hasAssistantText.contains(localSessionID)
@@ -434,8 +447,11 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding {
             emit(.sessionStatusChanged(.failed), for: localSessionID)
             return
         }
-        terminalSessionIDs.remove(localSessionID)
-        if Self.asksForWorkspaceTrust(detail), let folder = handles[localSessionID]?.workspaceURL {
+        let reachedResult = terminalSessionIDs.remove(localSessionID) != nil
+        // Only a run that never started stands for Cursor's question; any other one failed, whatever its stderr says,
+        // and one that already carried `--trust` does not ask again.
+        if !reachedResult, !streamedSessionIDs.contains(localSessionID), !trustedRunSessionIDs.contains(localSessionID),
+           Self.asksForWorkspaceTrust(detail), let folder = handles[localSessionID]?.workspaceURL {
             let request = "cursor-workspace-trust-\(UUID().uuidString.lowercased())"
             trustRequestsBySessionID[localSessionID] = request
             emit(.permissionRequested(Self.workspaceTrustRequest(id: request, folder: folder)), for: localSessionID)
@@ -471,7 +487,7 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding {
                 folder.path(percentEncoded: false)),
             command: nil,
             actions: [
-                PermissionRequestAction(id: "trust", text: LocalizedText("Trust this folder"), decision: .allow, kind: nil),
+                PermissionRequestAction(id: "trust", text: LocalizedText("Trust this folder"), decision: .allow, kind: "allow_always"),
                 PermissionRequestAction(id: "quit", text: LocalizedText("Don't trust"), decision: .deny, kind: "reject_once")
             ],
             requiresInAppAnswer: true
