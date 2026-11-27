@@ -290,12 +290,37 @@ section 5.3).
   when the person picks the account; Bitwarden matches the tab's page and the frame's address against the item and asks
   before filling a frame whose address the item does not hold; 1Password fills a frame only when its origin matches the
   item. Yardlet's fills also come from agents, so it refuses where those managers ask.
-- The person's key button and code bar fill a frame of another origin than the page's, which the address field does not
-  show (another subdomain's), only once the person put the focus in it: each page from the main frame down has the frame
-  that holds the next one as its focused element. Without that, they fill the main frame's field, or one in a frame of
-  the page's own origin. A code from another item of the same account (section 14.3) goes into a frame only where that
-  item's sites hold it too; the sign-in's password still goes in. An agent's fill named after one item of an account
-  takes the account's other item only when that item's sites hold the frame and every page around it.
+- The person's key button and code bar pick the field this way, in order: (1) the main frame's `target`; else (2) the
+  field of the frame the page's keyboard focus chain names (each page from the main frame down has the frame that holds
+  the next one as its focused element, read with `DOM.getFrameOwner`); else (3) a field of a frame whose origin matches
+  the main frame's; else (4) a field of any other trusted same-site subframe. (2) is the focus chain. (3) and (4) are
+  frame-origin chains that `fillFrames` built from `origins(around:)`, each origin read on its own session's
+  `Page.getFrameTree` — they are separate rules, not the same chain. A cross-site iframe never enters `fillFrames` in
+  the first place, so step (4) can only let a frame in whose own origin and every origin around it are already pages of
+  the item's sites. Letting such a subframe take the fill without a click into it is what makes Apple's
+  `account.apple.com` showing `idmsa.apple.com` on its own target fill the username and password without a focus step
+  in the iframe: the person already picked this site's item from the key button. A code from another item of the same
+  account (section 14.3) goes into a frame only where that item's sites hold it too; the sign-in's password still goes
+  in. An agent's fill named after one item of an account takes the account's other item only when that item's sites hold
+  the frame and every page around it.
+- An out-of-process iframe (OOPIF) answers on a DevTools session of its own and its tree names no parent frame; Yardlet
+  reads the parent from the session it attached from (`BrowserFrameSession.parent`), first by matching the OOPIF's frame
+  id against the parent session's `Page.getFrameTree`, then — when that tree omits the `RemoteFrame` entry — by calling
+  `DOM.getFrameOwner` on the parent session and walking its DOM from `DOM.getDocument` up to the enclosing document's
+  `frameId`. Both paths honour nesting: an OOPIF inside a local iframe resolves to that local frame, not to the main.
+  When neither path names a parent, the frame is dropped from the fillable list (fail-closed); nothing is placed into
+  it. The same session chain is what carries the cross-site refusal: every origin in the chain is still read from its
+  own session's `Page.getFrameTree`, which the page cannot change. Without any of this, Apple's sign-in iframe would
+  land as a lone frame with no page around it and the fill would refuse ("is inside a frame the browser did not
+  describe").
+- A multi-step sign-in that shows a username or email field first and hides the password field for the next step
+  (Apple's `#account_name_text_field`, the Chrome-style username-first flow) is picked by name. The person's key
+  button's target walks past any field that `visibility: hidden`, `display: none`, `opacity: 0`, `disabled` or `readOnly`
+  turns off, and falls back to a visible text or email field whose name, id, placeholder, label or autocomplete looks
+  like a username (`user`, `e-mail`, `login`, `account`, `아이디`, `이메일`, `계정`). On the next page the password field
+  is visible again and takes precedence. The fill function uses the same visible test on both sides, and guards
+  `inputs.indexOf(passwordField)` to keep the one visible username field from being dropped when a hidden password field
+  is also in the DOM.
 - Cards and addresses fill only the main frame's document (section 18): they have no sites to bind a frame to.
 - When an item named explicitly is refused because it belongs to another site, that is a phishing sign, so Yardlet sends
   a notification (section 6.3), naming the page that is not the item's: the field's own, or a page around its frame (the

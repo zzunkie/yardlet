@@ -489,8 +489,10 @@ final class BrowserHostVaultQA {
         await navigate("vault/login")
     }
 
-    /// The person's key button on a page whose sign-in is in a frame of its own site: the list knows the field takes a
-    /// sign-in, and the fill goes into the frame. A frame from another site in the item's page takes nothing.
+    /// The person's key button on a page whose sign-in is in a frame of its own site (Apple's `account.apple.com`
+    /// showing `idmsa.apple.com` on its own target): the fill reaches the trusted same-site subframe without a click
+    /// into it, its list reads the frame's field, and its fill goes into the frame. A frame from another site in the
+    /// item's page takes nothing, the same as before.
     private func exercisePanelFrames(_ controller: BrowserHostPaneController) async {
         guard let tab = controller.tab else { return check("panel frames: a tab", false, "no tab") }
         let item = VaultItem(name: "QA Frames", sites: ["qa-frames.test"], username: "frames@example.test")
@@ -514,11 +516,8 @@ final class BrowserHostVaultQA {
         }
 
         let loaded = await open(Self.framePage(Self.framesTop, Self.framesSignIn + "vault/frame-signin"))
-        // The frame is another origin than the page's: the person's fill goes in once they click into its field.
-        controller.fillForPerson(item)
-        try? await Task.sleep(for: .seconds(2))
-        let unfocused = await page("window.qa.framed")
-        let focused = await focusFrameField(on: tab, id: "user")
+        // The frame is same-site to the item but a different origin from the page: the fill reaches it without a click
+        // into the iframe first, since the person already picked the item from the key button.
         let kind = await VaultPageScripts.personFieldKind(tab.devTools, sites: item.sites, timeout: .seconds(5))
         controller.fillForPerson(item)
         let filled = await waitUntilAsync(.seconds(5)) {
@@ -526,11 +525,10 @@ final class BrowserHostVaultQA {
         }
         capture(controller, named: "vault-panel-frame-fill.png")
         let user = await page("window.qa.framed && window.qa.framed.user")
-        check("panel frames: the key button fills a frame of another origin only once the person's focus is in it, its "
-                + "list reads the frame's field, and its fill goes into the frame",
-              loaded && unfocused == .null && focused && kind == .signIn && filled && user?.stringValue == item.username,
-              "loaded \(loaded), unfocused \(String(describing: unfocused)), focused \(focused), "
-                + "kind \(String(describing: kind)), filled \(filled)")
+        check("panel frames: the key button fills a trusted same-site iframe without a click into it, its list reads the "
+                + "frame's field, and its fill goes into the frame",
+              loaded && kind == .signIn && filled && user?.stringValue == item.username,
+              "loaded \(loaded), kind \(String(describing: kind)), filled \(filled)")
 
         let loopback = base.replacingOccurrences(of: "localhost", with: "127.0.0.1")
         let foreign = await open(Self.framePage(Self.framesTop, loopback + "vault/frame-signin"))
@@ -539,27 +537,6 @@ final class BrowserHostVaultQA {
         let left = await page("window.qa.framed")
         check("panel frames: a frame from another site in the item's page takes nothing",
               foreign && left == .null, "loaded \(foreign), \(String(describing: left))")
-    }
-
-    /// Puts the focus in the field of id `id` of the page's frame (`/vault/frame`), as the person's click would.
-    private func focusFrameField(on tab: BrowserTab, id: String) async -> Bool {
-        guard let frame = try? await tab.devTools.send("Runtime.evaluate", [
-                  "expression": .string("document.getElementById('frame')")
-              ], timeout: .seconds(10))["result"]?["objectId"]?.stringValue,
-              let tree = try? await tab.devTools.send("DOM.describeNode", [
-                  "objectId": .string(frame), "depth": .integer(-1), "pierce": .bool(true)
-              ], timeout: .seconds(10))["node"] else { return false }
-        func find(_ node: JSONValue) -> Int64? {
-            let attributes = node["attributes"]?.arrayValue?.compactMap(\.stringValue) ?? []
-            if node["localName"]?.stringValue == "input",
-               stride(from: 0, to: attributes.count - 1, by: 2).contains(where: { attributes[$0] == "id" && attributes[$0 + 1] == id }) {
-                return node["backendNodeId"]?.integerValue
-            }
-            let inner = (node["children"]?.arrayValue ?? []) + [node["contentDocument"]].compactMap { $0 }
-            return inner.lazy.compactMap(find).first
-        }
-        guard let field = find(tree) else { return false }
-        return (try? await tab.devTools.send("DOM.focus", ["backendNodeId": .integer(field)], timeout: .seconds(10))) != nil
     }
 
     // MARK: CDP's virtual authenticator in this CEF

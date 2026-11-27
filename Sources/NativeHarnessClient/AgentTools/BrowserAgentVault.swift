@@ -679,25 +679,69 @@ enum VaultPageScripts {
         })();
         """
 
-    /// The field the person's fill goes to: the focused field, else the page's first password field,
-    /// else its first username field, else its first one-time code field. For the code bar
-    /// (`codeOnly`), the focused code field, else the first code field.
+    /// The field the person's fill goes to: the focused field, else the page's first visible password field, else its
+    /// first visible username or email field (Apple's `#account_name_text_field` and the like, which a multi-step
+    /// sign-in's first page shows while hiding the password field for its next step), else its first one-time code
+    /// field. For the code bar (`codeOnly`), the focused code field, else the first code field. A field hidden by
+    /// `display: none`, `visibility: hidden`, `opacity: 0` on itself or on an ancestor (via `checkVisibility`), zero
+    /// size, `disabled` or `readonly` is not picked, so a page's placeholder for the next step does not stand in for
+    /// the one the person sees.
     static func personTarget(codeOnly: Bool) -> String {
         """
         (() => {
           \(codeFieldTests)
-          const visible = e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+          \(usernameFieldTests)
+          const visible = e => {
+            if (!(e instanceof Element) || e.disabled || e.readOnly) return false;
+            if (!e.isConnected) return false;
+            const r = e.getBoundingClientRect();
+            if (r.width <= 0 || r.height <= 0) return false;
+            // checkVisibility (when the engine has it) walks ancestors for visibility/display/opacity; the own-element
+            // getComputedStyle check is the fallback for engines that do not, and also keeps the test strict when
+            // checkVisibility returns true but the field is still off-screen (handled above).
+            if (typeof e.checkVisibility === 'function'
+                && !e.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return false;
+            const s = getComputedStyle(e);
+            return s.visibility !== 'hidden' && s.display !== 'none' && s.opacity !== '0';
+          };
           const focused = document.activeElement;
           const inputs = Array.from(document.querySelectorAll('input')).filter(visible);
           if (\(codeOnly)) {
             return isCodeField(focused) ? focused : inputs.find(looksLikeCodeField) || inputs.find(isCodeField) || null;
           }
-          if (focused instanceof HTMLInputElement) return focused;
-          return inputs.find(e => e.type === 'password') || inputs.find(e => (e.autocomplete || '').includes('username'))
+          if (focused instanceof HTMLInputElement && visible(focused)) return focused;
+          return inputs.find(e => e.type === 'password')
+            || inputs.find(e => signInTextTypes.includes(e.type) && looksLikeUsername(e))
             || inputs.find(looksLikeCodeField) || null;
         })()
         """
     }
+
+    /// Helpers that tell a sign-in's username or email field from its id, name, placeholder, title, `<label>` text,
+    /// `aria-label` and `aria-labelledby` targets, and `autocomplete`. `personTarget`, `personFieldKind` and the
+    /// fill function share them so every side picks the same field; a change in one of the tests cannot leave the
+    /// others looking at a different field. The word pattern uses `e\s?mail` because `fieldWords` folds every non-letter,
+    /// non-digit character (including the hyphen in "e-mail") to a space, so `e-?mail` would never match.
+    static let usernameFieldTests = #"""
+        const signInTextTypes = ['text', 'email', 'tel', 'url', ''];
+        const autocompleteOf = e => (e.getAttribute('autocomplete') || '').toLowerCase().split(/\s+/);
+        const usernameWords = /user|e\s?mail|login|account|아이디|이메일|계정/i;
+        // The field's words from the same sources as `codeFieldWords`, including its <label> text and the elements
+        // named in `aria-labelledby`: a field whose only username-ish marker is a <label> would be skipped without this.
+        const signInFieldWords = e => ' ' + [e.name, e.id, e.placeholder, e.title, e.getAttribute('aria-label')]
+          .concat((e.getAttribute('aria-labelledby') || '').split(/\s+/).map(id => id && document.getElementById(id)))
+          .concat(Array.from(e.labels || []))
+          .map(p => (p instanceof Element ? p.textContent : p) || '').join(' ')
+          .replace(/(\p{Ll})(\p{Lu})/gu, '$1 $2').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ') + ' ';
+        // A non-text input (`<input type="checkbox" autocomplete="username">` and the like) is never a sign-in field,
+        // so the shared helper guards every branch with `signInTextTypes.includes(e.type)` — including the autocomplete
+        // and `type === 'email'` branches, which would otherwise let a non-text input through.
+        const looksLikeUsername = e => signInTextTypes.includes(e.type) && (
+          e.type === 'email'
+          || autocompleteOf(e).some(t => t === 'username' || t === 'email')
+          || usernameWords.test(signInFieldWords(e))
+        );
+        """#
 
     /// What the person's fill from the key button would put into the page (design §16), by its target field
     /// (`personTarget`): `code` for a field that looks like a one-time code field, `signIn` for a password field, a
@@ -708,14 +752,28 @@ enum VaultPageScripts {
         let kind = """
             function() {
               \(codeFieldTests)
+              \(usernameFieldTests)
               const target = this;
               if (!(target instanceof HTMLInputElement)) return '';
               if (looksLikeCodeField(target)) return 'code';
-              const autocomplete = (target.getAttribute('autocomplete') || '').toLowerCase().split(/\\s+/);
-              const visible = e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+              const autocomplete = autocompleteOf(target);
+              const visible = e => {
+                if (!(e instanceof Element) || e.disabled || e.readOnly) return false;
+                if (!e.isConnected) return false;
+                const r = e.getBoundingClientRect();
+                if (r.width <= 0 || r.height <= 0) return false;
+                if (typeof e.checkVisibility === 'function'
+                    && !e.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return false;
+                const s = getComputedStyle(e);
+                return s.visibility !== 'hidden' && s.display !== 'none' && s.opacity !== '0';
+              };
               const scope = target.form || target.closest('form') || document;
+              // A text/email field with a username-shaped name (Apple's `#account_name_text_field`) names a sign-in, even
+              // when the page hides the password field for its next step. `looksLikeUsername` and `signInFieldWords`
+              // share the helpers above, so this side sees the same field the person's fill does.
               const signIn = target.type === 'password' || (window.__yardletWasPassword || new WeakSet()).has(target)
                 || target.type === 'email' || autocomplete.some(t => ['username', 'email', 'current-password'].includes(t))
+                || (signInTextTypes.includes(target.type) && looksLikeUsername(target))
                 || (!isCodeField(target) && Array.from(scope.querySelectorAll('input[type=password]')).some(visible));
               return signIn ? 'signIn' : '';
             }
@@ -946,21 +1004,97 @@ enum VaultPageScripts {
 
     /// The tab's frames as the browser reports them, the main frame first and the rest in the order of its tree: the
     /// frames of the tab's own process, then those of each frame session (`frameSessions`) with the frames of its
-    /// process, or of `sessions` alone. A frame session that does not answer is left out with its frames, which then take
-    /// no fill. Throws when the tab's own tree cannot be read.
+    /// process, or of `sessions` alone. A frame session's root frame (an out-of-process iframe, OOPIF) carries no
+    /// `parentId` in its own tree, so its parent is read from the session it attached from (`BrowserFrameSession.parent`):
+    /// first by looking up the OOPIF's id in the parent session's `Page.getFrameTree` (Chromium includes `RemoteFrame`
+    /// placeholders there for most cases), and, when the parent tree omits it (one architecture may leave remote
+    /// frames out of `childFrames`), by `DOM.getFrameOwner` + `DOM.getDocument` on the parent session to walk the DOM up
+    /// to the owning `document` node's `frameId`. If both fail the frame is left out, so a fill never crosses an unknown
+    /// link (fail-closed). A frame session that does not answer is left out with its frames. Throws when the tab's own
+    /// tree cannot be read.
     static func frames(_ cdp: any BrowserAgentCDP, sessions: [String]? = nil, timeout: Duration) async throws -> [VaultFrame] {
         let attached = cdp.frameSessions
         let remote = Set(attached.map(\.frameID))
-        var frames: [VaultFrame] = []
-        for session in [nil] + (sessions ?? attached.map(\.id)).map(Optional.some) {
-            let tree: JSONValue
+        // Duplicate session ids should not arise from the client, but a replay or a retry could; keep the latest so
+        // the lookup stays total and sidesteps the `uniqueKeysWithValues` precondition trap.
+        let sessionsByID = Dictionary(attached.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
+        let order: [String?] = [nil] + (sessions ?? attached.map(\.id)).map(Optional.some)
+        var trees: [String?: JSONValue] = [:]
+        for session in order {
             do {
-                tree = try await cdp.send("Page.getFrameTree", [:], session: session,
-                                          timeout: session == nil ? timeout : min(timeout, .seconds(5)))
+                let tree = try await cdp.send("Page.getFrameTree", [:], session: session,
+                                              timeout: session == nil ? timeout : min(timeout, .seconds(5)))
+                trees[session] = tree
             } catch {
                 if session == nil { throw error }
                 continue
             }
+        }
+        // Finds the OOPIF's parent frame id without talking to the browser first: walks the parent session's tree for a
+        // node whose `childFrames` holds the OOPIF's own frameId, and returns the containing frame's id.
+        func parentFrameIDInTree(of frameID: String, parentSession: String?) -> String? {
+            guard let tree = trees[parentSession], let root = tree["frameTree"] else { return nil }
+            var pending: [JSONValue] = [root]
+            while !pending.isEmpty {
+                let node = pending.removeFirst()
+                let currentID = node["frame"]?["id"]?.stringValue
+                for child in node["childFrames"]?.arrayValue ?? [] {
+                    if child["frame"]?["id"]?.stringValue == frameID { return currentID }
+                    pending.append(child)
+                }
+            }
+            return nil
+        }
+        // Fallback for Chromium builds whose `Page.getFrameTree` omits remote frames from `childFrames`: reads the
+        // iframe element that owns the OOPIF on the parent session (`DOM.getFrameOwner`), then walks the parent's DOM
+        // from `DOM.getDocument` down to that element and returns the enclosing document's frame id. No nesting level
+        // is skipped — an iframe in a deeper local frame resolves to that local frame, not to the main — and no
+        // "unknown nesting falls back to the containing document" step: when the engine omits a nested frame's id,
+        // the branch resolves to `nil` and the OOPIF is dropped (fail-closed), so a cross-site middle hop cannot be
+        // skipped over by mistake. `pierce: true` is what makes Chromium include `contentDocument` and `shadowRoots`
+        // in the returned tree.
+        func parentFrameIDByDOM(of frameID: String, parentSession: String?) async -> String? {
+            let wait = min(timeout, .seconds(5))
+            guard let owner = try? await cdp.send("DOM.getFrameOwner", ["frameId": .string(frameID)],
+                                                  session: parentSession, timeout: wait),
+                  let backendNodeID = owner["backendNodeId"]?.integerValue,
+                  let document = try? await cdp.send("DOM.getDocument",
+                                                     ["depth": .integer(-1), "pierce": .bool(true)],
+                                                     session: parentSession, timeout: wait),
+                  let root = document["root"] else { return nil }
+            // Chromium's `DOM.Node` carries `frameId` on the owning `<iframe>` element (naming the subframe it hosts),
+            // not on the `#document` node, so `contentDoc["frameId"]` is usually absent; the iframe element's own
+            // `frameId` is the only reliable source. Passing `nil` down keeps a frame whose id cannot be read out of
+            // the fillable list, which is what makes this fail-closed.
+            func search(_ node: JSONValue, docFrameID: String?) -> String? {
+                if node["backendNodeId"]?.integerValue == backendNodeID { return docFrameID }
+                for child in node["children"]?.arrayValue ?? [] {
+                    if let found = search(child, docFrameID: docFrameID) { return found }
+                }
+                // Open shadow roots that `pierce: true` reveals: a node in a shadow tree belongs to the same frame as
+                // its host, so the same `docFrameID` carries down.
+                for root in node["shadowRoots"]?.arrayValue ?? [] {
+                    if let found = search(root, docFrameID: docFrameID) { return found }
+                }
+                if let contentDoc = node["contentDocument"] {
+                    // The iframe element names its subframe's id; fall back to the document node's `frameId` for
+                    // engines that place it there instead, but NEVER to the containing document's id: a nested
+                    // frame whose id cannot be read stays `nil` so the OOPIF is dropped.
+                    let nested = node["frameId"]?.stringValue ?? contentDoc["frameId"]?.stringValue
+                    if let found = search(contentDoc, docFrameID: nested) { return found }
+                }
+                return nil
+            }
+            // The root `#document` node has no `frameId` in Chromium's CDP output, so seed from the parent session's
+            // frameTree (`attached.parent`'s own root frame id); every nested frame reads its id from the owning
+            // iframe element along the way.
+            let rootFrameID = trees[parentSession]?["frameTree"]?["frame"]?["id"]?.stringValue
+                ?? root["frameId"]?.stringValue
+            return search(root, docFrameID: rootFrameID)
+        }
+        var frames: [VaultFrame] = []
+        for session in order {
+            guard let tree = trees[session] else { continue }
             var pending = tree["frameTree"].map { [$0] } ?? []
             var isRoot = true
             while !pending.isEmpty {
@@ -971,7 +1105,25 @@ enum VaultPageScripts {
                 let main = session == nil && isRoot
                 // Only the main frame's origin falls back to its address: a frame's opaque origin stays one.
                 let origin = securityOrigin(of: frame) ?? (main ? frame["url"]?.stringValue.flatMap(VaultSite.origin(of:)) : nil) ?? ""
-                frames.append(VaultFrame(id: id, parentID: main ? nil : frame["parentId"]?.stringValue,
+                // An OOPIF session's own root has no `parentId` in its tree; its parent frame lives in the session it
+                // attached from. The main frame has no parent; a frame below the session's root carries its own `parentId`.
+                let parentID: String?
+                if main {
+                    parentID = nil
+                } else if isRoot, let session, let attached = sessionsByID[session] {
+                    // Fail-closed: an OOPIF whose parent cannot be resolved stays out, so `fillFrames` (which reads the
+                    // chain by `parentID`) can never place a fill into it.
+                    var resolved = parentFrameIDInTree(of: attached.frameID, parentSession: attached.parent)
+                    if resolved == nil {
+                        resolved = await parentFrameIDByDOM(of: attached.frameID, parentSession: attached.parent)
+                    }
+                    if resolved == nil { resolved = frame["parentId"]?.stringValue }
+                    guard let resolved else { continue }
+                    parentID = resolved
+                } else {
+                    parentID = frame["parentId"]?.stringValue
+                }
+                frames.append(VaultFrame(id: id, parentID: parentID,
                                          loaderID: frame["loaderId"]?.stringValue ?? "", origin: origin,
                                          url: (frame["url"]?.stringValue ?? "") + (frame["urlFragment"]?.stringValue ?? ""),
                                          session: session))
@@ -1030,12 +1182,16 @@ enum VaultPageScripts {
 
     /// The field a person's fill goes to, among `frames` (`fillFrames`): the main frame's `target` (an expression that
     /// gives the field or null, such as `personTarget`), else that of the frame the page's keyboard focus is in, else
-    /// that of the first frame of the main frame's own origin with one. A frame of another origin, such as another
-    /// subdomain's, which the address field does not show, takes a fill only once the person put the focus in it. The
-    /// field's object is bound to its frame's vault world.
+    /// that of the first frame of the main frame's own origin with one, else that of the first trusted same-site
+    /// subframe with one. `frames` passes only subframes whose own origin and the origins around them are pages of
+    /// one saved item's sites (`fillFrames` enforces this), so once the person picks an item from the key button a
+    /// same-site subframe (such as Apple's `idmsa.apple.com` inside `account.apple.com`) may take the fill even without
+    /// the focus in it; a cross-site iframe never enters `frames` and so can never take a fill. The field's object is
+    /// bound to its frame's vault world.
     static func personField(_ cdp: any BrowserAgentCDP, in frames: [VaultFillFrame], target: String,
                             timeout: Duration) async -> (frame: VaultFillFrame, objectID: String)? {
         var sameOrigin: (frame: VaultFillFrame, objectID: String)?
+        var trustedSameSite: (frame: VaultFillFrame, objectID: String)?
         for frame in frames {
             guard let context = try? await vaultWorld(cdp, frame: frame.frame.id, session: frame.frame.session, timeout: timeout),
                   let field = try? await cdp.send("Runtime.evaluate", [
@@ -1045,8 +1201,11 @@ enum VaultPageScripts {
             if frame.isMain { return (frame, objectID) }
             if await holdsFocus(frame.frame, in: frames.map(\.frame), cdp: cdp, timeout: timeout) { return (frame, objectID) }
             if sameOrigin == nil, frame.frame.origin == frames.first?.frame.origin { sameOrigin = (frame, objectID) }
+            // A subframe the item's sites may fill (`fillFrames`) is same-site end-to-end; the person already picked
+            // this site's item, so Yardlet fills its field without a click into the iframe first.
+            if trustedSameSite == nil { trustedSameSite = (frame, objectID) }
         }
-        return sameOrigin
+        return sameOrigin ?? trustedSameSite
     }
 
     /// Whether the page's keyboard focus is in `frame`'s document: from the main frame down, each document's focused
@@ -1892,6 +2051,9 @@ extension BrowserAgentTools {
             + "item's sites.")
         let own = "function() { return this instanceof HTMLElement && this.ownerDocument === document; }"
         let root = frames.first { $0.session == element.session }?.place
+        // The last error a child frame's lookup raised, kept so the refusal reports the real cause instead of masking
+        // every CDP error as "the browser did not describe the frame".
+        var childError: Error?
         for frame in frames where frame.session == element.session {
             let isRoot = frame.place == root
             guard let around = VaultPageScripts.origins(around: frame, in: frames) else {
@@ -1900,7 +2062,8 @@ extension BrowserAgentTools {
             }
             let place = VaultFillFrame(frame: frame, framedBy: around, pageLoaderID: main.loaderID)
             // The session's own frame answers as the page did before frames: a field that is gone, or a document that
-            // went away meanwhile, reads as a stale reference. A frame below it that does not answer is passed over.
+            // went away meanwhile, reads as a stale reference. A frame below it that does not answer is passed over,
+            // but its error is kept so the refusal below names what went wrong.
             do {
                 let world = try await send(page, "Page.createIsolatedWorld", [
                     "frameId": .string(frame.id), "worldName": .string(Self.vaultWorldName)
@@ -1920,8 +2083,10 @@ extension BrowserAgentTools {
                 throw error
             } catch {
                 if isRoot { throw error }
+                childError = error
             }
         }
+        if let childError { throw childError }
         throw refusal
     }
 
@@ -1963,8 +2128,15 @@ extension BrowserAgentTools {
           if (typeof origin === 'string' && location.origin !== origin) return { error: 'moved' };
           // The field may have been moved into another document of the page since it was found.
           if (!(target instanceof Node) || target.ownerDocument !== document) return { error: 'left its document' };
-          const visible = e => { const r = e.getBoundingClientRect(); const s = getComputedStyle(e);
-            return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; };
+          const visible = e => {
+            if (!e.isConnected) return false;
+            const r = e.getBoundingClientRect();
+            if (r.width <= 0 || r.height <= 0) return false;
+            if (typeof e.checkVisibility === 'function'
+                && !e.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return false;
+            const s = getComputedStyle(e);
+            return s.visibility !== 'hidden' && s.display !== 'none' && s.opacity !== '0';
+          };
           const textTypes = ['text', 'email', 'tel', 'url', ''];
           const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
           const put = (e, v) => {
@@ -1992,12 +2164,19 @@ extension BrowserAgentTools {
             }
             const free = e => isInput(e) && e.type === 'password' && !secretFields.some(x => x.field === e);
             const passwordField = free(target) ? target : inputs.find(free);
+            \(VaultPageScripts.usernameFieldTests)
             let userField = null;
             if (isInput(target) && target.type !== 'password' && textTypes.includes(target.type)) {
               userField = target;
             } else {
-              userField = inputs.find(e => textTypes.includes(e.type) && (e.autocomplete || '').split(/\\s+/).includes('username'))
-                || (passwordField ? inputs.slice(0, inputs.indexOf(passwordField)).reverse().find(e => textTypes.includes(e.type)) : null);
+              // A password field hidden for the next step (`visible` filtered it out) gives `inputs.indexOf` -1, and
+              // `inputs.slice(0, -1)` would then drop the one username field the page is showing. The guard keeps the
+              // list whole and falls back to the shared `looksLikeUsername` helper (`e.type === 'email'` is its own
+              // branch there, so an email field is picked without requiring `usernameWords` to match its name too).
+              const passwordIndex = passwordField ? inputs.indexOf(passwordField) : -1;
+              userField = inputs.find(e => textTypes.includes(e.type) && autocompleteOf(e).includes('username'))
+                || (passwordIndex > 0 ? inputs.slice(0, passwordIndex).reverse().find(e => textTypes.includes(e.type)) : null)
+                || inputs.find(looksLikeUsername);
             }
             if (!passwordField && !userField && !secretFields.length) return { error: 'no sign-in field' };
             if (typeof password === 'string' && passwordField) { put(passwordField, password); secret.push(passwordField); values.push(password); kinds.push('password'); }
