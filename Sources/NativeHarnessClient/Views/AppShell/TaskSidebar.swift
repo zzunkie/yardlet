@@ -267,10 +267,9 @@ struct TaskSidebar: View {
     var onNest: ((UUID, UUID?) -> Void)? = { _, _ in }
     /// Starts a new task nested under the chosen sidebar task, from its row's context menu.
     var onNewNestedTask: ((SessionRecord) -> Void)? = nil
-    /// Asks to archive the tasks nested under a task whose pull requests merged
-    /// (`SidebarMergedNestedTasks`), from its row's context menu; nil where the window cannot, and
-    /// the item is left out.
-    var onArchiveMergedNestedTasks: (([UUID]) -> Void)? = nil
+    /// Archiving the tasks nested under a task whose pull requests merged (`SidebarMergedNestedTasks`),
+    /// from its row's context menu; nil where the window cannot, and the item is left out.
+    var mergedNestedArchive: SidebarMergedNestedArchive? = nil
     /// The projects' own actions (pin, edit, Show in Finder, archive chats, remove) change this Mac's projects and
     /// folders. Another Mac's window lists its host's, which only the host changes: they show dimmed there.
     var managesProjects = true
@@ -747,7 +746,7 @@ struct TaskSidebar: View {
                     // A task moves among the families of its project's list, which the states mix.
                     nesting: onNest == nil || row.project != nil ? nil : nesting,
                     onNewNestedTask: onNewNestedTask,
-                    onArchiveMergedNestedTasks: onArchiveMergedNestedTasks
+                    mergedNestedArchive: mergedNestedArchive
                 )
                 .equatable()
             case let .split(split, members):
@@ -1405,8 +1404,8 @@ struct SidebarTaskEntry: View, @MainActor Equatable {
     /// row joins it in a split view.
     var nesting: SidebarNesting? = nil
     var onNewNestedTask: ((SessionRecord) -> Void)? = nil
-    /// Asks to archive the nested tasks whose pull requests merged; nil leaves the item out.
-    var onArchiveMergedNestedTasks: (([UUID]) -> Void)? = nil
+    /// Archiving the nested tasks whose pull requests merged; nil leaves the item out.
+    var mergedNestedArchive: SidebarMergedNestedArchive? = nil
     @State private var isDropTargeted = false
     /// Where a task dragged over the row would go.
     @State private var nestDrop: TaskNesting.Drop?
@@ -1435,7 +1434,7 @@ struct SidebarTaskEntry: View, @MainActor Equatable {
             && (lhs.onMakeProject != nil) == (rhs.onMakeProject != nil)
             && (lhs.onNewNestedTask != nil) == (rhs.onNewNestedTask != nil)
             && lhs.nestedTaskIDs == rhs.nestedTaskIDs
-            && (lhs.onArchiveMergedNestedTasks != nil) == (rhs.onArchiveMergedNestedTasks != nil)
+            && (lhs.mergedNestedArchive != nil) == (rhs.mergedNestedArchive != nil)
     }
 
     @ViewBuilder var menuContents: some View {
@@ -1482,8 +1481,8 @@ struct SidebarTaskEntry: View, @MainActor Equatable {
                                      onMakeProject: onMakeProject)
                 .disabled(onMoveToProject == nil)
             Button(L10n.string("Archive"), role: .destructive) { onArchive(session) }
-            if let onArchiveMergedNestedTasks, !nestedTaskIDs.isEmpty {
-                ArchiveMergedNestedTasksMenuItem(nestedTaskIDs: nestedTaskIDs, action: onArchiveMergedNestedTasks)
+            if let mergedNestedArchive, !nestedTaskIDs.isEmpty {
+                ArchiveMergedNestedTasksMenuItem(nestedTaskIDs: nestedTaskIDs, archive: mergedNestedArchive)
             }
             Button(L10n.string("Delete task"), role: .destructive) { onDelete?(session) }
                 .disabled(onDelete == nil)
@@ -1549,18 +1548,28 @@ struct RenameFromConversationMenuItem: View {
     }
 }
 
+/// What a row menu needs to offer "Archive N tasks with merged pull requests…": whether something
+/// holds a nested task back from being archived now (`AppModel.isArchiveHeld(_:)`), and the window's
+/// confirmation, which archives the tasks the item names.
+struct SidebarMergedNestedArchive {
+    let isHeld: (UUID) -> Bool
+    let confirm: ([UUID]) -> Void
+}
+
 /// "Archive N tasks with merged pull requests…" in the row menu of a task with tasks nested under
-/// it (`SidebarMergedNestedTasks`), left out while none of them has a merged pull request. It reads
-/// the pull requests itself, so a nested task's answer from GitHub redraws the item, not the row.
+/// it (`SidebarMergedNestedTasks`), left out while none of them has a merged pull request and nothing
+/// holding it back. It reads the pull requests itself, so a nested task's answer from GitHub redraws
+/// the item, not the row.
 struct ArchiveMergedNestedTasksMenuItem: View {
     let nestedTaskIDs: [UUID]
-    let action: ([UUID]) -> Void
+    let archive: SidebarMergedNestedArchive
     @Environment(TaskPullRequestMonitor.self) private var pullRequests: TaskPullRequestMonitor?
 
     var body: some View {
         if let pullRequests,
-           let merged = SidebarMergedNestedTasks(nested: nestedTaskIDs, pullRequest: { pullRequests.pullRequest(for: $0) }) {
-            Button(merged.title, role: .destructive) { action(merged.taskIDs) }
+           let merged = SidebarMergedNestedTasks(nested: nestedTaskIDs, pullRequest: { pullRequests.pullRequest(for: $0) },
+                                                 isHeld: archive.isHeld) {
+            Button(merged.title, role: .destructive) { archive.confirm(merged.taskIDs) }
         }
     }
 }

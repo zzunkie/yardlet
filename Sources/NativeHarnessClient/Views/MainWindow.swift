@@ -2166,12 +2166,14 @@ struct MainWindow: View {
                             newTaskDraft.startNested(under: session, project: project, isChat: isChat)
                             showNewTask()
                         },
-                        onArchiveMergedNestedTasks: { ids in
-                            let tasks = ids.compactMap { sessionRecord($0) }
-                            guard !tasks.isEmpty else { return }
-                            rememberShellFocus()
-                            mergedTasksToArchive = tasks
-                        },
+                        mergedNestedArchive: SidebarMergedNestedArchive(
+                            isHeld: { model.isArchiveHeld($0) },
+                            confirm: { ids in
+                                let tasks = ids.compactMap { sessionRecord($0) }
+                                guard !tasks.isEmpty else { return }
+                                rememberShellFocus()
+                                mergedTasksToArchive = tasks
+                            }),
                         splitActions: SidebarSplitActions(
                             togglePinned: { model.splits.togglePinned($0.id) },
                             rename: presentSplitRename,
@@ -2924,7 +2926,7 @@ struct MainWindow: View {
             Button(L10n.string("Archive tasks"), role: .destructive) {
                 guard let tasks = mergedTasksToArchive else { return }
                 mergedTasksToArchive = nil
-                Task { await model.archive(tasks) }
+                Task { await model.archiveUnlessHeld(tasks) }
             }
         } message: {
             if let tasks = mergedTasksToArchive {

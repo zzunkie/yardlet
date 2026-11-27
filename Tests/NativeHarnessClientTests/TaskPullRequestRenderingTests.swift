@@ -183,7 +183,8 @@ final class TaskPullRequestRenderingTests: XCTestCase {
                 nestedTaskIDs: row.nestedSessions.map(\.id), isSelected: false, onSelect: {},
                 onTogglePinned: { _ in }, onArchive: { _ in }, onDelete: { _ in }, onRename: { _ in },
                 onMarkRead: { _ in }, onMarkUnread: { _ in }, projectMove: .none, onMoveToProject: { _ in },
-                onDropTask: nil, onArchiveMergedNestedTasks: archive)
+                onDropTask: nil,
+                mergedNestedArchive: archive.map { confirm in SidebarMergedNestedArchive(isHeld: { _ in false }, confirm: confirm) })
         }
         let menu = try entry(family) { asked.append($0) }
         let title = L10n.format("Archive %lld tasks with merged pull requests…", 2)
@@ -195,7 +196,8 @@ final class TaskPullRequestRenderingTests: XCTestCase {
                     searchText: .constant(""), onNewTask: {}, onActivate: { _ in }, onNewTaskInProject: { _ in },
                     projects: projects, onEditProject: { _ in }, onArchiveProjectChats: { _ in },
                     onRemoveProject: { _ in }, onTogglePinned: { _ in }, onArchive: { _ in }, onDelete: { _ in },
-                    onRename: { _ in }, onMarkRead: { _ in }, onArchiveMergedNestedTasks: { _ in })
+                    onRename: { _ in }, onMarkRead: { _ in },
+                    mergedNestedArchive: SidebarMergedNestedArchive(isHeld: { _ in false }, confirm: { _ in }))
                     .frame(width: ParityTheme.sidebarWidth)
                     .background(ParityTheme.sidebar)
                 ParityTheme.separator.frame(width: 1)

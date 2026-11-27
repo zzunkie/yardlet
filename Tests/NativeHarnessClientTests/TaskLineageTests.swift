@@ -220,7 +220,8 @@ final class TaskLineageTests: XCTestCase {
         ]
         let sessions = [root, login, export, docs, cache, icons, version, logs]
         func merged(_ row: SidebarRow) -> SidebarMergedNestedTasks? {
-            SidebarMergedNestedTasks(nested: row.nestedSessions.map(\.id), pullRequest: { pullRequests[$0] })
+            SidebarMergedNestedTasks(nested: row.nestedSessions.map(\.id), pullRequest: { pullRequests[$0] },
+                                     isHeld: { _ in false })
         }
 
         let family = SidebarProjection.nest(rows(sessions))[0]

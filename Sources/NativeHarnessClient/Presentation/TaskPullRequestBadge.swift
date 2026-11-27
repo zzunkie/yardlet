@@ -167,14 +167,16 @@ struct TaskPullRequestRowMark: Equatable, Sendable {
 /// archives in one step after confirming, as a project's "Archive chats" archives its tasks. Only
 /// what Yardlet already knows counts: a task whose pull request GitHub was not asked about (its row
 /// has not been in view, `TaskPullRequestMonitor`) or did not answer for is left out, and the menu
-/// asks nothing.
+/// asks nothing. A task something holds back is left out too (`isHeld`, `AppModel.isArchiveHeld(_:)`):
+/// it works or waits for the person, or archiving would drop its queued messages or unsent draft,
+/// which a collapsed family hides from view.
 struct SidebarMergedNestedTasks: Equatable, Sendable {
     /// In the order the sidebar lists them.
     let taskIDs: [UUID]
 
-    /// Nil when none of `nested` has a merged pull request.
-    init?(nested: [UUID], pullRequest: (UUID) -> TaskPullRequest?) {
-        let merged = nested.filter { pullRequest($0)?.state == .merged }
+    /// Nil when none of `nested` has a merged pull request and nothing holding it back.
+    init?(nested: [UUID], pullRequest: (UUID) -> TaskPullRequest?, isHeld: (UUID) -> Bool) {
+        let merged = nested.filter { pullRequest($0)?.state == .merged && !isHeld($0) }
         guard !merged.isEmpty else { return nil }
         taskIDs = merged
     }

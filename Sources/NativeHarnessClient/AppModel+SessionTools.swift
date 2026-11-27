@@ -1222,14 +1222,21 @@ extension AppModel: SessionToolHandling, AgentToolApprovalHandling {
         var reason: String?
     }
 
-    /// Why `archive_task` leaves a task as it is, or nil: it works or waits for the person, work it
-    /// started runs on after its turn (closing the session would end it; the Claude app holds
-    /// `archive_session` for another session's background task too, 4.29.0 `agentArchiveHoldFor`), it
-    /// is changing, or it holds the person's unsent draft, which archiving would drop. The caller's own
-    /// task answers `sessionToolSelfArchiveRefusal` instead. `sessionToolArchiveCheck` adds what only
-    /// the provider can list.
+    /// Why `archive_task` leaves a task as it is, or nil: what holds it back (`archiveRefusal(for:)`).
+    /// The caller's own task answers `sessionToolSelfArchiveRefusal` instead. `sessionToolArchiveCheck`
+    /// adds what only the provider can list.
     func sessionToolArchiveRefusal(_ session: SessionRecord, caller: SessionToolCaller) -> String? {
         if session.id == caller.hostTaskID { return sessionToolSelfArchiveRefusal(session, caller: caller) }
+        return archiveRefusal(for: session)
+    }
+
+    /// Why archiving a task now would cut its work short or lose what the person has not sent, or nil:
+    /// it works or waits for the person, work it started runs on after its turn (closing the session
+    /// would end it; the Claude app holds `archive_session` for another session's background task too,
+    /// 4.29.0 `agentArchiveHoldFor`), it is changing, or it holds the person's unsent draft, which
+    /// archiving would drop. `archive_task` refuses another task for these, and "Archive N tasks with
+    /// merged pull requests…" leaves such a task out (`isArchiveHeld(_:)`).
+    func archiveRefusal(for session: SessionRecord) -> String? {
         if let request = TaskAttentionProjection.waitingRequest(of: session, detail: taskAttentionDetails[session.id]) {
             return request == .input ? "it waits for the person's answer." : "it waits for the person's approval."
         }
