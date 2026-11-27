@@ -166,7 +166,13 @@ struct AgentToolServerLaunch: Equatable, Sendable {
 
     /// Writes the Pi extension to a file only the user can read, for the same reason, and returns its path.
     func writePiExtension(for localSessionID: UUID) throws -> URL {
-        try writePrivateFile(Data(piExtensionSource().utf8), named: "pi-\(localSessionID.uuidString.lowercased()).cjs")
+        try writePrivateFile(Data(piExtensionSource().utf8), named: Self.piExtensionName(for: localSessionID))
+    }
+
+    /// The Pi extension's file name for a task. It holds the task's token, so it goes when the Pi process
+    /// that loaded it stops (`PiRPCAdapter`) and when the task's tools are released (`AgentToolBroker`).
+    static func piExtensionName(for localSessionID: UUID) -> String {
+        "pi-\(localSessionID.uuidString.lowercased()).cjs"
     }
 
     private func writePrivateFile(_ data: Data, named name: String) throws -> URL {

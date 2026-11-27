@@ -27,6 +27,9 @@ actor PiRPCAdapter: HarnessAdapter, ProviderCapabilityProviding, HarnessWorkspac
     private var additionalRootsByLocalSessionID: [UUID: [URL]] = [:]
     private var yardletInstructionsByLocalSessionID: [UUID: String] = [:]
     private var agentToolServerByLocalSessionID: [UUID: AgentToolServerLaunch] = [:]
+    /// The extension written for each session's running process, kept while Pi may load it again
+    /// (`switch_session` rebuilds the runtime).
+    private var agentToolExtensionByLocalSessionID: [UUID: URL] = [:]
     private let environmentOverrides: [String: String]
     /// Sessions whose process saves no session file (`--no-session`, `run_agent`).
     private var historyFreeSessionIDs = Set<UUID>()
@@ -83,7 +86,18 @@ actor PiRPCAdapter: HarnessAdapter, ProviderCapabilityProviding, HarnessWorkspac
     func agentToolArguments(for localSessionID: UUID) -> [String] {
         guard let server = agentToolServerByLocalSessionID[localSessionID],
               let file = try? server.writePiExtension(for: localSessionID) else { return [] }
+        agentToolExtensionByLocalSessionID[localSessionID] = file
         return ["-e", file.path(percentEncoded: false)]
+    }
+
+    /// Forgets the session's server and deletes the extension written for it, which holds the task's
+    /// token: its process is stopping, or never started. The next start is handed the server again.
+    /// It runs before any wait, so a start of the same session meanwhile keeps the file it writes.
+    private func forgetAgentToolServer(for localSessionID: UUID) {
+        agentToolServerByLocalSessionID.removeValue(forKey: localSessionID)
+        if let file = agentToolExtensionByLocalSessionID.removeValue(forKey: localSessionID) {
+            try? FileManager.default.removeItem(at: file)
+        }
     }
 
     /// The instruction flags for this session's launch in `workspaceURL` (`YardletInstructionsLaunch`).
@@ -180,6 +194,7 @@ actor PiRPCAdapter: HarnessAdapter, ProviderCapabilityProviding, HarnessWorkspac
             }
             return handle
         } catch {
+            forgetAgentToolServer(for: request.localSessionID)
             await detach(localSessionID: request.localSessionID)
             throw error
         }
@@ -227,6 +242,7 @@ actor PiRPCAdapter: HarnessAdapter, ProviderCapabilityProviding, HarnessWorkspac
             emit(.sessionStatusChanged(.ready), for: localSessionID)
             return handle
         } catch {
+            forgetAgentToolServer(for: localSessionID)
             await detach(localSessionID: localSessionID)
             throw error
         }
@@ -396,8 +412,8 @@ actor PiRPCAdapter: HarnessAdapter, ProviderCapabilityProviding, HarnessWorkspac
         eventChannel.close(session.localSessionID)
         additionalRootsByLocalSessionID.removeValue(forKey: session.localSessionID)
         yardletInstructionsByLocalSessionID.removeValue(forKey: session.localSessionID)
-        agentToolServerByLocalSessionID.removeValue(forKey: session.localSessionID)
         historyFreeSessionIDs.remove(session.localSessionID)
+        forgetAgentToolServer(for: session.localSessionID)
         await detach(localSessionID: session.localSessionID)
     }
 
@@ -678,6 +694,7 @@ actor PiRPCAdapter: HarnessAdapter, ProviderCapabilityProviding, HarnessWorkspac
         additionalRootsByLocalSessionID.removeValue(forKey: localSessionID)
         yardletInstructionsByLocalSessionID.removeValue(forKey: localSessionID)
         historyFreeSessionIDs.remove(localSessionID)
+        forgetAgentToolServer(for: localSessionID)
         eventChannel.finish(localSessionID)
         await ended.stop()
     }

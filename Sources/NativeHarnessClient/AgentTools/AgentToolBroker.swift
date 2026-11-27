@@ -317,12 +317,14 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         tools.vaultScrub.carries(text)
     }
 
-    /// Ends a task's token, tells any running `yardlet-mcp` watch that the task was released, and
-    /// closes its browser tab.
+    /// Ends a task's token, tells any running `yardlet-mcp` watch that the task was released, deletes the
+    /// Pi extension that carried the token, and closes its browser tab.
     func releaseAgentTools(for localSessionID: UUID) {
         if let token = tokens.removeValue(forKey: localSessionID) {
             recordReleasedToken(token, for: localSessionID)
         }
+        try? FileManager.default.removeItem(
+            at: environment.privateDirectory.appending(path: AgentToolServerLaunch.piExtensionName(for: localSessionID)))
         for id in Array((toolListWatches[localSessionID] ?? [:]).keys) {
             finishToolListWatch(id, of: localSessionID, reply: AgentToolListWatchReply(changed: false, released: true))
         }

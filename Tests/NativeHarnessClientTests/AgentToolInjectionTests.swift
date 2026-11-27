@@ -280,7 +280,7 @@ final class AgentToolInjectionTests: XCTestCase {
 
     // MARK: - Pi
 
-    func testThePiRouteTheAppShipsLoadsTheServerFromAPrivateExtensionOnStartAndResume() async throws {
+    func testThePiRouteTheAppShipsLoadsTheServerFromAPrivateExtensionOnlyWhileItsProcessRuns() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         func routed(_ transport: FakePiRPCTransport) throws -> (any HarnessAdapter, any HarnessAgentToolConfiguring) {
@@ -291,25 +291,14 @@ final class AgentToolInjectionTests: XCTestCase {
         }
         let sessionID = UUID()
         let server = launch(session: sessionID, directory: directory)
+        let file = directory.appending(path: "pi-\(sessionID.uuidString.lowercased()).cjs")
+        func written() -> Bool { FileManager.default.fileExists(atPath: file.path(percentEncoded: false)) }
+
         let started = FakePiRPCTransport(sessionFile: "/tmp/pi-tools.jsonl")
         let (starting, startingTools) = try routed(started)
         await startingTools.setAgentToolServer(server, for: sessionID)
-        await starting.close(try await starting.createSession(
-            CreateHarnessSessionRequest(localSessionID: sessionID, workspaceURL: workspace, initialPrompt: nil)))
-        let resumed = FakePiRPCTransport(sessionFile: "/tmp/pi-tools.jsonl")
-        let (resuming, resumingTools) = try routed(resumed)
-        await resumingTools.setAgentToolServer(server, for: sessionID)
-        await resuming.close(try await resuming.resumeSession(providerSessionID: "/tmp/pi-tools.jsonl", localSessionID: sessionID,
-                                                             workspaceURL: workspace))
-
-        let file = directory.appending(path: "pi-\(sessionID.uuidString.lowercased()).cjs")
-        for transport in [started, resumed] {
-            let arguments = try XCTUnwrapAsync(await transport.configuration?.arguments)
-            let flag = try XCTUnwrap(arguments.firstIndex(of: "-e"))
-            XCTAssertEqual(arguments[flag + 1], file.path(percentEncoded: false))
-            XCTAssertFalse(arguments.contains { $0.contains(server.environment[AgentToolEnvironment.token]!) },
-                           "The token stays out of the process arguments")
-        }
+        let created = try await starting.createSession(
+            CreateHarnessSessionRequest(localSessionID: sessionID, workspaceURL: workspace, initialPrompt: nil))
         let attributes = try FileManager.default.attributesOfItem(atPath: file.path(percentEncoded: false))
         XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600, "The token is readable by the user only")
         let source = try String(contentsOf: file, encoding: .utf8)
@@ -319,6 +308,40 @@ final class AgentToolInjectionTests: XCTestCase {
         XCTAssertTrue(call.contains("pi.registerMcpServer(\"yardlet\", {"))
         let entry = try JSONDecoder().decode(JSONValue.self, from: Data(call.drop { $0 != "{" }.dropLast(2).utf8))
         XCTAssertEqual(entry, server.piServer)
+        await starting.close(created)
+        XCTAssertFalse(written(), "Closing the session deletes the extension, which holds the token")
+
+        // A resumed session's process loads it again; when that process ends on its own, it goes too.
+        let resumed = FakePiRPCTransport(sessionFile: "/tmp/pi-tools.jsonl")
+        let (resuming, resumingTools) = try routed(resumed)
+        await resumingTools.setAgentToolServer(server, for: sessionID)
+        _ = try await resuming.resumeSession(providerSessionID: "/tmp/pi-tools.jsonl", localSessionID: sessionID,
+                                             workspaceURL: workspace)
+        XCTAssertTrue(written(), "Kept while the process may load it again")
+        await resumed.exit()
+        try await waitUntil(message: "the ended process's extension is deleted") { !written() }
+
+        for transport in [started, resumed] {
+            let arguments = try XCTUnwrapAsync(await transport.configuration?.arguments)
+            let flag = try XCTUnwrap(arguments.firstIndex(of: "-e"))
+            XCTAssertEqual(arguments[flag + 1], file.path(percentEncoded: false))
+            XCTAssertFalse(arguments.contains { $0.contains(server.environment[AgentToolEnvironment.token]!) },
+                           "The token stays out of the process arguments")
+        }
+
+        // A start that fails leaves none either.
+        let failing = FakePiRPCTransport(sessionFile: "/tmp/pi-tools.jsonl")
+        await failing.forgetSessionFile()
+        let (failingStart, failingTools) = try routed(failing)
+        await failingTools.setAgentToolServer(server, for: sessionID)
+        do {
+            _ = try await failingStart.createSession(
+                CreateHarnessSessionRequest(localSessionID: sessionID, workspaceURL: workspace, initialPrompt: nil))
+            XCTFail("A Pi that names no session file cannot start a kept session")
+        } catch {}
+        let failedArguments = try XCTUnwrapAsync(await failing.configuration?.arguments)
+        XCTAssertTrue(failedArguments.contains("-e"))
+        XCTAssertFalse(written())
 
         let off = FakePiRPCTransport(sessionFile: "/tmp/pi-tools.jsonl")
         let (plain, plainTools) = try routed(off)
@@ -355,6 +378,21 @@ final class AgentToolInjectionTests: XCTestCase {
             ),
             tools: BrowserAgentTools(usesMacEditingCommands: true, pages: { _ in page })
         )
+    }
+
+    func testReleasingATasksToolsDeletesOnlyItsPiExtension() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let broker = AgentToolBroker(
+            environment: AgentToolBroker.Environment(executableURL: URL(filePath: "/bin/sh"), endpoint: "/tmp/Yardlet-tools-test/tools.sock",
+                                                     privateDirectory: directory, isEnabled: { true }),
+            tools: BrowserAgentTools(usesMacEditingCommands: true, pages: { _ in BrowserAgentPage(cdp: ScriptedCDP()) }))
+        let released = UUID()
+        let kept = UUID()
+        let files = try [released, kept].map { try launch(session: $0, directory: directory).writePiExtension(for: $0) }
+        broker.releaseAgentTools(for: released)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: files[0].path(percentEncoded: false)), "Its token ended with it")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: files[1].path(percentEncoded: false)))
     }
 
     func testTheSettingAndAMissingServerExecutableMeanNoInjection() {
