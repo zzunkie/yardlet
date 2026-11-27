@@ -97,6 +97,24 @@ struct ScheduleDraft: Equatable {
         parentTaskID = destination.parentTaskID
     }
 
+    /// Add time: an hour after the latest time, at its minute, or the next hour after it the list does not
+    /// have yet.
+    mutating func addTime() {
+        guard let latest = times.max() else {
+            times = [ScheduleTime(hour: 9, minute: 0)]
+            return
+        }
+        let later = (1...23).lazy.map { ScheduleTime(hour: (latest.hour + $0) % 24, minute: latest.minute) }
+        let next = later.first { !times.contains($0) } ?? latest
+        times.append(next)
+    }
+
+    /// Removes a time, but never the last one.
+    mutating func removeTime(at index: Int) {
+        guard times.count > 1, times.indices.contains(index) else { return }
+        times.remove(at: index)
+    }
+
     func trigger(now: Date, calendar: Calendar = .autoupdatingCurrent) -> ScheduleTrigger {
         switch kind {
         case .daily:

@@ -840,6 +840,19 @@ final class ScheduledTaskTests: XCTestCase {
         XCTAssertEqual(editing.schedule(projects: [], existing: checks, now: now, calendar: seoul).trigger, checks.trigger,
                        "Saving keeps every time")
         XCTAssertEqual(editing.nextRun(now: now, calendar: seoul), date(19, 9, 55), "Saturday night: Monday's first time")
+
+        var adding = ScheduleDraft(now: now, calendar: seoul)
+        adding.addTime()
+        XCTAssertEqual(adding.times, [ScheduleTime(hour: 9, minute: 0), ScheduleTime(hour: 10, minute: 0)],
+                       "Add time adds an hour after the latest")
+        adding.times = [ScheduleTime(hour: 23, minute: 30), ScheduleTime(hour: 0, minute: 30)]
+        adding.addTime()
+        XCTAssertEqual(adding.times.last, ScheduleTime(hour: 1, minute: 30), "Past midnight, the first hour not taken")
+        XCTAssertEqual(adding.trigger(now: now, calendar: seoul), .daily([
+            ScheduleTime(hour: 0, minute: 30), ScheduleTime(hour: 1, minute: 30), ScheduleTime(hour: 23, minute: 30),
+        ]), "Saved earliest first")
+        for _ in 0..<3 { adding.removeTime(at: 0) }
+        XCTAssertEqual(adding.times, [ScheduleTime(hour: 1, minute: 30)], "The last time stays")
     }
 
     func testTheQuitConfirmationSaysSchedulesWaitForYardlet() {

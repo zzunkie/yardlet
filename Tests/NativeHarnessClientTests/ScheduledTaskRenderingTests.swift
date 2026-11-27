@@ -6,7 +6,8 @@ import XCTest
 /// Scheduled tasks drawn for review into `.build/schedules-qa/`, light and dark: the sidebar entry,
 /// the list in the task list's place beside the chosen schedule with its run history (a run that went
 /// to another account among them, and its task's hover card), the empty
-/// place, the editor for each trigger and for continuing a task, and the other-app import sheet
+/// place, the editor for each trigger (a weekly one at five times among them) and for continuing a
+/// task, and the other-app import sheet
 /// before and after an import. No provider, runtime or app file is touched; the import sheet draws a
 /// listing made from made-up schedules.
 @MainActor
@@ -431,13 +432,14 @@ final class ScheduledTaskRenderingTests: XCTestCase {
     func testTheEditorForEachTriggerAndForContinuingATask() async throws {
         let fixture = try await makeFixture()
         let now = Date()
-        func editor(_ draft: ScheduleDraft, existing: ScheduledTask? = nil) -> ScheduledTaskEditor {
+        func editor(_ draft: ScheduleDraft, existing: ScheduledTask? = nil,
+                    onSave: @escaping (ScheduledTask) -> Void = { _ in }) -> ScheduledTaskEditor {
             ScheduledTaskEditor(
                 draft: draft, existing: existing, projects: [fixture.project],
                 tasks: fixture.model.store.sessions.sorted { $0.updatedAt > $1.updatedAt },
                 runtimeSelections: fixture.model.runtimeSelections, connections: fixture.model.connections,
                 models: NewTaskModelSource(catalogs: fixture.model.modelCatalogs) { _, _, _, _ in },
-                now: { now }, projectName: { _ in "yardlet" }, onCancel: {}, onSave: { _ in })
+                now: { now }, projectName: { _ in "yardlet" }, onCancel: {}, onSave: onSave)
         }
         var draft = ScheduleDraft(now: now, place: .project(fixture.project.id), harness: .claudeCode,
                                   modelChoice: NewTaskModelChoice(model: nil, permissionMode: "acceptEdits"))
@@ -449,11 +451,32 @@ final class ScheduledTaskRenderingTests: XCTestCase {
         XCTAssertTrue(shows(daily, L10n.string("New scheduled task")))
         XCTAssertTrue(shows(daily, L10n.string("Yardlet runs scheduled tasks only while it is open.")) == false,
                       "A valid draft previews its next run instead")
+        XCTAssertTrue(shows(daily, L10n.string("Add time")))
+        XCTAssertFalse(shows(daily, L10n.string("Remove time")), "One time has nothing to remove")
+
+        // Add time twice, remove the first, and the schedule made has the two left.
+        var saved: ScheduledTask?
+        let host = WindowlessRender.Host(editor(draft) { saved = $0 }.frame(width: size.width, height: size.height),
+                                         size: size)
+        defer { host.close() }
+        host.settle()
+        for label in ["Add time", "Add time", "Remove time", "Create"] {
+            XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string(label)), label)
+            host.settle(passes: 3)
+        }
+        XCTAssertEqual(saved?.trigger, .daily([ScheduleTime(hour: 10, minute: 0), ScheduleTime(hour: 11, minute: 0)]))
 
         var weekly = draft
         weekly.kind = .weekly
         weekly.startsInNewWorktree = true
         _ = try render("editor-weekly", size: size) { _ in editor(weekly) }
+
+        // Five times wrap onto a second line, each with its remove button, and Add time after them.
+        var times = weekly
+        times.times = [9, 11, 13, 15, 17].map { ScheduleTime(hour: $0, minute: 55) }
+        let several = try render("editor-weekly-times", size: size) { _ in editor(times) }
+        XCTAssertEqual(several.filter { $0.label == L10n.string("Remove time") }.count, 5)
+        XCTAssertTrue(shows(several, L10n.string("Add time")))
 
         var interval = draft
         interval.kind = .interval

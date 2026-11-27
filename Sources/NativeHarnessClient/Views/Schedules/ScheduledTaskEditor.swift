@@ -145,17 +145,53 @@ struct ScheduledTaskEditor: View {
         }
     }
 
+    /// Each time of day, with Add time after them; the times wrap under one another when they do not fit.
     private var timeRow: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(L10n.string("Time"))
+            SentAttachmentFlow(spacing: 8, alignsTrailing: false) {
+                ForEach(draft.times.indices, id: \.self) { index in
+                    HStack(spacing: 4) {
+                        timePicker(index)
+                        if draft.times.count > 1 {
+                            Button {
+                                draft.removeTime(at: index)
+                            } label: {
+                                Image(systemName: "minus.circle")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.borderless)
+                            .parityPointer()
+                            .help(L10n.string("Remove time"))
+                            .accessibilityLabel(L10n.string("Remove time"))
+                        }
+                    }
+                }
+                Button {
+                    draft.addTime()
+                } label: {
+                    Label(L10n.string("Add time"), systemImage: "plus")
+                }
+                .buttonStyle(.borderless)
+                .parityPointer()
+            }
+        }
+    }
+
+    private func timePicker(_ index: Int) -> some View {
         DatePicker(L10n.string("Time"), selection: Binding(
             get: {
-                calendar.date(bySettingHour: draft.times[0].hour, minute: draft.times[0].minute, second: 0,
-                              of: calendar.startOfDay(for: now())) ?? now()
+                let time = draft.times.indices.contains(index) ? draft.times[index] : ScheduleTime(hour: 9, minute: 0)
+                return calendar.date(bySettingHour: time.hour, minute: time.minute, second: 0,
+                                     of: calendar.startOfDay(for: now())) ?? now()
             },
             set: { date in
+                guard draft.times.indices.contains(index) else { return }
                 let parts = calendar.dateComponents([.hour, .minute], from: date)
-                draft.times[0] = ScheduleTime(hour: parts.hour ?? 0, minute: parts.minute ?? 0)
+                draft.times[index] = ScheduleTime(hour: parts.hour ?? 0, minute: parts.minute ?? 0)
             }), displayedComponents: .hourAndMinute)
             .datePickerStyle(.compact)
+            .labelsHidden()
             .fixedSize()
     }
 

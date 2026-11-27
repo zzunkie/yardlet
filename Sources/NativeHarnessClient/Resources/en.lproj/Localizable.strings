@@ -2533,6 +2533,8 @@
 "Every %lld hours" = "Every %lld hours";
 "At" = "At";
 "Time" = "Time";
+"Add time" = "Add time";
+"Remove time" = "Remove time";
 "Weekdays" = "Weekdays";
 "Every day" = "Every day";
 "New task each time" = "New task each time";
