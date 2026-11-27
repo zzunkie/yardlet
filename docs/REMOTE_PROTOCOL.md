@@ -3101,7 +3101,8 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   (while waiting) and Unread, labeled with the host's name; choosing one brings that host's window forward with the task
   selected. A task that starts waiting, finishes or fails posts a notification named after the host (unless it is the
   task shown in the window in front, which also clears any earlier notification for that task), following this Mac's
-  notification authorization, and a new approval while Yardlet is behind other apps bounces the Dock icon once. A finish
+  notification authorization, and a wait's shows while Yardlet is in front too, as this Mac's own tasks' do. A new
+  approval while Yardlet is behind other apps bounces the Dock icon once. A finish
   with `announces: false` (§5.2) posts none, and a task that stops waiting, is answered, is read, or leaves the host's
   list takes its notification back, as the host's own notifications do. An approval's offers "Allow once", sent as
   `answerApproval` `allowOnce` (§4.4): the host answers with its card's narrowest allow, as its own notification does,

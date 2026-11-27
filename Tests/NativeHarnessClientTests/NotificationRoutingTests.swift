@@ -836,6 +836,7 @@ final class NotificationRoutingTests: XCTestCase {
         let posted = try await waitForPost(in: center)
         XCTAssertEqual(posted.title, "Mac Studio · Approve the index migration")
         XCTAssertTrue(posted.offersAllowOnce)
+        XCTAssertTrue(posted.showsWhileActive)
         XCTAssertEqual(attention.attentionRequests, 1)
 
         // The same request does not bounce a second time.

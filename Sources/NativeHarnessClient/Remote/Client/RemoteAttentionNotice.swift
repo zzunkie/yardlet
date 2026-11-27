@@ -5,8 +5,10 @@ import YardletRemote
 /// starts waiting on the person, or finishes or fails. Its title names the host before the task, and a
 /// click opens the task in the host's window; an approval offers "Allow once" as a local one does
 /// (`RemoteHostModel.offersAllowOnce`). A finish the host keeps quiet about is not announced here either
-/// (`announces`), and a task that stops waiting takes its notification back, as the host's own do. Nothing comes
-/// while no window of the host is open; the phone's pushes are the host's own.
+/// (`announces`), and a task that stops waiting takes its notification back, as the host's own do. A wait shows while
+/// Yardlet is in front too, as one of this Mac's tasks does; the task shown in the host's window in front posts none
+/// (`AppModel.handleRemoteHostAttention`). Nothing comes while no window of the host is open; the phone's pushes are
+/// the host's own.
 enum RemoteAttentionNotice {
     /// One notification per task of a host: the latest replaces the one before.
     static func identifier(hostID: String, taskID: String) -> String {
@@ -40,6 +42,6 @@ enum RemoteAttentionNotice {
         return SystemNotification(title: title, body: body, identifier: identifier(hostID: hostID, taskID: taskID),
                                   target: SystemNotificationTarget(remoteTask: RemoteTaskReveal(hostID: hostID, taskID: taskID),
                                                                    requestID: allowsOnce ? event.requestId : nil),
-                                  offersAllowOnce: allowsOnce)
+                                  offersAllowOnce: allowsOnce, showsWhileActive: state == .waiting)
     }
 }
