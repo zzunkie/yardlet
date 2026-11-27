@@ -170,9 +170,9 @@ package enum AntigravityCompactTools {
             "submit": "Submit form after fill (default true for safe same-origin https POST; never GET password/cross-origin)."
         ],
         TaskSuggestionToolCatalog.spawnTask: [
-            "title": "<60 chars imperative title (starts with verb).",
+            "title": "<60 chars action phrase, in the language the person writes in.",
             "prompt": "Self-contained first message with file paths and context.",
-            "tldr": "1-2 plain-English sentences: why now and what the task does (no paths/code).",
+            "tldr": "1-2 plain sentences in the language the person writes in: why now and what the task does (no paths/code).",
             "useWorktree": "true starts in a fresh Git worktree; omit to let user choose.",
             "cwd": "Absolute path of another repo root; not with parent_task_id.",
             "parent_task_id": "Task id from list_tasks to nest under (inherits its settings); not with cwd.",

@@ -57,6 +57,22 @@ final class TaskSuggestionTests: XCTestCase {
                      "The Claude app's own answer is not Yardlet's")
     }
 
+    /// The chip is the person's to read, so its title and summary are asked for in the language the person writes in,
+    /// in the full schema and in Antigravity's compact one, where the Claude app's spawn_task asks for English and for a
+    /// title that starts with a verb, which Korean or Japanese word order does not do.
+    func testTheChipIsAskedForInTheLanguageThePersonWritesIn() throws {
+        let spawn = try XCTUnwrap(TaskSuggestionToolCatalog.definition(named: "spawn_task"))
+        let schemas = [("full", spawn.json), ("compact", AntigravityCompactTools.compact(spawn).json)]
+        for (schema, json) in schemas {
+            for field in ["title", "tldr"] {
+                let description = json["inputSchema"]?["properties"]?[field]?["description"]?.stringValue ?? ""
+                XCTAssertTrue(description.contains("in the language the person writes in"), "\(schema) \(field): \(description)")
+                XCTAssertFalse(description.contains("English"), "\(schema) \(field): \(description)")
+                XCTAssertFalse(description.contains("verb"), "\(schema) \(field): \(description)")
+            }
+        }
+    }
+
     func testTheServerForwardsBothToolsToTheApp() async throws {
         let invoker = ForwardingInvoker()
         let server = MCPServer(version: "1", invoker: invoker)
