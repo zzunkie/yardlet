@@ -265,7 +265,8 @@ struct TaskSidebar: View {
     /// Moves a task in the sidebar's families, under another task or to the top level (nil), from
     /// its row's menu or a drop on a row (`TaskNesting`).
     var onNest: ((UUID, UUID?) -> Void)? = { _, _ in }
-    /// Starts a new task nested under the chosen sidebar task, from its row's context menu.
+    /// Starts a new task nested under the chosen sidebar task, from its row's context menu and, on a
+    /// row with tasks under it, from a button among the row's hover buttons.
     var onNewNestedTask: ((SessionRecord) -> Void)? = nil
     /// The projects' own actions (pin, edit, Show in Finder, archive chats, remove) change this Mac's projects and
     /// folders. Another Mac's window lists its host's, which only the host changes: they show dimmed there.
@@ -741,7 +742,8 @@ struct TaskSidebar: View {
                     onDropTask: splitActions.combine.map { combine in { dropped in combine(dropped, session.id) } },
                     // A task moves among the families of its project's list, which the states mix.
                     nesting: onNest == nil || row.project != nil ? nil : nesting,
-                    onNewNestedTask: onNewNestedTask
+                    onNewNestedTask: onNewNestedTask,
+                    hasNestedRows: row.hasNestedRows
                 )
                 .equatable()
             case let .split(split, members):
@@ -1396,6 +1398,9 @@ struct SidebarTaskEntry: View, @MainActor Equatable {
     /// row joins it in a split view.
     var nesting: SidebarNesting? = nil
     var onNewNestedTask: ((SessionRecord) -> Void)? = nil
+    /// Whether tasks sit under the row (`SidebarRow.hasNestedRows`): its hover then offers New nested
+    /// task too, as a project's label offers New task in project.
+    var hasNestedRows = false
     @State private var isDropTargeted = false
     /// Where a task dragged over the row would go.
     @State private var nestDrop: TaskNesting.Drop?
@@ -1423,6 +1428,7 @@ struct SidebarTaskEntry: View, @MainActor Equatable {
             && (lhs.onMoveToProject != nil) == (rhs.onMoveToProject != nil)
             && (lhs.onMakeProject != nil) == (rhs.onMakeProject != nil)
             && (lhs.onNewNestedTask != nil) == (rhs.onNewNestedTask != nil)
+            && lhs.hasNestedRows == rhs.hasNestedRows
     }
 
     @ViewBuilder var menuContents: some View {
@@ -1482,6 +1488,7 @@ struct SidebarTaskEntry: View, @MainActor Equatable {
             projectName: projectName,
             familyPlace: familyPlace,
             familyToggle: familyToggle,
+            onNewNestedTask: hasNestedRows ? onNewNestedTask.map { start in { start(session) } } : nil,
             isSelected: isSelected || isDropTargeted,
             onSelect: onSelect,
             onTogglePinned: { onTogglePinned(session) },
@@ -2034,6 +2041,8 @@ private struct TaskRow: View {
     var familyPlace: SidebarFamilyPlace? = nil
     /// Hiding or showing the tasks nested under this one, when it has any.
     var familyToggle: SidebarFamilyToggle? = nil
+    /// Starts a task nested under this one, from a button among the hover's; nil leaves it out.
+    var onNewNestedTask: (() -> Void)? = nil
     let isSelected: Bool
     let onSelect: () -> Void
     let onTogglePinned: () -> Void
@@ -2071,6 +2080,11 @@ private struct TaskRow: View {
     private var isRenaming: Bool { renamingTaskIDs.contains(session.id) }
     private var showsHoverActions: Bool { isHovering && !isRenaming }
     private var showsCollapsedFamilyButton: Bool { !isRenaming && !showsHoverActions && familyToggle?.isCollapsed == true }
+    /// The room the hover's buttons keep at the row's end: Pin and Archive, and a button more for each
+    /// of the family's toggle and New nested task the row has.
+    private var hoverActionsWidth: CGFloat {
+        53 + 23 * CGFloat([familyToggle != nil, onNewNestedTask != nil].count { $0 })
+    }
 
     private var cpuPercent: Int? {
         resources.flatMap { SidebarTaskIndicatorProjection.cpuPercent(for: [session.id], busyCPU: $0.busyCPU(of: [session.id])) }
@@ -2155,7 +2169,7 @@ private struct TaskRow: View {
                         SidebarRowTrailingItemsView(items: trailingItems)
                     }
                 }
-                .padding(.trailing, showsHoverActions ? (familyToggle != nil ? 76 : 53)
+                .padding(.trailing, showsHoverActions ? hoverActionsWidth
                          : (showsCollapsedFamilyButton ? SidebarMetrics.rowTrailingPadding + 22 : SidebarMetrics.rowTrailingPadding))
                 .frame(height: rowHeight)
                 .contentShape(Rectangle())
@@ -2183,6 +2197,14 @@ private struct TaskRow: View {
                             systemName: familyToggle.isCollapsed ? "chevron.right" : "chevron.down",
                             label: familyToggle.title,
                             action: { hoverCard?.dismiss(); familyToggle.action() }
+                        )
+                    }
+                    // The symbol a project's label starts a task with.
+                    if let onNewNestedTask {
+                        TaskRowActionButton(
+                            systemName: "square.and.pencil",
+                            label: L10n.string("New nested task"),
+                            action: { hoverCard?.dismiss(); onNewNestedTask() }
                         )
                     }
                     // The Task menu's keys act on the shown task, so only its row names them.

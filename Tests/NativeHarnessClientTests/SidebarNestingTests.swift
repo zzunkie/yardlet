@@ -493,6 +493,116 @@ final class SidebarNestingRenderingTests: XCTestCase {
         }
     }
 
+    /// A task with tasks under it offers New nested task among its hover buttons, as a project's label
+    /// offers New task in project, and the button starts a task under that row's task. A task with none
+    /// under it shows Pin and Archive alone, and so does every row where the window cannot start one
+    /// (another Mac's). The hovered rows draw into `.build/sidebar-qa/sidebar-family-hover-*.png`.
+    func testATaskWithTasksUnderItOffersNewNestedTaskOnHover() throws {
+        let alpha = URL(filePath: "/tmp/sidebar-qa/family-hover", directoryHint: .isDirectory)
+        let projects = ProjectStore()
+        _ = projects.ensureProject(forRoot: alpha)
+        let now = Date()
+        func task(_ title: String, _ harness: HarnessKind, minutesAgo: Double, parent: SessionRecord? = nil)
+            -> SessionRecord {
+            SessionRecord(harness: harness, workspaceURL: alpha, runtimeExecutableURL: URL(filePath: "/tmp/\(harness.rawValue)"),
+                          title: title, titleOrigin: .provider, updatedAt: now.addingTimeInterval(-minutesAgo * 60),
+                          parentTaskID: parent?.id)
+        }
+        let release = task("Coordinate release", .claudeCode, minutesAgo: 0)
+        let tests = task("Run tests", .codex, minutesAgo: 1, parent: release)
+        let logs = task("Read the failing logs", .codex, minutesAgo: 2, parent: tests)
+        let changelog = task("Update changelog", .claudeCode, minutesAgo: 3, parent: release)
+        let readme = task("Tidy the README", .codex, minutesAgo: 4)
+        let groups = projects.visibleGroups(sessions: [release, tests, logs, changelog, readme])
+        let disclosure = SidebarDisclosureStore(defaults: try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("sidebar-family-hover"))))
+        let layout = SidebarProjection.layout(visibleGroups: groups, allGroups: groups, splits: [], isFiltering: false,
+                                              disclosure: disclosure.disclosure, selection: .session(readme.id))
+        let size = NSSize(width: ParityTheme.sidebarWidth, height: 360)
+        func sidebar(_ appearance: WindowlessRender.Appearance,
+                     onNewNestedTask: ((SessionRecord) -> Void)?) -> some View {
+            TaskSidebar(layout: layout, allGroups: groups, isRestoring: false, selection: .session(readme.id),
+                searchText: .constant(""), onNewTask: {}, onActivate: { _ in }, onNewTaskInProject: { _ in },
+                projects: projects, onEditProject: { _ in },
+                onArchiveProjectChats: { _ in }, onRemoveProject: { _ in }, onTogglePinned: { _ in },
+                onArchive: { _ in }, onDelete: { _ in }, onRename: { _ in }, onMarkRead: { _ in },
+                onNewNestedTask: onNewNestedTask, disclosure: disclosure)
+                .environment(\.colorScheme, appearance.colorScheme)
+                .frame(width: size.width, height: size.height, alignment: .top)
+                .background(ParityTheme.sidebar)
+        }
+        let pinAndArchive = [L10n.string("Pin"), L10n.string("Archive")]
+        let newNestedTask = L10n.string("New nested task")
+        let directory = try WindowlessRender.directory("sidebar-qa")
+
+        for appearance in WindowlessRender.Appearance.allCases {
+            var started: [UUID] = []
+            let host = WindowlessRender.Host(sidebar(appearance) { started.append($0.id) }, size: size,
+                                             appearance: appearance)
+            defer { host.close() }
+            host.settle()
+            XCTAssertEqual(try hoverButtons(onRow: release.title, entering: true, in: host),
+                           [L10n.string("Hide nested sessions"), newNestedTask] + pinAndArchive,
+                           "\(appearance): a family's top task")
+            try WindowlessRender.writePNG(host.capture().bitmap,
+                                          to: directory.appending(path: "sidebar-family-hover-top-\(appearance.suffix).png"))
+            XCTAssertEqual(try hoverButtons(onRow: tests.title, in: host), [newNestedTask] + pinAndArchive,
+                           "\(appearance): a nested task with a task under it")
+            try WindowlessRender.writePNG(host.capture().bitmap,
+                                          to: directory.appending(path: "sidebar-family-hover-nested-\(appearance.suffix).png"))
+            XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: newNestedTask))
+            XCTAssertEqual(started, [tests.id], "\(appearance): the button starts a task under the hovered row's task")
+            for title in [logs.title, changelog.title, readme.title] {
+                XCTAssertEqual(try hoverButtons(onRow: title, in: host), pinAndArchive, "\(appearance): \(title)")
+            }
+        }
+
+        // Another Mac's window, which starts no nested task, offers none.
+        let remote = WindowlessRender.Host(sidebar(.light, onNewNestedTask: nil), size: size, appearance: .light)
+        defer { remote.close() }
+        remote.settle()
+        XCTAssertEqual(try hoverButtons(onRow: release.title, entering: true, in: remote),
+                       [L10n.string("Hide nested sessions")] + pinAndArchive)
+    }
+
+    /// The buttons a task row's hover shows, in order, with the pointer handed to the hosting view over
+    /// the row titled `title`, coming into the window first when `entering`, as `WindowStructureQATests`
+    /// hands it the pointer: the real pointer stays where it is.
+    private func hoverButtons(onRow title: String, entering: Bool = false,
+                              in host: WindowlessRender.Host<some View>) throws -> [String] {
+        host.hosting.layoutSubtreeIfNeeded()
+        let screenFrame = WindowlessRender.withAccessibilityTree { () -> CGRect? in
+            func visit(_ node: AnyObject) -> CGRect? {
+                for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
+                    if let label = child.accessibilityLabel?() ?? nil, label.hasPrefix("\(title), "),
+                       let frame = child.accessibilityFrame?(), frame.height > 0 {
+                        return frame
+                    }
+                    if let found = visit(child) { return found }
+                }
+                return nil
+            }
+            return visit(host.hosting)
+        }
+        let row = host.window.convertFromScreen(try XCTUnwrap(screenFrame, "No row \(title)"))
+        let location = NSPoint(x: row.midX, y: row.midY)
+        let hosting = host.hosting, number = host.window.windowNumber, now = ProcessInfo.processInfo.systemUptime
+        if entering, let area = hosting.trackingAreas.first(where: { $0.options.contains(.mouseEnteredAndExited) }),
+           let entered = NSEvent.enterExitEvent(
+               with: .mouseEntered, location: location, modifierFlags: [], timestamp: now, windowNumber: number,
+               context: nil, eventNumber: 0, trackingNumber: Int(bitPattern: Unmanaged.passUnretained(area).toOpaque()),
+               userData: nil) {
+            hosting.mouseEntered(with: entered)
+        }
+        let moved = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .mouseMoved, location: location, modifierFlags: [], timestamp: now, windowNumber: number, context: nil,
+            eventNumber: 0, clickCount: 0, pressure: 0))
+        hosting.mouseMoved(with: moved)
+        host.settle(passes: 4, interval: 0.02)
+        let hoverLabels = Set(["Hide nested sessions", "Show nested sessions", "New nested task", "Pin", "Unpin",
+                               "Archive"].map { L10n.string($0) })
+        return host.accessibilityElements().filter { $0.role == "AXButton" && hoverLabels.contains($0.label) }.map(\.label)
+    }
+
     /// Showing a task in a collapsed project opens the project, when the sidebar appears and when
     /// another task is shown, as the Codex sidebar does for a new current chat. A project collapsed
     /// around the shown task stays collapsed until another of its tasks is shown.
