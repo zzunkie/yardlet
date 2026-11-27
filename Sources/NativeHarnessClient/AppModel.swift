@@ -1197,9 +1197,11 @@ final class AppModel {
 
     /// Whether a window draws the task: the one it shows, the side chat beside it, or another pane of the split it
     /// shows. A pane beside the chosen one is not visible (`isSessionVisible`), so a request it waits on notifies, but
-    /// the request is in sight.
+    /// the request is in sight. While the split shows the chosen pane alone (`SplitStore.maximizedPane`), the window
+    /// draws none of the others.
     func isSessionDrawn(_ id: UUID) -> Bool {
-        isSessionVisible(id) || (!taskWindowIDs.isEmpty && splits.activeSplit?.sessionIDs.contains(id) == true)
+        isSessionVisible(id) || (!taskWindowIDs.isEmpty && splits.maximizedPane == nil
+            && splits.activeSplit?.sessionIDs.contains(id) == true)
     }
 
     private func contextualDraft(_ draft: CodexComposerDraft, for sessionID: UUID) throws -> CodexComposerDraft {

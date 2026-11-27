@@ -290,6 +290,26 @@ final class NotificationRoutingTests: XCTestCase {
         let drawn = try await waitForPost(in: center, count: 3)
         XCTAssertEqual(drawn.target.requestID, "question-2")
         XCTAssertFalse(drawn.showsWhileActive)
+
+        // A split view that shows the chosen pane alone draws only that pane: what the task beside it asks is out of
+        // sight again, so its notification shows while Yardlet is in front.
+        await model.respond(
+            to: "question-2",
+            answer: .questions([.init(question: "Which color?", selectedLabels: ["Blue"])]),
+            in: session
+        )
+        model.splits.toggleMaximizedPane()
+        XCTAssertEqual(model.splits.maximizedPane?.sessionID, beside.id)
+        XCTAssertFalse(model.isSessionDrawn(session.id))
+        await transport.emit(canUseTool("question-3", tool: "AskUserQuestion", input: .object([
+            "questions": .array([.object([
+                "question": .string("Which size?"), "header": .string("Size"), "multiSelect": .bool(false),
+                "options": .array([.object(["label": .string("Small")]), .object(["label": .string("Large")])])
+            ])])
+        ])))
+        let maximized = try await waitForPost(in: center, count: 4)
+        XCTAssertEqual(maximized.target.requestID, "question-3")
+        XCTAssertTrue(maximized.showsWhileActive, "The pane shown alone hides the task's pane")
         await model.shutdown()
     }
 
