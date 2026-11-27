@@ -61,6 +61,10 @@ struct SidebarRow: Identifiable, Hashable, Sendable {
     /// Whether tasks are nested under this one, shown or hidden.
     var hasFamily: Bool { !children.isEmpty || !hiddenChildren.isEmpty }
 
+    /// Whether tasks sit under this row: a family's top task, with its nested tasks shown or hidden,
+    /// or a nested task the next row is drawn a level in from.
+    var hasNestedRows: Bool { hasFamily || familyPlace?.hasNestedRows == true }
+
     /// The row followed by the rows nested under it, in the order the list shows them.
     var rowsWithChildren: [SidebarRow] { [self] + children }
 
@@ -112,6 +116,9 @@ struct SidebarFamilyPlace: Hashable, Sendable {
     /// The task it is listed under: the nearest task it was started through that the list shows,
     /// which a move beside it in the sidebar's families puts a task under too (`TaskNesting`).
     var parentID: UUID?
+    /// Whether the next row of the family is drawn a level further in, under this one. A task
+    /// started further down than `SidebarProjection.deepestNesting` is drawn beside it instead.
+    var hasNestedRows = false
 }
 
 /// Where a row listed by state belongs, which the line under its title names: a project, by the
@@ -544,6 +551,7 @@ enum SidebarProjection {
         for index in depths.indices.reversed() {
             let depth = depths[index]
             places[index].continuingLevels = open.filter { $0 <= depth }
+            places[index].hasNestedRows = depths.indices.contains(index + 1) && depths[index + 1] > depth
             open = open.filter { $0 < depth }.union([depth])
         }
         return places

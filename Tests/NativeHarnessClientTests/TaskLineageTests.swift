@@ -79,6 +79,29 @@ final class TaskLineageTests: XCTestCase {
                        "Arrow keys and Previous/Next go through the nested tasks in order")
     }
 
+    /// Tasks sit under a family's top task, shown or collapsed, and under a nested task the next row is
+    /// drawn a level in from. A task at the deepest level has none under it: a task started from it is
+    /// drawn beside it.
+    func testATaskHasRowsUnderItWhenTheNextRowIsDrawnALevelIn() {
+        let root = task("Plan the release", minutesAgo: 50)
+        let older = task("Write the notes", parent: root, minutesAgo: 40)
+        let newer = task("Tag the build", parent: root, minutesAgo: 5)
+        let grandchild = task("Check the tag", parent: newer, minutesAgo: 30)
+        let greatGrandchild = task("Read the signature", parent: grandchild, minutesAgo: 35)
+        let alone = task("Tidy the README", minutesAgo: 10)
+        let nested = SidebarProjection.nest(rows([root, older, newer, grandchild, greatGrandchild, alone]))
+        XCTAssertEqual(titles(nested), ["Plan the release", "  Tag the build", "    Check the tag",
+                                        "    Read the signature", "  Write the notes", "Tidy the README"])
+        XCTAssertEqual(nested.flatMap(\.rowsWithChildren).map(\.hasNestedRows), [true, true, false, false, false, false])
+
+        // Collapsed, the top task still has its tasks under it; a waiting grandchild kept in view has none.
+        let collapsed = SidebarProjection.nest(rows([root, older, newer, grandchild]),
+                                               collapsedKeys: [SidebarProjection.familyKey(for: root.id)],
+                                               keepingShown: [grandchild.id])
+        XCTAssertEqual(titles(collapsed), ["Plan the release", "  Check the tag"])
+        XCTAssertEqual(collapsed.flatMap(\.rowsWithChildren).map(\.hasNestedRows), [true, false])
+    }
+
     /// A task whose parent is not a task row of the same list stays at top level: an archived or
     /// deleted parent, one pinned apart, one in a split view, one moved to another project. A split
     /// view is never nested. A task the person moved to top level in the Claude app has no link.
