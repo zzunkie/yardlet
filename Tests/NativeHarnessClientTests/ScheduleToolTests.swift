@@ -888,6 +888,53 @@ final class ScheduleToolTests: XCTestCase {
         await model.shutdown()
     }
 
+    /// A call made again, as an agent does when the first one's answer never reached it, or two calls that waited on one
+    /// card, leave one schedule: the call that finds the same one its task made, still on, gets that one back.
+    func testTheSameScheduleMadeAgainByItsTaskIsKeptOnce() async throws {
+        let fixture = try Fixture(root: root, calendar: seoul, now: date(17, 20))
+        let model = fixture.model
+        let caller = fixture.caller
+        let arguments: [String: Any] = [
+            "name": "Check back", "prompt": "Check whether the deploy finished.", "fireAt": "2026-10-17T21:00",
+            "continueTaskId": "self"
+        ]
+        let first = await call(model, "create_scheduled_task", arguments, from: caller)
+        XCTAssertFalse(first.isError, first.text)
+        let schedule = try XCTUnwrap(model.scheduledTasks.schedules.first)
+
+        let again = await call(model, "create_scheduled_task", arguments, from: caller)
+        XCTAssertFalse(again.isError, again.text)
+        XCTAssertTrue(again.text.hasPrefix(
+            "Scheduled task \"Check back\" is already in Yardlet (scheduleId: \(schedule.id.uuidString))"), again.text)
+        XCTAssertNil(ScheduleToolCatalog.created(inResult: again.text), "The conversation shows no second schedule")
+        XCTAssertEqual(model.scheduledTasks.schedules.map(\.id), [schedule.id])
+
+        let both = (0..<2).map { _ in
+            Task {
+                await self.call(model, "create_scheduled_task", [
+                    "prompt": "Look again.", "cronExpression": "0 9 * * 1-5", "continueTaskId": "self"
+                ], from: caller)
+            }
+        }
+        for made in both {
+            let answer = await made.value
+            XCTAssertFalse(answer.isError, answer.text)
+        }
+        XCTAssertEqual(model.scheduledTasks.schedules.count, 2, "Two calls at once make one")
+
+        // Another time, or the same schedule once it is paused, is a schedule of its own.
+        let later = await call(model, "create_scheduled_task", arguments.merging(["fireAt": "2026-10-17T22:00"]) { $1 },
+                               from: caller)
+        XCTAssertFalse(later.isError, later.text)
+        let paused = await call(model, "update_scheduled_task", ["scheduleId": schedule.id.uuidString, "enabled": false],
+                                from: caller)
+        XCTAssertFalse(paused.isError, paused.text)
+        let afterPause = await call(model, "create_scheduled_task", arguments, from: caller)
+        XCTAssertFalse(afterPause.isError, afterPause.text)
+        XCTAssertEqual(model.scheduledTasks.schedules.count, 4)
+        await model.shutdown()
+    }
+
     func testCallsThatCannotBeScheduledAreRefusedAndChangeNothing() async throws {
         let fixture = try Fixture(root: root, calendar: seoul, now: date(17, 20))
         let model = fixture.model
