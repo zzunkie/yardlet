@@ -1212,7 +1212,7 @@ struct MainWindow: View {
     /// until the person confirms its name and folders.
     private func makeProject(from session: SessionRecord) {
         rememberShellFocus()
-        newProjectRequest = NewProjectRequest(session: session, name: model.proposedProjectName(for: session))
+        newProjectRequest = model.newProjectRequest(for: session)
     }
 
     /// Makes the project the New project sheet confirmed and moves the chat there

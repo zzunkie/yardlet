@@ -504,11 +504,11 @@ final class NewTaskPane {
         heroTitle.fit(width: view.actualWidth)
     }
 
-    /// The project menu (`NewTaskDestinationMenuItems`): Choose project…, Chat (no project), then the projects, the
+    /// The project menu (`NewTaskDestinationMenuItems`): Choose folder…, Chat (no project), then the projects, the
     /// current one checked.
     private func destinationMenu() -> MenuFlyout {
         let menu = MenuFlyout()
-        menu.items.append(ComposerParts.menuItem(L10n.string("Choose project…")) { [weak self] in
+        menu.items.append(ComposerParts.menuItem(L10n.string("Choose folder…")) { [weak self] in
             // The dialog runs modally until it closes, so it opens after the menu's click returns.
             Task { @MainActor in self?.chooseFolder() }
         })

@@ -658,7 +658,7 @@ enum NewTaskDestination {
         draft.projectID = projects.first { $0.contains(root: selectedURL) }?.id
     }
 
-    /// "Choose project…": the folder the person picks, or nil when they cancel.
+    /// "Choose folder…": the folder the person picks, or nil when they cancel.
     @MainActor
     static func askForFolder() -> URL? {
         let panel = NSOpenPanel()
@@ -671,14 +671,14 @@ enum NewTaskDestination {
     }
 }
 
-/// The project menu's items: Choose project…, Chat (no project), then the projects, the current
+/// The project menu's items: Choose folder…, Chat (no project), then the projects, the current
 /// one checked.
 struct NewTaskDestinationMenuItems: View {
     @Bindable var draft: NewTaskDraft
     let projects: [Project]
 
     var body: some View {
-        Button(L10n.string("Choose project…")) {
+        Button(L10n.string("Choose folder…")) {
             NewTaskDestination.chooseFolder(draft: draft, projects: projects)
         }
         Button {

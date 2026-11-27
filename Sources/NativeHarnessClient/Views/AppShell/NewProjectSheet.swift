@@ -1,34 +1,28 @@
 import AppKit
 import SwiftUI
 
-/// What the New project sheet asks about: the chat a project is made of, and the name it starts with
-/// (`AppModel.proposedProjectName(for:)`).
-struct NewProjectRequest: Identifiable, Equatable {
-    let session: SessionRecord
-    let name: String
-
-    var id: UUID { session.id }
-}
-
 /// Confirms making a chat a project of its own folder, dropped on Projects or chosen as "New
 /// project": nothing is made until Create, and Cancel leaves the chat in Chats. The name and the
-/// folders are the ones Edit project shows; the chat's folder is the primary one.
+/// folders are the ones Edit project shows (`NewProjectRequest`).
 struct NewProjectSheet: View {
     @Environment(\.dismiss) private var dismiss
     let request: NewProjectRequest
     /// The name and the other folders, once the person confirms.
     let onCreate: (String, [URL]) -> Void
     @State private var name: String
-    @State private var otherRoots: [URL] = []
+    @State private var otherRoots: [URL]
+    /// Create was chosen: Return and the button both reach it, and only the first makes the project.
+    @State private var didCreate = false
     @FocusState private var isNameFocused: Bool
 
     init(request: NewProjectRequest, onCreate: @escaping (String, [URL]) -> Void) {
         self.request = request
         self.onCreate = onCreate
         _name = State(initialValue: request.name)
+        _otherRoots = State(initialValue: request.otherRoots)
     }
 
-    private var primaryRoot: URL { Project.canonical(request.session.workspaceURL) }
+    private var primaryRoot: URL { request.primaryRoot }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -42,7 +36,6 @@ struct NewProjectSheet: View {
                 TextField(L10n.string("Project name"), text: $name)
                     .textFieldStyle(.roundedBorder)
                     .focused($isNameFocused)
-                    .onSubmit(create)
             }
 
             VStack(alignment: .leading, spacing: 6) {
@@ -58,7 +51,7 @@ struct NewProjectSheet: View {
                     rootRow(primaryRoot, isPrimary: true)
                     ForEach(otherRoots, id: \.self) { root in
                         Divider()
-                        rootRow(root, isPrimary: false)
+                        rootRow(root, isPrimary: false, removable: request.canRemove(root))
                     }
                 }
                 .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 8))
@@ -72,8 +65,10 @@ struct NewProjectSheet: View {
                 Spacer()
                 Button(L10n.string("Cancel"), role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
+                // Return in the name field reaches this button too, so the field submits nothing itself.
                 Button(L10n.string("Create"), action: create)
                     .keyboardShortcut(MacShortcut.confirmDialog.binding)
+                    .disabled(didCreate)
             }
         }
         .padding(22)
@@ -81,7 +76,7 @@ struct NewProjectSheet: View {
         .onAppear { isNameFocused = true }
     }
 
-    private func rootRow(_ root: URL, isPrimary: Bool) -> some View {
+    private func rootRow(_ root: URL, isPrimary: Bool, removable: Bool = false) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "folder")
                 .font(.system(size: 12))
@@ -98,7 +93,7 @@ struct NewProjectSheet: View {
                     .padding(.horizontal, 7)
                     .padding(.vertical, 2)
                     .background(ParityTheme.selectedFill, in: Capsule())
-            } else {
+            } else if removable {
                 Button {
                     otherRoots.removeAll { Project.isSamePath($0, root) }
                 } label: {
@@ -118,6 +113,8 @@ struct NewProjectSheet: View {
     }
 
     private func create() {
+        guard !didCreate else { return }
+        didCreate = true
         onCreate(name, otherRoots)
         dismiss()
     }

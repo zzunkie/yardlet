@@ -1976,7 +1976,8 @@ extension AppModel: SessionToolHandling, AgentToolApprovalHandling {
             guard let folder = Self.sessionToolFolder(value) else {
                 return .failure(SessionToolError(message: "no folder at \(value)."))
             }
-            return .success((folder, projects.project(containingRoot: folder)))
+            // A hidden project stays hidden: its folder's child is a chat there (`AppModel.startsInChats`).
+            return .success((folder, projects.project(containingRoot: folder).flatMap { $0.isHidden ? nil : $0 }))
         }
         let matches = projects.projects.filter { !$0.isHidden && $0.name.caseInsensitiveCompare(value) == .orderedSame }
         guard matches.count == 1, let project = matches.first else {

@@ -229,6 +229,8 @@ struct SuggestedTaskPlace: Equatable {
         isRepository: (URL) -> Bool = SuggestedTaskPlace.isInRepository,
         home: URL = FileManager.default.homeDirectoryForCurrentUser
     ) -> SuggestedTaskPlace {
+        // A project the person hid is no place to suggest: a task in its folder starts as a chat there.
+        let projects = projects.filter { !$0.isHidden }
         // A chat the agent asked for (`chat`), as New Task's "No project".
         if suggestion.startsAsChat {
             return SuggestedTaskPlace(folder: nil, project: nil, startsInNewWorktree: false)

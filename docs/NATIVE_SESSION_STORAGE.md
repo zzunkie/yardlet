@@ -755,7 +755,9 @@ Create makes the project and moves the chat. Another Mac's window does not offer
   as below, into a new project of the task's folder under the name the sheet confirmed. The sheet offers, for a chat's
   folder (`ChatWorkspaces`), the task's title as Chats lists it (`TaskProjectMove.projectName(for:)`: the agent's own
   title or Yardlet's fallback, so no model turn starts), and for any other folder its name, as Add project names one. A
-  hidden project of the folder, which Remove project leaves, is taken instead and shown again, its own name offered. The
+  hidden project of the folder, which Remove project leaves, is taken instead and shown again: the sheet offers its own
+  name, primary folder and other folders (`AppModel.newProjectRequest(for:)`), and the folders it lists on Create are the
+  ones the project keeps besides its primary folder and the chat's. The
   project is added, as Add project adds one for a folder, or shown again only once the move is saved, so a move that
   fails leaves the projects as they were. The folder stays where it is under its name (`new-chat-4`). Other tasks in
   the folder that were not moved to Chats are listed in the project too, by the folder rule below. A task moved to
@@ -774,7 +776,7 @@ Create makes the project and moves the chat. Another Mac's window does not offer
   a task in no project is listed under Chats, whatever its folder (`ProjectProjection.isChat`). Which folders a harness
   app makes for chats (`ChatWorkspaces.isChat`) only decides titles and the cleanup of an empty chat folder. A new
   or imported task in the folder of a hidden project is kept in Chats (`moved_to_chats` 1, `AppModel.startsInChats`)
-  and does not show the project again; the project's earlier tasks stay hidden with it. The sidebar, the menu bar, `list_tasks`, the place
+  and does not show the project again, even when a child task, a suggestion or a schedule names that project; the project's earlier tasks stay hidden with it. The sidebar, the menu bar, `list_tasks`, the place
   a title bar or menu names (`ProjectStore.displayName(for:)`), the phone's snapshot and another Mac's window all
   follow this one rule. A task moved to Chats from a project's folder keeps working in that folder, without the
   project's other roots, as a chat has none; a task made from it (a fork, a new chat, a subagent, the original of an

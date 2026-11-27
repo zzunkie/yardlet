@@ -171,6 +171,17 @@ final class ChatPlacementTests: XCTestCase {
                        [chat.id, ordinary.id, besideHidden.id])
         XCTAssertFalse(model.projects.visibleGroups(sessions: model.store.sessions).flatMap(\.sessions)
             .contains { $0.id == inProject.id }, "Its earlier task stays hidden with it")
+        // Named by its ID, as a child of its task or a schedule names it, it stays hidden all the same.
+        XCTAssertNil(model.projectForNewTask(workspaceURL: explicit, projectID: added.id))
+        let namedResult = await model.createSession(
+            harness: .claudeCode, workspaceURL: explicit, runtimeExecutableURL: fixture.cli, title: "Named",
+            projectID: added.id)
+        let named = try XCTUnwrap(namedResult)
+        XCTAssertNil(named.projectID)
+        XCTAssertTrue(named.isMovedToChats)
+        // And by its folder, as `create_task` names one.
+        let caller = try XCTUnwrap(model.sessionToolCaller(chat.id))
+        XCTAssertNil(try model.sessionToolPlace(explicit.path(percentEncoded: false), caller: caller).get().project)
 
         // So does a conversation imported or followed from another app in its folder.
         let conversation = ImportableConversation(

@@ -242,7 +242,7 @@ final class TaskProjectMoveTests: XCTestCase {
         let chat = try task("Fix the login bug", in: beta)
         let model = try makeModel(sessions: [chat])
         XCTAssertTrue(model.projects.isChat(chat), "A folder that is no project holds chats")
-        XCTAssertEqual(model.proposedProjectName(for: chat), "beta")
+        XCTAssertEqual(model.newProjectRequest(for: chat).name, "beta")
         XCTAssertTrue(model.projectMoveOptions(for: chat, visibleProjects: visibleProjects(model)).canMakeProject)
         XCTAssertTrue(model.projects.projects.isEmpty, "Offering the sheet makes nothing")
 
@@ -255,6 +255,35 @@ final class TaskProjectMoveTests: XCTestCase {
         XCTAssertEqual(moved.additionalRoots, [ProjectSidebarPresentation.normalizedPath(for: alphaDocs)],
                        "The other folder comes along for the next start")
         XCTAssertTrue(model.projects.chats(sessions: model.store.sessions).isEmpty)
+    }
+
+    /// A hidden project of the chat's folder comes back as the New project sheet showed it: its own
+    /// name, primary folder and other folders are offered, the chat's folder cannot be taken out, and
+    /// the folders the person took out or added there are what the project keeps.
+    func testANewProjectOfAHiddenProjectsFolderOffersAndKeepsItsFolders() async throws {
+        let project = Project(name: "Alpha", primaryRoot: alpha, additionalRoots: [alphaDocs, beta])
+        let chat = try task("Notes", in: alphaDocs)
+        let model = try makeModel(sessions: [chat], projects: [project])
+        let inChats = try await move(chat, to: nil, in: model)
+        model.projects.hide(project.id)
+
+        let request = model.newProjectRequest(for: inChats)
+        XCTAssertEqual(request.name, "Alpha")
+        XCTAssertEqual(request.primaryRoot, Project.canonical(alpha))
+        XCTAssertEqual(request.otherRoots, [alphaDocs, beta].map(Project.canonical))
+        XCTAssertFalse(request.canRemove(alphaDocs), "The chat's own folder stays")
+        XCTAssertFalse(request.canRemove(alpha))
+        XCTAssertTrue(request.canRemove(beta))
+
+        let result = await model.makeProject(from: inChats, name: request.name, additionalRoots: [alphaDocs, thirteen])
+        let made = try XCTUnwrap(result)
+        XCTAssertEqual(made.id, project.id, "The hidden project is shown again, not a second one made")
+        XCTAssertFalse(made.isHidden)
+        XCTAssertEqual(made.roots, [alpha, alphaDocs, thirteen].map(Project.canonical))
+        XCTAssertEqual(model.projects.project(id: project.id)?.roots, made.roots)
+        let moved = try XCTUnwrap(model.store.sessions.first { $0.id == chat.id })
+        XCTAssertEqual(moved.projectID, project.id)
+        XCTAssertEqual(moved.additionalRoots, [alpha, thirteen].map { ProjectSidebarPresentation.normalizedPath(for: $0) })
     }
 
     /// A chat whose move is not saved stays a chat, and no project is left behind: the project is added

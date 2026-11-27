@@ -264,7 +264,7 @@ struct TaskSuggestionOptionsPopover: View {
         let place = menus.place
         return Menu {
             if let chooseFolder = menus.chooseFolder {
-                Button(L10n.string("Choose project…")) { chooseFolder() }
+                Button(L10n.string("Choose folder…")) { chooseFolder() }
             }
             Button {
                 menus.choosePlace(nil)

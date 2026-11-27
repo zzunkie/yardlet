@@ -122,3 +122,28 @@ enum TaskProjectMove {
         return copy
     }
 }
+
+/// What the New project sheet starts with for a chat made a project of its own folder
+/// (`AppModel.newProjectRequest(for:)`): the name, the primary folder and the other folders. For a
+/// hidden project of the chat's folder, which is shown again, they are that project's own.
+struct NewProjectRequest: Identifiable, Equatable {
+    let session: SessionRecord
+    let name: String
+    let primaryRoot: URL
+    let otherRoots: [URL]
+
+    init(session: SessionRecord, name: String, primaryRoot: URL? = nil, otherRoots: [URL] = []) {
+        self.session = session
+        self.name = name
+        self.primaryRoot = Project.canonical(primaryRoot ?? session.workspaceURL)
+        self.otherRoots = otherRoots.map(Project.canonical)
+    }
+
+    var id: UUID { session.id }
+
+    /// Whether the sheet can take `root` out: not the primary folder, nor the chat's own, which the
+    /// project is made of.
+    func canRemove(_ root: URL) -> Bool {
+        !Project.isSamePath(root, primaryRoot) && !Project.isSamePath(root, session.workspaceURL)
+    }
+}

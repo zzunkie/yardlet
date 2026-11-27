@@ -142,12 +142,17 @@ struct ImportConversationSheet: View {
             }
             .pickerStyle(.segmented).labelsHidden().frame(width: harnesses.count > 3 ? nil : 420)
             HStack(spacing: 12) {
-                Picker(L10n.string("Project"), selection: folderSelection) {
-                    ForEach(folders) { Text($0.name).tag($0.id) }
-                    if !folders.isEmpty { Divider() }
-                    Text(L10n.string("Choose folder…")).tag(Self.chooseFolderTag)
+                // With no folder to list yet, a menu would select nothing: the button asks for one.
+                if folders.isEmpty {
+                    Button(L10n.string("Choose folder…"), action: chooseFolder)
+                } else {
+                    Picker(L10n.string("Project"), selection: folderSelection) {
+                        ForEach(folders) { Text($0.name).tag($0.id) }
+                        Divider()
+                        Text(L10n.string("Choose folder…")).tag(Self.chooseFolderTag)
+                    }
+                    .frame(maxWidth: 320)
                 }
-                .frame(maxWidth: 320)
                 Picker(L10n.string("Account"), selection: $accountID) {
                     ForEach(accounts) { Text($0.title).tag($0.id) }
                 }

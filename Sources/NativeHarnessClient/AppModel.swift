@@ -763,10 +763,10 @@ final class AppModel {
     /// The project a task about to start in this folder belongs to. The stored choice wins, then
     /// the project that owns the folder itself, then (for a linked worktree) the project that owns
     /// the repository it came from. None is made: a folder is a project only when the person adds
-    /// it, and a task in any other folder is a chat. A project the person hid stays hidden, and
-    /// its folder's new task is a chat too (`startsInChats(in:)`).
+    /// it, and a task in any other folder is a chat. A project the person hid stays hidden, though a
+    /// child, a suggestion or a schedule names it: its folder's new task is a chat (`startsInChats(in:)`).
     func projectForNewTask(workspaceURL: URL, projectID: UUID?) -> Project? {
-        if let chosen = projects.project(id: projectID) { return chosen }
+        if let chosen = projects.project(id: projectID), !chosen.isHidden { return chosen }
         guard let owner = folderProject(of: workspaceURL), !owner.isHidden else { return nil }
         return owner
     }
@@ -3217,36 +3217,48 @@ final class AppModel {
         }
     }
 
-    /// The name the New project sheet offers for a chat made a project of its own folder: a
-    /// hidden project's own name, which the folder's project is shown again under; for a chat's
-    /// folder a harness app made (`ChatWorkspaces`), whose name says nothing, the chat's title
-    /// (`TaskProjectMove.projectName(for:)`); else the folder's name, as Add project names one.
-    func proposedProjectName(for session: SessionRecord) -> String {
-        if let existing = projects.project(containingRoot: session.workspaceURL) { return existing.name }
-        return projects.isChatFolder(session.workspaceURL)
+    /// What the New project sheet offers for a chat made a project of its own folder: a hidden
+    /// project of the folder's own name and folders, which it is shown again with, so the sheet shows
+    /// what Create brings back; else the chat's folder alone, named after the chat's title for a chat's
+    /// folder a harness app made (`ChatWorkspaces`), whose name says nothing
+    /// (`TaskProjectMove.projectName(for:)`), or after the folder, as Add project names one.
+    func newProjectRequest(for session: SessionRecord) -> NewProjectRequest {
+        if let existing = projects.project(containingRoot: session.workspaceURL) {
+            return NewProjectRequest(session: session, name: existing.name, primaryRoot: existing.primaryRoot,
+                                     otherRoots: existing.additionalRoots)
+        }
+        let name = projects.isChatFolder(session.workspaceURL)
             ? TaskProjectMove.projectName(for: session)
             : session.workspaceURL.lastPathComponent
+        return NewProjectRequest(session: session, name: name)
     }
 
     /// Makes a project of a task's own folder and moves the task into it, for a chat whose folder no
     /// listed project holds (`TaskProjectMove.Options.canMakeProject`), once the person confirms
-    /// the New project sheet: `name` (nil: `proposedProjectName(for:)`) and `additionalRoots`, the
-    /// other folders they added. A hidden project of the folder, which Remove project leaves, is
-    /// shown again instead, under that name and with those folders too. The move is `moveTask`'s:
+    /// the New project sheet (`newProjectRequest(for:)`): `name` (nil: the one the sheet offers) and
+    /// `additionalRoots`, the other folders as the sheet lists them (nil: as offered). A hidden project
+    /// of the folder, which Remove project leaves, is shown again instead, under that name and with
+    /// exactly those folders besides its primary one and the chat's. The move is `moveTask`'s:
     /// the task's folder stays its cwd, nothing on disk is moved or renamed, and nothing is written
     /// to the provider. The project is added, as the sidebar's Add project adds one for a folder,
     /// only once the move is saved, so a move that fails leaves no project and returns nil. Other
     /// tasks in the folder that were not moved to Chats come along, as a project lists the tasks in
     /// its folders.
     @discardableResult
-    func makeProject(from session: SessionRecord, name: String? = nil, additionalRoots: [URL] = []) async -> Project? {
+    func makeProject(from session: SessionRecord, name: String? = nil, additionalRoots: [URL]? = nil) async -> Project? {
         guard let current = store.sessions.first(where: { $0.id == session.id }),
               projectMoveOptions(for: current, visibleProjects: projects.projects).canMakeProject else { return nil }
         let root = current.workspaceURL
         let existing = projects.project(containingRoot: root)
         var target = existing ?? Project(name: "", primaryRoot: root)
-        target.name = Project.normalizedName(name ?? proposedProjectName(for: current), fallback: root)
-        for extra in additionalRoots { target.addRoot(extra) }
+        target.name = Project.normalizedName(name ?? newProjectRequest(for: current).name, fallback: root)
+        if let additionalRoots {
+            let kept = [target.primaryRoot, root] + additionalRoots
+            for other in target.roots where !kept.contains(where: { Project.isSamePath($0, other) }) {
+                target.removeRoot(other)
+            }
+            for extra in additionalRoots { target.addRoot(extra) }
+        }
         // By its ID, as a move records it, so the task stays in the project whatever its folders become.
         let moved = TaskProjectMove.moved(current, to: target)
         do {
@@ -3259,7 +3271,8 @@ final class AppModel {
         let saved = projects.ensureProject(target)
         if existing != nil {
             projects.rename(saved.id, to: target.name)
-            for extra in additionalRoots { projects.addRoot(extra, to: saved.id) }
+            for other in saved.roots where !target.contains(root: other) { projects.removeRoot(other, from: saved.id) }
+            for kept in target.roots { projects.addRoot(kept, to: saved.id) }
         }
         return projects.project(id: saved.id) ?? saved
     }
@@ -4629,7 +4642,8 @@ final class AppModel {
             title: conversation.title, titleOrigin: .provider, providerSessionID: conversation.providerSessionID,
             environmentScope: .native, selectsSession: selects, providerOptions: conversation.providerOptions,
             connection: connection, projectID: project?.id, additionalRoots: additionalRoots,
-            isMovedToChats: project == nil && startsInChats(in: primaryFolder),
+            isMovedToChats: project == nil
+                && (startsInChats(in: primaryFolder) || startsInChats(in: conversation.workspaceURL)),
             workspaceOrigin: conversation.workspaceOrigin, lastActivityAt: lastActivityAt,
             parentTaskID: TaskLineage.task(continuing: conversation.parentProviderSessionID,
                                            harness: conversation.harness, among: store.sessions,
