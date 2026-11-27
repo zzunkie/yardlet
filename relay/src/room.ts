@@ -3,7 +3,7 @@ import type { ApiResult } from "./account";
 import { apnsCredentials, sendApnsPush } from "./apns";
 import { fcmCredentials, isPushProvider, parsePush, sendFcmPush, type Push, type PushError, type PushProvider } from "./fcm";
 import { toBase64Url, verifyHostAuth } from "./keys";
-import { count } from "./metrics";
+import { count, isExcluded } from "./metrics";
 import { moveRoomPath } from "./placement";
 import { PUSH_TARGET } from "./push-targets";
 
@@ -53,6 +53,7 @@ interface MacState {
 
 interface PhoneState {
   role: "phone";
+  room?: string;
   c: number;
   lastFrame: number;
   closed: boolean;
@@ -75,17 +76,29 @@ export class Room extends DurableObject<Env> {
   /** The push target table exists. It is made when a phone first registers and dropped with its last target, so a
    * room no phone registered with stores nothing. */
   private hasTargetTable = false;
+  /** True when an excluded team account marked this room to omit anonymous counts. */
+  private metricsExcluded = false;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
+    ctx.blockConcurrencyWhile(async () => {
+      this.metricsExcluded = (await ctx.storage.get<boolean>("metrics_excluded")) === true;
+    });
+  }
+
+  /** Marks or clears this room as excluded from anonymous metrics counts (set by excluded team accounts). */
+  async setMetricsExcluded(excluded: boolean): Promise<void> {
+    this.metricsExcluded = excluded;
+    if (excluded) await this.ctx.storage.put("metrics_excluded", true);
+    else await this.ctx.storage.delete("metrics_excluded");
   }
 
   async fetch(request: Request): Promise<Response> {
     const { pathname } = new URL(request.url);
     if (pathname === moveRoomPath) return this.letSocketsGo();
     const [, , , room, role] = pathname.split("/");
-    return role === "host" ? this.acceptMac(room) : this.acceptPhone(request.headers.get("CF-Connecting-IP") ?? "");
+    return role === "host" ? this.acceptMac(room) : this.acceptPhone(room, request.headers.get("CF-Connecting-IP") ?? "");
   }
 
   /** A room's object from before `roomObjectName` closes what it still holds, so its Mac connects again into
@@ -119,19 +132,19 @@ export class Room extends DurableObject<Env> {
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  private async acceptPhone(address: string): Promise<Response> {
+  private async acceptPhone(room: string, address: string): Promise<Response> {
     let mac = this.readyMac();
     if (mac && this.isSilent(mac, Date.now())) {
       this.dropMac(mac);
       mac = undefined;
     }
     if (!mac) {
-      this.count("relay.client", ["noHost"]);
+      this.count(room, "relay.client", ["noHost"]);
       return new Response("no Mac holds this room", { status: 404 });
     }
     const phones = this.phones();
     if (phones.filter((phone) => isAnswered(phone.state)).length >= MAX_PHONES) {
-      this.count("relay.client", ["full"]);
+      this.count(room, "relay.client", ["full"]);
       return new Response("room is full", { status: 429 });
     }
     // Sockets the Mac has not answered cannot keep a phone out: the oldest of them gives way.
@@ -151,6 +164,7 @@ export class Room extends DurableObject<Env> {
     const now = Date.now();
     server.serializeAttachment({
       role: "phone",
+      room,
       c,
       lastFrame: now,
       closed: false,
@@ -159,7 +173,7 @@ export class Room extends DurableObject<Env> {
       address,
     } satisfies PhoneState);
     trySend(mac.ws, JSON.stringify({ t: "open", c }));
-    this.count("relay.client", ["open"]);
+    this.count(room, "relay.client", ["open"]);
     await this.scheduleAlarm();
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -216,7 +230,7 @@ export class Room extends DurableObject<Env> {
   private async authenticate(ws: WebSocket, state: MacState, message: string | ArrayBuffer): Promise<void> {
     const auth = typeof message === "string" ? parseObject(message) : null;
     if (auth?.t !== "auth" || typeof auth.key !== "string" || typeof auth.sig !== "string") {
-      this.count("relay.host", ["authFailed"]);
+      this.count(state.room, "relay.host", ["authFailed"]);
       return this.close(ws, state, 4401, "authentication failed");
     }
     const valid = await verifyHostAuth(state.room, state.nonce, auth.key, auth.sig);
@@ -224,7 +238,7 @@ export class Room extends DurableObject<Env> {
     const current = stateOf(ws);
     if (current?.role !== "mac" || current.closed || current.ready) return;
     if (!valid) {
-      this.count("relay.host", ["authFailed"]);
+      this.count(current.room, "relay.host", ["authFailed"]);
       return this.close(ws, current, 4401, "authentication failed");
     }
 
@@ -239,7 +253,7 @@ export class Room extends DurableObject<Env> {
     current.ready = true;
     current.heardAt = Date.now();
     ws.serializeAttachment(current);
-    this.count("relay.host", ["ready"]);
+    this.count(current.room, "relay.host", ["ready"]);
     ws.send(JSON.stringify({ t: "ready" }));
     await this.scheduleAlarm();
   }
@@ -294,7 +308,7 @@ export class Room extends DurableObject<Env> {
       await this.scheduleAlarm();
     }
     const error = await send();
-    this.count("relay.push", [provider, error ?? "ok", "offer"]);
+    this.count(room, "relay.push", [provider, error ?? "ok", "offer"]);
     if (!error) return { status: 202, body: { sent: true } };
     // A token the service does not take keeps no target here.
     if (error === "unregistered" || !bound) this.dropTargets("DELETE FROM push_targets WHERE target = ?", target);
@@ -372,7 +386,7 @@ export class Room extends DurableObject<Env> {
     if (!send) return "notConfigured";
     if (!this.takePush({ ws, state })) return "rateLimited";
     const error = await send();
-    this.count("relay.push", [push.provider, error ?? "ok", "notify"]);
+    this.count(state.room, "relay.push", [push.provider, error ?? "ok", "notify"]);
     // The service no longer knows the token: its target goes too.
     if (error === "unregistered" && push.to !== requested.to) {
       this.dropTargets("DELETE FROM push_targets WHERE target = ?", requested.to);
@@ -450,10 +464,12 @@ export class Room extends DurableObject<Env> {
   }
 
   private countClose(state: SocketState, code: number, by: "relay" | "peer"): void {
-    this.count("relay.close", [state.role === "mac" ? "host" : "client", String(code), by]);
+    const room = state.role === "mac" ? state.room : (state.room ?? this.readyMac()?.state.room);
+    this.count(room, "relay.close", [state.role === "mac" ? "host" : "client", String(code), by]);
   }
 
-  private count(event: string, labels: string[]): void {
+  private count(room: string | undefined, event: string, labels: string[]): void {
+    if (this.metricsExcluded || isExcluded(this.env.METRICS_EXCLUDE_ROOMS, room)) return;
     count(this.env.METRICS, event, labels);
   }
 

@@ -16,6 +16,9 @@ declare namespace Cloudflare {
     FEEDBACK_GLOBAL_LIMIT?: RateLimit;
     /** Workers Analytics Engine; absent, nothing is counted. */
     METRICS?: AnalyticsEngineDataset;
+    /** Comma- or whitespace-separated room or account IDs omitted from anonymous counts (kept in secrets). */
+    METRICS_EXCLUDE_ROOMS?: string;
+    METRICS_EXCLUDE_ACCOUNTS?: string;
     /** The Firebase service account's JSON key. */
     FCM_SERVICE_ACCOUNT?: string;
     FCM_PROJECT_ID?: string;

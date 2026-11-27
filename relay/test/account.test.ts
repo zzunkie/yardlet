@@ -1,9 +1,11 @@
 import { env, exports } from "cloudflare:workers";
-import { runInDurableObject } from "cloudflare:test";
+import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { sha256, toBase64Url } from "../src/keys";
+import { isExcluded } from "../src/metrics";
 import { accountIdFor, signState } from "../src/oauth";
-import { RELAY, macKey, type MacKey } from "./helpers";
+import { roomObjectName } from "../src/placement";
+import { RELAY, macKey, openMac, openPhone, type MacKey } from "./helpers";
 
 const APP_REDIRECT = "yardlet-remote://auth";
 const encoder = new TextEncoder();
@@ -243,5 +245,47 @@ describe("account", () => {
     expect((await call("/v1/account", bearer(first.token))).status).toBe(401);
     const again = await signIn("github", "1007");
     expect(await (await call("/v1/account", bearer(again.token))).json()).toMatchObject({ macs: [] });
+  });
+
+  it("omits account and room metrics for excluded team accounts and rooms", async () => {
+    const excludedId = await accountIdFor("github", "9001");
+    const normalId = await accountIdFor("github", "9002");
+    expect(isExcluded(` ${excludedId.toUpperCase()} , other `, excludedId)).toBe(true);
+    expect(isExcluded(excludedId, normalId)).toBe(false);
+    expect(isExcluded(undefined, excludedId)).toBe(false);
+
+    const directRoomKey = await macKey();
+    const prevAccounts = env.METRICS_EXCLUDE_ACCOUNTS;
+    const prevRooms = env.METRICS_EXCLUDE_ROOMS;
+    env.METRICS_EXCLUDE_ACCOUNTS = excludedId;
+    env.METRICS_EXCLUDE_ROOMS = directRoomKey.room;
+    try {
+      const write = vi.spyOn(env.METRICS!, "writeDataPoint");
+      const team = await signIn("github", "9001", "team-user");
+      const teamMac = await macKey();
+      expect((await registerMac(team.token, team.account.id, teamMac, "Team Mac")).status).toBe(200);
+      expect((await call("/v1/account", bearer(team.token))).status).toBe(200);
+
+      // Evict the room DO so persistence of the room's excluded flag is verified across hibernation.
+      await evictDurableObject(env.ROOM.get(env.ROOM.idFromName(roomObjectName(teamMac.room))));
+
+      const { mac } = await openMac(teamMac);
+      const { phone } = await openPhone(teamMac.room, mac);
+      phone.ws.close(1000, "done");
+      mac.ws.close(1000, "done");
+
+      const { mac: directMac } = await openMac(directRoomKey);
+      directMac.ws.close(1000, "done");
+
+      expect(write).not.toHaveBeenCalled();
+
+      // Non-excluded accounts still count normally.
+      const outsider = await signIn("github", "9002", "outside-user");
+      expect(outsider.account.id).toBe(normalId);
+      expect(write.mock.calls.map(([point]) => point?.blobs)).toEqual([["account.signUp", "github"]]);
+    } finally {
+      env.METRICS_EXCLUDE_ACCOUNTS = prevAccounts;
+      env.METRICS_EXCLUDE_ROOMS = prevRooms;
+    }
   });
 });

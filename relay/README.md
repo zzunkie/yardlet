@@ -92,6 +92,11 @@ CLOUDFLARE_ACCOUNT_ID=… CLOUDFLARE_API_TOKEN=… npm run metrics
 The token needs only the "Account Analytics: Read" permission and is read from the environment; keep it out of
 the repository. A weekly report job can run the same command.
 
+To omit team or test devices from relay and account counts without putting IDs in the repository, set the optional
+comma-separated Worker secrets `METRICS_EXCLUDE_ACCOUNTS` (32-character hashed account IDs) and
+`METRICS_EXCLUDE_ROOMS` (32-character room IDs). When an excluded account reads its account or registers a Mac, each
+of its rooms is also marked to omit relay counts automatically.
+
 ## Edge Worker
 
 `edge/` is a second Worker, `yardlet-edge`, deployed on its own from that folder; it shares this folder's

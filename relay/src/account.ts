@@ -1,7 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
 import { fromBase64Url, isRoom, roomForKey, verifyEd25519 } from "./keys";
-import { count } from "./metrics";
+import { count, isExcluded } from "./metrics";
 import type { Provider } from "./oauth";
+import { roomObjectName } from "./placement";
 
 const CODE_TTL_MS = 2 * 60_000;
 const TOKEN_IDLE_MS = 90 * 24 * 60 * 60_000;
@@ -108,6 +109,9 @@ export class Account extends DurableObject<Env> {
       )
       .toArray()
       .map((mac) => ({ room: mac.room, macKey: mac.mac_key, relayKey: mac.relay_key, name: mac.name, updatedAt: mac.updated_at }));
+    if (isExcluded(this.env.METRICS_EXCLUDE_ACCOUNTS, account.id)) {
+      await Promise.allSettled(macs.map((mac) => this.markRoomExcluded(mac.room)));
+    }
     return { status: 200, body: { ...account, macs } };
   }
 
@@ -147,7 +151,10 @@ export class Account extends DurableObject<Env> {
       name,
       Date.now(),
     );
-    if (!known) count(this.env.METRICS, "account.mac", ["added"]);
+    if (!known) this.count(account.id, "account.mac", ["added"]);
+    if (isExcluded(this.env.METRICS_EXCLUDE_ACCOUNTS, account.id)) {
+      await this.markRoomExcluded(room).catch(() => {});
+    }
     return { status: 200, body: { ok: true } };
   }
 
@@ -178,10 +185,11 @@ export class Account extends DurableObject<Env> {
   }
 
   async deleteMac(tokenHash: string, room: string): Promise<ApiResult> {
-    if (!this.authorize(tokenHash)) return unauthorized;
+    const account = this.authorize(tokenHash);
+    if (!account) return unauthorized;
     this.ctx.storage.sql.exec("DELETE FROM link_grants WHERE room = ?", room);
     const removed = this.ctx.storage.sql.exec("DELETE FROM macs WHERE room = ? RETURNING 1", room).toArray().length;
-    if (removed) count(this.env.METRICS, "account.mac", ["removed"], removed);
+    if (removed) this.count(account.id, "account.mac", ["removed"], removed);
     return { status: 204 };
   }
 
@@ -192,13 +200,24 @@ export class Account extends DurableObject<Env> {
   }
 
   async deleteAccount(tokenHash: string): Promise<ApiResult> {
-    if (!this.authorize(tokenHash)) return unauthorized;
+    const account = this.authorize(tokenHash);
+    if (!account) return unauthorized;
     const macs = this.ctx.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM macs").one().n;
     await this.ctx.storage.deleteAll();
-    if (macs) count(this.env.METRICS, "account.mac", ["removed"], macs);
-    count(this.env.METRICS, "account.deleted");
+    if (macs) this.count(account.id, "account.mac", ["removed"], macs);
+    this.count(account.id, "account.deleted");
     this.createTables();
     return { status: 204 };
+  }
+
+  private count(accountId: string, event: string, labels: string[] = [], n = 1): void {
+    if (isExcluded(this.env.METRICS_EXCLUDE_ACCOUNTS, accountId)) return;
+    count(this.env.METRICS, event, labels, n);
+  }
+
+  private async markRoomExcluded(room: string): Promise<void> {
+    if (!this.env.ROOM) return;
+    await this.env.ROOM.get(this.env.ROOM.idFromName(roomObjectName(room))).setMetricsExcluded(true);
   }
 
   /** The account when `tokenHash` names a token used within 90 days; marks it used. */
