@@ -84,11 +84,17 @@ extension AppModel {
         }
     }
 
-    /// What the turns a schedule's runs started used in the last 7 days; nil while counting is off or before its
-    /// first read. Read inside the schedule's details, so they redraw with a new count.
+    /// What the turns a schedule's runs started used in the last 7 days. Nil while counting is off or before its first
+    /// read, and while nothing is counted for a schedule whose runs go to a harness whose transcripts are not read
+    /// (`TokenUsageLedger.harnesses`), where "0 tokens" would say nothing true. A schedule that continues a task goes
+    /// by that task's harness. Read inside the schedule's details, so they redraw with a new count.
     func tokenUsage(ofSchedule id: UUID) -> TokenUsageAmount? {
         guard tokenUsage.isEnabled, let summary = tokenUsage.summary else { return nil }
-        return summary.schedules[.week]?[id.uuidString] ?? TokenUsageAmount()
+        if let counted = summary.schedules[.week]?[id.uuidString] { return counted }
+        guard let destination = scheduledTasks.schedule(id: id)?.destination else { return nil }
+        let continued = destination.mode == .continueTask
+            ? destination.targetTaskID.flatMap { target in store.sessions.first { $0.id == target } } : nil
+        return TokenUsageLedger.harnesses.contains(continued?.harness ?? destination.harness) ? TokenUsageAmount() : nil
     }
 
     /// What the Home band and Settings › Usage draw. Read inside their bodies, so only they redraw when a

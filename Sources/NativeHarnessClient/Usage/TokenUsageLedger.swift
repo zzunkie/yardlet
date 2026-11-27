@@ -58,6 +58,9 @@ actor TokenUsageLedger {
     /// Names the accounts and scheduled turns of the sessions a read counted (the app's main actor answers).
     typealias Resolve = @Sendable (Set<String>) async -> Attribution
 
+    /// The harnesses whose transcripts are read; another harness's tasks are counted nowhere.
+    static let harnesses: Set<HarnessKind> = [.claudeCode, .codex]
+
     /// A year of days is kept; the responses counted in the last two weeks are remembered so a copy in
     /// a forked conversation adds nothing.
     static let keptDays = 365

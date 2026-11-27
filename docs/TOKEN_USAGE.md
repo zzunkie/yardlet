@@ -28,7 +28,9 @@ anywhere and no model is asked anything.
   Settings › Usage.
 - **Scheduled tasks:** a schedule's details say, under Usage, what the turns its runs started used in the last 7 days:
   "42.1M tokens in the last 7 days · $14.44 API equivalent" (see Schedules under How it counts). The line is not there
-  while counting is off, nor in another Mac's window.
+  while counting is off, nor in another Mac's window. Nor is it while nothing is counted for a schedule whose runs go to
+  a harness other than Claude Code and Codex (by the continued task's harness, for a schedule that continues one): its
+  transcripts are not read, so "0 tokens" would not be true.
 
 ## Turning it on and off
 

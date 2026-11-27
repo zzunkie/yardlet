@@ -291,6 +291,37 @@ final class ScheduledTaskTests: XCTestCase {
         XCTAssertNil(relaunched.schedules.first?.state.runs.first?.endedAt)
     }
 
+    /// A schedule says what its runs used only where that is counted. Token usage reads Claude Code's and Codex's
+    /// transcripts, so a schedule whose runs go to another harness and has nothing counted shows no Usage row, rather
+    /// than "0 tokens". A schedule that continues a task goes by that task's harness.
+    func testOnlyAScheduleOnACountedHarnessSaysItUsedNothing() async throws {
+        let clock = Clock(date(16, 20))
+        let model = makeModel(clock: clock)
+        let watch = try await model.store.createSession(
+            harness: .codex, workspaceURL: try folder("watch"), runtimeExecutableURL: URL(filePath: "/usr/bin/true"),
+            title: "Release watch")
+        func schedule(_ name: String, _ destination: ScheduleDestination) -> ScheduledTask {
+            ScheduledTask(name: name, prompt: "Go.", trigger: .daily(ScheduleTime(hour: 9, minute: 0)), destination: destination)
+        }
+        let claude = schedule("On Claude Code", ScheduleDestination(harness: .claudeCode))
+        let openCode = schedule("On OpenCode", ScheduleDestination(harness: .openCode))
+        let counted = schedule("On OpenCode, counted before", ScheduleDestination(harness: .openCode))
+        let continuing = schedule("Continues a Codex task",
+                                  ScheduleDestination(mode: .continueTask, harness: .openCode, targetTaskID: watch.id))
+        for schedule in [claude, openCode, counted, continuing] { model.scheduledTasks.create(schedule) }
+        let used = TokenUsageAmount(output: 120, requests: 2)
+        model.tokenUsage = TokenUsageCenter(directory: root.appending(path: "usage"), summary: TokenUsageSummary(
+            days: [], groups: [:], schedules: [.week: [counted.id.uuidString: used]], updatedAt: clock.now))
+
+        XCTAssertEqual(model.tokenUsage(ofSchedule: claude.id), TokenUsageAmount())
+        XCTAssertNil(model.tokenUsage(ofSchedule: openCode.id), "OpenCode's transcripts are not read, so no row")
+        XCTAssertEqual(model.tokenUsage(ofSchedule: counted.id), used, "What was counted shows, wherever the runs go now")
+        XCTAssertEqual(model.tokenUsage(ofSchedule: continuing.id), TokenUsageAmount(), "By the continued task's harness")
+        model.tokenUsage = TokenUsageCenter(directory: root.appending(path: "off"))
+        XCTAssertNil(model.tokenUsage(ofSchedule: claude.id), "Counting off, no row")
+        await model.shutdown()
+    }
+
     /// A task's rail reads the schedules that continue it from an index, drawn again with each event of the task;
     /// a run or a pause of a schedule that starts new tasks leaves the index as it was, so it redraws no rail.
     func testOnlyAScheduleThatContinuesATaskChangesWhatTheRailsRead() async {
