@@ -487,9 +487,15 @@ final class MacBrowserHost: NativeSurfaceResource {
     }
 
     /// Sends the tab's page frames straight to the display, off the main thread, until
-    /// `stopShowingFrames(of:in:)`.
+    /// `stopShowingFrames(of:in:)`. The display's sequence counter restarts for the new tab, so a
+    /// cached frame of a lower sequence than the one last shown is not skipped, and the tab's latest
+    /// frame is placed on screen now, as a preview's is (`showPreviewFrames`), so the panel does not
+    /// wait on the next paint for a tab the engine still draws.
     func showFrames(of tab: BrowserTabID, in display: BrowserFrameDisplay) {
-        process?.frameRouter.set(display, for: tab)
+        guard let router = process?.frameRouter else { return }
+        display.prepareForNextTab()
+        router.set(display, for: tab)
+        if let (frame, surface) = router.latestFrame(of: tab) { display.show(frame, surface: surface) }
     }
 
     func stopShowingFrames(of tab: BrowserTabID, in display: BrowserFrameDisplay) {

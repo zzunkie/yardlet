@@ -45,6 +45,13 @@ final class BrowserFrameDisplay: @unchecked Sendable {
         lock.withLock { surface != nil && shownSequence >= frame.sequence }
     }
 
+    /// Prepares the display to show another tab's frames: the sequence counter restarts, so a cached
+    /// frame of the next tab with a lower sequence than the one on screen is not skipped. The surface
+    /// stays on screen until the next tab paints, so the panel does not go blank between tabs.
+    func prepareForNextTab() {
+        lock.withLock { shownSequence = 0 }
+    }
+
     /// Shows a page frame; an older frame than the one on screen is skipped.
     func show(_ frame: BrowserFrame, surface: IOSurfaceRef) {
         let observer: (@Sendable (BrowserFrame, Double) -> Void)? = lock.withLock {
