@@ -21,6 +21,14 @@ enum MailText {
             .joined(separator: "\n") + "\n\n"
     }
 
+    /// What a schedule's run says after its prompt when mail from the sender it waits for came
+    /// (`ScheduledTask.mailFrom`): that sender, as the schedule spells it, and the account, but no word of the
+    /// mail, so nothing a sender wrote reaches the task's message. The agent reads the mail with the account's
+    /// connector.
+    static func scheduledRun(from sender: String, in account: MailAccount) -> String {
+        L10n.format("Mail schedule run %@ %@", sender, account.address)
+    }
+
     /// The thread's senders, newest first: the first two names, and how many messages when more than one.
     static func senders(_ thread: MailThreadSummary, me: String? = nil) -> String {
         let names = thread.senders.prefix(2).map { name($0, me: me) }.joined(separator: ", ")

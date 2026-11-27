@@ -216,6 +216,7 @@ enum ScheduleText {
         case .scheduled: L10n.string("On schedule")
         case .missed: L10n.string("Missed, ran late")
         case .manual: L10n.string("Run now")
+        case .mail: L10n.string("On new mail")
         }
     }
 

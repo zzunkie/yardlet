@@ -11,8 +11,9 @@ enum ScheduleStartResult: Equatable, Sendable {
 /// Yardlet's schedules and the one loop that runs them while Yardlet is open.
 /// The loop wakes for the next slot, or at least every `checkInterval`, and reads the wall clock
 /// each time, so a slot passed while the Mac slept or the clock changed is found on the next look
-/// (`ScheduleRunPolicy`). Starting a run is the app model's (`start`): a task through the new-task
-/// path, or the next message of a task. Tests drive `checkDue()` with their own clock instead.
+/// (`ScheduleRunPolicy`). Mail a schedule waits for wakes it too (`mailArrived`). Starting a run is the
+/// app model's (`start`): a task through the new-task path, or the next message of a task. Tests drive
+/// `checkDue()` with their own clock instead.
 @MainActor
 @Observable
 final class ScheduledTaskCenter {
@@ -45,6 +46,9 @@ final class ScheduledTaskCenter {
     @ObservationIgnored private var loop: Task<Void, Never>?
     /// The loop's current sleep; cancelling it ends the sleep, not the loop.
     @ObservationIgnored private var sleeper: Task<Void, Never>?
+    /// The schedules mail they wait for came for since the last look: its sender, and the words that name it
+    /// in the run. Kept in memory only; the mail stays in its account.
+    @ObservationIgnored private var mailRuns: [UUID: (from: String, note: String)] = [:]
 
     init(repository: any ScheduledTaskRepository = InMemoryScheduledTaskRepository()) {
         self.repository = repository
@@ -160,7 +164,20 @@ final class ScheduledTaskCenter {
         await execute(schedule, slot: nil, trigger: .manual)
     }
 
-    /// One look: run due schedules, defer busy one-off continuations, and expire pending runs after their window.
+    /// The Mailbox told of new mail from these senders in one account (docs/MAILBOX.md, "New mail"): each
+    /// schedule that waits for mail from one of them runs at the next look.
+    func mailArrived(from senders: [String], in account: MailAccount) {
+        var woke = false
+        for schedule in schedules {
+            guard let from = schedule.mailFrom, senders.contains(where: schedule.runsOnMail(from:)) else { continue }
+            mailRuns[schedule.id] = (from, MailText.scheduledRun(from: from, in: account))
+            woke = true
+        }
+        if woke { sleeper?.cancel() }
+    }
+
+    /// One look: run due schedules, defer busy one-off continuations, expire pending runs after their window,
+    /// and run the schedules mail came for.
     func checkDue() async {
         let now = now()
         let calendar = calendar()
@@ -174,6 +191,16 @@ final class ScheduledTaskCenter {
             case let .run(slot, trigger):
                 await execute(schedule, slot: slot, trigger: trigger)
             }
+        }
+        // A mail run is outside the trigger, as Run now is: it takes no slot, and a busy task skips it. Its message
+        // is the prompt with the sender and the account after it, and no word of the mail.
+        let mail = mailRuns
+        mailRuns = [:]
+        for id in schedules.map(\.id) {
+            guard let run = mail[id], var schedule = schedule(id: id), schedule.runsOnMail(from: run.from),
+                  !startingIDs.contains(id) else { continue }
+            schedule.prompt += "\n\n" + run.note
+            await execute(schedule, slot: nil, trigger: .mail)
         }
     }
 

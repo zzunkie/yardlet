@@ -25,6 +25,11 @@ struct ScheduledTask: Codable, Identifiable, Equatable, Sendable {
     /// that task's message (`TaskMessage`), so neither the receiving task nor the person reads it as
     /// the person's own.
     var agentTaskID: UUID?
+    /// A sender whose new mail also runs a schedule that continues a task, outside its trigger: when the
+    /// Mailbox tells of mail from this address, the task gets the prompt with the sender and the account
+    /// named after it (`ScheduledTaskCenter.mailArrived`). Nil waits for no mail, as does a schedule that
+    /// starts new tasks.
+    var mailFrom: String?
     var state: ScheduleRunState
 
     init(id: UUID = UUID(), name: String, prompt: String, trigger: ScheduleTrigger,
@@ -50,6 +55,13 @@ struct ScheduledTask: Codable, Identifiable, Equatable, Sendable {
         var message = TaskMessage(senderID: agentTaskID.uuidString, senderName: sender, body: prompt)
         message.relation = relation
         return message.text(in: .yardlet)
+    }
+
+    /// Whether new mail from this address runs the schedule now: it is on, continues a task, and waits for
+    /// mail from that sender.
+    func runsOnMail(from address: String) -> Bool {
+        guard isEnabled, destination.mode == .continueTask, let mailFrom else { return false }
+        return mailFrom.caseInsensitiveCompare(address) == .orderedSame
     }
 
     /// The run whose task is the latest this schedule started.
@@ -181,6 +193,8 @@ struct ScheduledTaskRun: Codable, Equatable, Identifiable, Sendable {
         case missed
         /// Run now.
         case manual
+        /// Mail from the sender it waits for arrived (`ScheduledTask.mailFrom`).
+        case mail
     }
 
     enum Outcome: String, Codable, Sendable {
@@ -199,7 +213,7 @@ struct ScheduledTaskRun: Codable, Equatable, Identifiable, Sendable {
     }
 
     var id = UUID()
-    /// The time it was due; nil for Run now.
+    /// The time it was due; nil for Run now and for mail.
     var slot: Date?
     var at: Date
     var trigger: Trigger

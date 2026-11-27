@@ -229,6 +229,12 @@ connector › **Mail (IMAP)**, as Apple Mail and Thunderbird add them.
   three at once. Nothing is told while a window shows the mailbox and Yardlet is the active app; the Mail
   word is marked while no window has shown what came.
 - Clicking a notification brings Yardlet forward and shows the thread in All inboxes.
+- The same mail runs each scheduled task that continues a task and waits for mail from the thread's newest
+  sender (`ScheduledTask.mailFrom`, the address in any case), at the scheduler's next look and whether or
+  not New mail notifies. The run is the schedule's prompt with that address and the account after it,
+  never the subject, the sender's name or the first words, so nothing a sender wrote reaches the task's
+  message; the agent reads the mail with the account's connector. It takes none of the schedule's own
+  times, and a task that is busy skips it as it skips a time.
 
 ## Agents
 
@@ -259,7 +265,7 @@ calendar").
 | `Views/AppShell/MailAccountSetupPage.swift` | Adding an IMAP account |
 | `Presentation/MailboxCenter.swift` | The app's mailbox (`MailboxCenter`: accounts, lists, opened threads, watch, writing) and a window's view of it (`MailWindowState`) |
 | `Presentation/MailText.swift` | Names, subjects, times and the hand-off text |
-| `AppModel+Mailbox.swift` | Following the setting and the connectors, notifications and their clicks |
+| `AppModel+Mailbox.swift` | Following the setting and the connectors, notifications and their clicks, and the schedules that wait for mail |
 | `AppModel+ExternalLinks.swift` | Where a link chosen in mail opens (`openMailLink`), and closing the mailbox's browser panel (`closeMailBrowser`) |
 | `Views/Mail/` | The sidebar (`MailSidebar`, `MailFolderTree`), the thread (`MailContent`, `MailThreadView`) and its browser panel (`MailWorkspace`), HTML (`MailHTMLBody`) and writing (`MailComposeView`) |
 

@@ -10,6 +10,7 @@ extension AppModel {
         nonisolated(unsafe) let preferences = defaults
         mailbox.announce = { [weak self] threads in
             Task { await self?.postMailNotifications(threads, defaults: preferences) }
+            self?.runSchedulesWaitingForMail(threads)
         }
         nonisolated(unsafe) let watched = defaults
         mailboxPreferenceObserver = NotificationCenter.default.addObserver(
@@ -79,6 +80,15 @@ extension AppModel {
     }
 
     static let mailNotificationsAtOnce = 3
+
+    /// The schedules that wait for mail from a thread's newest sender run, whether New mail notifies or not
+    /// (`ScheduledTaskCenter.mailArrived`).
+    func runSchedulesWaitingForMail(_ threads: [MailThreadSummary]) {
+        for (id, arrived) in Dictionary(grouping: threads, by: \.id.accountID) {
+            guard let account = mailbox.account(id) else { continue }
+            scheduledTasks.mailArrived(from: arrived.compactMap { $0.senders.first?.address }, in: account)
+        }
+    }
 
     /// A new mail's notification was clicked: Yardlet comes forward and a window shows the thread.
     func revealMailThread(_ thread: MailThreadKey) {
