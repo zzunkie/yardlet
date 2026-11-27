@@ -956,6 +956,16 @@
         }
       }
     },
+    "Allow More": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "더 허용"
+          }
+        }
+      }
+    },
     "Allow Once": {
       "localizations": {
         "ko": {
@@ -8016,16 +8026,6 @@
         }
       }
     },
-    "You're looking at a demo Mac.": {
-      "localizations": {
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "둘러보기용 Mac을 보고 있습니다."
-          }
-        }
-      }
-    },
     "You've used %lld%% of your %@ limit": {
       "localizations": {
         "ko": {
@@ -8178,6 +8178,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "yardlet-remote://pair?…"
+          }
+        }
+      }
+    },
+    "· Tour": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "· 둘러보기"
           }
         }
       }

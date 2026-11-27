@@ -4,28 +4,32 @@ import YardletRemote
 
 // MARK: - Palette
 
-/// Quiet monochrome palette aligned with Yardlet Android's Theme.kt surface ladder.
-/// Chromatic color is restricted to status indicators and error states.
+/// Quiet monochrome mobile palette, the surface ladder Yardlet Android's Theme.kt takes too (docs/DESIGN_SYSTEM.md,
+/// "Mobile").
+/// Lists stand on the canvas as rows with hairlines between them; each step up the ladder (a field, a card, a pressed
+/// control) reads apart from the one under it in both appearances. Chromatic color is restricted to status indicators
+/// and error states.
 enum YardletPalette {
-    static let background = adaptive(light: 0xFFFFFF, dark: 0x161618)
-    static let surface = adaptive(light: 0xFFFFFF, dark: 0x161618)
-    static let surfaceContainerLow = adaptive(light: 0xF8F8F8, dark: 0x1B1B1D)
-    static let surfaceContainer = adaptive(light: 0xF3F3F4, dark: 0x1F1F21)
-    static let surfaceContainerHigh = adaptive(light: 0xEDEDEE, dark: 0x262628)
-    static let surfaceContainerHighest = adaptive(light: 0xE6E6E8, dark: 0x2E2E31)
+    static let background = adaptive(light: 0xFFFFFF, dark: 0x111214)
+    static let surface = adaptive(light: 0xFFFFFF, dark: 0x111214)
+    static let surfaceContainerLow = adaptive(light: 0xF6F6F7, dark: 0x1B1D21)
+    static let surfaceContainer = adaptive(light: 0xF0F0F2, dark: 0x202227)
+    static let surfaceContainerHigh = adaptive(light: 0xE8E8EB, dark: 0x25282E)
+    static let surfaceContainerHighest = adaptive(light: 0xDFDFE3, dark: 0x2E3138)
 
     static let primary = adaptive(light: 0x1C1C1E, dark: 0xECECEE)
-    static let onPrimary = adaptive(light: 0xFFFFFF, dark: 0x161618)
+    static let onPrimary = adaptive(light: 0xFFFFFF, dark: 0x111214)
     static let onSurface = adaptive(light: 0x1C1C1E, dark: 0xECECEE)
     /// Secondary words: at least 4.5:1 on every surface up to `surfaceContainerHighest` in both appearances.
     static let onSurfaceVariant = Color(uiColor: onSurfaceVariantUIColor)
 
     /// The chosen part of a segmented switch: above its track in both appearances (the canvas is darker than the
     /// track in Dark).
-    static let selectedSegment = adaptive(light: 0xFFFFFF, dark: 0x3A3A3E)
+    static let selectedSegment = adaptive(light: 0xFFFFFF, dark: 0x3A3D44)
 
-    static let outline = adaptive(light: 0xCFCFD2, dark: 0x46464A)
-    static let outlineVariant = adaptive(light: 0xE6E6E8, dark: 0x2F2F32)
+    static let outline = adaptive(light: 0xC8C8CD, dark: 0x4A4D55)
+    /// Hairlines: the dividers between a list's rows, a field's edge.
+    static let outlineVariant = adaptive(light: 0xE3E3E6, dark: 0x2C2F35)
 
     /// Links in messages: 4.5:1 or more on the canvas and the message surfaces.
     static let link = adaptive(light: 0x0062C4, dark: 0x5AA9FF)
@@ -68,7 +72,7 @@ enum YardletPalette {
     }
 
     static var onSurfaceUIColor: UIColor { uiColor(light: 0x1C1C1E, dark: 0xECECEE) }
-    static var onSurfaceVariantUIColor: UIColor { uiColor(light: 0x626266, dark: 0x9D9DA3) }
+    static var onSurfaceVariantUIColor: UIColor { uiColor(light: 0x626266, dark: 0xA3A5AC) }
 
     private static func adaptive(light: UInt32, dark: UInt32) -> Color {
         Color(uiColor: uiColor(light: light, dark: dark))
@@ -179,25 +183,18 @@ struct ConnectionStatusDot: View {
     }
 }
 
-/// Quiet monochrome glyph mark identifying a task's harness (`claude`, `codex`, `antigravity`, etc.).
+/// Quiet monochrome glyph identifying a task's harness (`claude`, `codex`, `antigravity`, etc.): the mark alone, with
+/// no tile behind it.
 struct HarnessMark: View {
     let harness: String
     let harnessName: String
     var size: CGFloat = 18
 
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(YardletPalette.surfaceContainerHigh)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .strokeBorder(YardletPalette.outlineVariant, lineWidth: 0.5)
-                )
-            glyph
-                .font(.system(size: size * 0.56, weight: .semibold, design: .rounded))
-                .foregroundStyle(YardletPalette.onSurfaceVariant)
-        }
-        .frame(width: size, height: size)
+        glyph
+            .font(.system(size: size * 0.62, weight: .semibold, design: .rounded))
+            .foregroundStyle(YardletPalette.onSurfaceVariant)
+            .frame(width: size, height: size)
         .accessibilityHidden(true)
     }
 
@@ -247,6 +244,8 @@ struct MacHeaderBar: View {
     let showsSchedules: Bool
     let showsSearch: Bool
     let isSearchActive: Bool
+    /// The demo Mac: its selector says so, and the sheet it opens ends the demo.
+    var isDemo = false
     let onTapMac: () -> Void
     let onTapSchedules: () -> Void
     let onToggleSearch: () -> Void
@@ -261,6 +260,13 @@ struct MacHeaderBar: View {
                         .foregroundStyle(YardletPalette.onSurface)
                         .lineLimit(1)
                         .truncationMode(.tail)
+                    if isDemo {
+                        Text("· Tour")
+                            .font(.subheadline)
+                            .foregroundStyle(YardletPalette.onSurfaceVariant)
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
                     Image(systemName: "chevron.down")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(YardletPalette.onSurfaceVariant)
@@ -409,7 +415,8 @@ enum MobileTab: String, CaseIterable, Hashable {
     }
 }
 
-/// Monochrome 3-tab bottom bar (`Tasks · Mail · Calendar`) anchored in the bottom safe area.
+/// Monochrome 3-tab bottom bar (`Tasks · Mail · Calendar`) anchored in the bottom safe area: the chosen tab by its
+/// filled symbol and primary words, as the system's tab bar marks it.
 struct BottomTabBar: View {
     @Binding var selection: MobileTab
     var tasksBadgeColor: Color?
@@ -441,12 +448,6 @@ struct BottomTabBar: View {
                     .foregroundStyle(isSelected ? YardletPalette.onSurface : YardletPalette.onSurfaceVariant)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 6)
-                    .background {
-                        if isSelected {
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(YardletPalette.surfaceContainer)
-                        }
-                    }
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -455,13 +456,7 @@ struct BottomTabBar: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.top, 8)
-        .padding(.bottom, 6)
-        .background(YardletPalette.surface.ignoresSafeArea(edges: .bottom))
-        .overlay(alignment: .top) {
-            Rectangle()
-                .fill(YardletPalette.outlineVariant)
-                .frame(height: 0.5)
-        }
+        .padding(.top, 6)
+        .padding(.bottom, 4)
     }
 }
