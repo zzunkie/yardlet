@@ -344,8 +344,8 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
 struct WorkspaceGroup: Identifiable, Hashable, Sendable {
     let workspaceURL: URL
     let sessions: [SessionRecord]
-    /// The owning project, when the group's tasks belong to one. Tasks that belong to no project
-    /// keep showing as a plain folder group.
+    /// The owning project, when the group's tasks belong to one. The sidebar's groups always have
+    /// one; a group of a folder's tasks (`TaskNavigationProjection`) may not.
     var project: Project?
 
     var id: URL { workspaceURL }

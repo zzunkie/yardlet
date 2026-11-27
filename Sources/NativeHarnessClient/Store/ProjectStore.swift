@@ -191,11 +191,10 @@ final class ProjectStore {
         return workspaceURL.lastPathComponent
     }
 
-    /// Where a task is listed, as the title bar, the rail and the menus name it: its project, "Chats"
-    /// for a chat (`isChat`), else its folder's name.
+    /// Where a task is listed, as the title bar, the rail and the menus name it: its project, else
+    /// "Chats" (`isChat`).
     func displayName(for session: SessionRecord) -> String {
-        if let project = project(for: session) { return project.name }
-        return isChat(session) ? L10n.string("Chats") : session.workspaceURL.lastPathComponent
+        project(for: session)?.name ?? L10n.string("Chats")
     }
 
     /// Whether the sidebar lists the task under Chats (`ProjectProjection.isChat`).

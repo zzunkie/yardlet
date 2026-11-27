@@ -237,8 +237,7 @@ extension AppModel: SessionToolHandling, AgentToolApprovalHandling {
         let outside = matches().map(\.session).filter { sessionToolReadsPastProject($0, caller: caller) }
         if !outside.isEmpty, sessionToolAsksPerson(caller) {
             let names = outside.reduce(into: [String]()) { names, task in
-                let name = project(for: task)?.name
-                    ?? (projects.isChat(task) ? L10n.string("Chats") : task.workspaceURL.lastPathComponent)
+                let name = projects.displayName(for: task)
                 if !names.contains(name) { names.append(name) }
             }
             let allowed = await askPerson(title: L10n.string("List every project's tasks"),
