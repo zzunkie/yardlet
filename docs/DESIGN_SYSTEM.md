@@ -104,6 +104,37 @@ Secondary is not disabled. Essential instructions use primary or secondary text,
 or a status color alone. Check normal text against 4.5:1 and essential control indicators against 3:1
 on their actual composite background; the table alone does not establish contrast compliance.
 
+### Mobile
+
+The phone apps keep one quiet palette of their own rather than the Mac's canvas tones: a list stands
+on the canvas, and each step up the ladder (a field, a card, a control's fill) reads apart from the one
+under it. The values are the iPhone app's (`YardletPalette` in `Apps/iOS/Yardlet/Views/YardletTheme.swift`).
+The Android app's `Theme.kt` still has the ladder these replaced (#161618 to #2E2E31 in dark) and is to
+take the same values. The Mac column
+names the nearest Mac role for comparison; the values are not meant to match it.
+
+| Role / `YardletPalette` | Mac nearest (light / dark) | Mobile light | Mobile dark | Use |
+| --- | --- | --- | --- | --- |
+| Canvas / `background`, `surface` | Canvas #FCFCFC / #191A1B | #FFFFFF | #111214 | Every screen, its lists, header and bottom bars |
+| Step 1 / `surfaceContainerLow` | Sidebar #F4F5F7 / #202124 | #F6F6F7 | #1B1D21 | A chip at rest, a command's well |
+| Step 2 / `surfaceContainer` | Request panel ≈ #F4F4F4 / #323337 | #F0F0F2 | #202227 | A field, the segmented switch's track, a request card |
+| Step 3 / `surfaceContainerHigh` | — | #E8E8EB | #25282E | A pressed or disabled control |
+| Step 4 / `surfaceContainerHighest` | — | #DFDFE3 | #2E3138 | A card's secondary button |
+| Hairline / `outlineVariant` | Separator, black 9.5% / white 10.5% | #E3E3E6 | #2C2F35 | The divider between list rows, a field's edge |
+| Secondary words / `onSurfaceVariant` | Native secondary label | #626266 | #A3A5AC | 4.5:1 or more on every step: 4.57:1 light and 5.29:1 dark on step 4 |
+
+A list of tasks, mail or events is a column of full-width rows on the canvas, parted by the hairline
+from where the row's words start, as the system's Mail and Reminders lists are: no card, border or badge
+behind a row, and a count or an answer to an invitation as secondary words, not a capsule. The chosen
+bottom tab shows by its filled symbol and primary words, with no fill behind it. A demo Mac says so in
+its selector at the top ("Demo Mac · Tour"), whose sheet ends the demo, rather than in a band above
+the tabs. An approval's answers stand on one line (Deny, the wider allows in one "Allow More" menu
+starting from the narrowest, "Allow once" last); where the line has no room the primary answer takes a
+line of its own above the others, and no label ever wraps. A conversation's navigation bar is the
+system's, opaque on the canvas with a hairline under it; its trailing buttons show their symbols without
+the system's glass behind them, and the back button stays the system's own so the edge swipe still goes
+back.
+
 ### Accent
 
 Accent is one semantic token, independent of the home/sidebar composition. Route all accent-colored

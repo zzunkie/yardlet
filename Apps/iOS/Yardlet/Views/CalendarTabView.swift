@@ -309,78 +309,96 @@ struct CalendarTabView: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+        // Room under the last row, so the list's end clears the bars below it instead of meeting them.
+        .contentMargins(.bottom, 24, for: .scrollContent)
         .background(YardletPalette.background)
         .refreshable {
             await store.refreshCalendar()
         }
     }
 
+    /// One event as a full-width row: its times in a column at the leading edge, its calendar's color as a bar, then
+    /// its title, place, calendar and the person's answer as words.
     private func eventRow(_ event: RemoteCalendarV2Event) -> some View {
         Button {
             selectedEventSheet = EventSheetItem(id: event.compositeKey, snapshot: event)
         } label: {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .center, spacing: 8) {
-                    Circle()
-                        .fill(MailCalendarStore.calendarColor(hex: event.calendarColor))
-                        .frame(width: 8, height: 8)
-                    Text(timeRangeLabel(for: event))
-                        .font(.caption.weight(.medium))
-                        .monospacedDigit()
-                        .foregroundStyle(YardletPalette.onSurfaceVariant)
-                    Spacer(minLength: 8)
-                    if let badge = rsvpBadgeLabel(for: event.responseStatus) {
-                        Text(badge)
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(YardletPalette.onSurfaceVariant)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 2)
-                            .background(YardletPalette.surfaceContainerHigh, in: Capsule())
-                    }
-                }
+            HStack(alignment: .top, spacing: 10) {
+                timeColumn(for: event)
+                    .frame(width: Self.timeColumnWidth, alignment: .leading)
 
-                Text(event.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                     ? String(localized: "(No title)")
-                     : event.title)
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(event.responseStatus == .declined ? YardletPalette.onSurfaceVariant : YardletPalette.onSurface)
-                    .strikethrough(event.responseStatus == .declined)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
+                RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                    .fill(MailCalendarStore.calendarColor(hex: event.calendarColor))
+                    .frame(width: 3)
+                    .frame(maxHeight: .infinity)
+                    .accessibilityHidden(true)
 
-                if let location = event.location?.trimmingCharacters(in: .whitespacesAndNewlines), !location.isEmpty {
-                    HStack(spacing: 5) {
-                        Image(systemName: "mappin.and.ellipse")
-                            .font(.caption2)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(event.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                         ? String(localized: "(No title)")
+                         : event.title)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(event.responseStatus == .declined ? YardletPalette.onSurfaceVariant : YardletPalette.onSurface)
+                        .strikethrough(event.responseStatus == .declined)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+
+                    if let location = event.location?.trimmingCharacters(in: .whitespacesAndNewlines), !location.isEmpty {
                         Text(verbatim: location)
+                            .font(.subheadline)
+                            .foregroundStyle(YardletPalette.onSurfaceVariant)
                             .lineLimit(1)
                     }
-                    .font(.footnote)
-                    .foregroundStyle(YardletPalette.onSurfaceVariant)
-                }
 
-                Text(verbatim: event.calendarName)
-                    .font(.caption)
-                    .foregroundStyle(YardletPalette.onSurfaceVariant)
-                    .lineLimit(1)
+                    Text(calendarLine(for: event))
+                        .font(.footnote)
+                        .foregroundStyle(YardletPalette.onSurfaceVariant)
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                YardletPalette.surfaceContainerLow,
-                in: RoundedRectangle(cornerRadius: YardletMetrics.radiusRow, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: YardletMetrics.radiusRow, style: .continuous)
-                    .strokeBorder(YardletPalette.outlineVariant, lineWidth: 0.7)
-            )
+            .fixedSize(horizontal: false, vertical: true)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .listRowSeparator(.hidden)
+        .accessibilityElement(children: .combine)
+        .listRowSeparatorTint(YardletPalette.outlineVariant)
         .listRowBackground(Color.clear)
-        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+        .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
+    }
+
+    /// Room for "오전 11:00" or "12:00 PM" at the footnote size.
+    private static let timeColumnWidth: CGFloat = 70
+
+    @ViewBuilder
+    private func timeColumn(for event: RemoteCalendarV2Event) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if event.allDay {
+                Text("All day")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(YardletPalette.onSurface)
+            } else {
+                let start = Date(timeIntervalSince1970: Double(event.startMs) / 1_000)
+                Text(start.formatted(date: .omitted, time: .shortened))
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(YardletPalette.onSurface)
+                if event.endMs > event.startMs {
+                    Text(Date(timeIntervalSince1970: Double(event.endMs) / 1_000).formatted(date: .omitted, time: .shortened))
+                        .font(.footnote)
+                        .foregroundStyle(YardletPalette.onSurfaceVariant)
+                }
+            }
+        }
+        .monospacedDigit()
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+        .padding(.top, 2)
+    }
+
+    /// The calendar's name, and the person's answer to an invitation after it.
+    private func calendarLine(for event: RemoteCalendarV2Event) -> String {
+        guard let answer = rsvpLabel(for: event.responseStatus) else { return event.calendarName }
+        return "\(event.calendarName) · \(answer)"
     }
 
     private func inlineErrorRow(_ message: String, retry: @escaping () -> Void) -> some View {
@@ -402,22 +420,12 @@ struct CalendarTabView: View {
         .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
     }
 
-    private func timeRangeLabel(for event: RemoteCalendarV2Event) -> String {
-        if event.allDay { return String(localized: "All day") }
-        let start = Date(timeIntervalSince1970: Double(event.startMs) / 1_000)
-        if event.endMs <= event.startMs {
-            return start.formatted(date: .omitted, time: .shortened)
-        }
-        let end = Date(timeIntervalSince1970: Double(event.endMs) / 1_000)
-        return "\(start.formatted(date: .omitted, time: .shortened)) – \(end.formatted(date: .omitted, time: .shortened))"
-    }
-
-    private func rsvpBadgeLabel(for status: RemoteCalendarV2ResponseStatus) -> LocalizedStringKey? {
+    private func rsvpLabel(for status: RemoteCalendarV2ResponseStatus) -> String? {
         switch status {
-        case .accepted: "Accepted"
-        case .tentative: "Maybe"
-        case .declined: "Declined"
-        case .needsAction: "Invited"
+        case .accepted: String(localized: "Accepted")
+        case .tentative: String(localized: "Maybe")
+        case .declined: String(localized: "Declined")
+        case .needsAction: String(localized: "Invited")
         case .none: nil
         }
     }

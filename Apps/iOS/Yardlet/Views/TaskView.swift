@@ -51,6 +51,10 @@ struct TaskView: View {
             }
         }
         .background(YardletPalette.background)
+        // The bar's edge: one hairline between it and the conversation, as a list's rows are parted.
+        .overlay(alignment: .top) {
+            Rectangle().fill(YardletPalette.outlineVariant).frame(height: 0.5)
+        }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
@@ -68,6 +72,7 @@ struct TaskView: View {
                     }
                     .accessibilityLabel("Outputs")
                 }
+                .plainBarItem()
             }
             // §15.25: the task's browser, when it has tabs to show.
             if showsBrowser {
@@ -79,8 +84,10 @@ struct TaskView: View {
                     }
                     .accessibilityLabel("Browser")
                 }
+                .plainBarItem()
             }
             ToolbarItem(placement: .topBarTrailing) { menu }
+                .plainBarItem()
         }
         .onAppear {
             conversation = session.open(taskID)
@@ -948,6 +955,19 @@ struct PlanStepsView: View {
                         .foregroundStyle(step.status == "completed" ? YardletPalette.onSurfaceVariant : YardletPalette.onSurface)
                 }
             }
+        }
+    }
+}
+
+extension ToolbarContent {
+    /// A bar button drawn as its symbol alone, without the glass the system puts behind a group of buttons on iOS 26:
+    /// on the bar's opaque band the glass read as buttons floating over the conversation.
+    @ToolbarContentBuilder
+    func plainBarItem() -> some ToolbarContent {
+        if #available(iOS 26, *) {
+            sharedBackgroundVisibility(.hidden)
+        } else {
+            self
         }
     }
 }

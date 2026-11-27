@@ -83,6 +83,7 @@ struct HomeView: View {
                     showsSchedules: session.scheduledTasks,
                     showsSearch: selectedTab == .tasks,
                     isSearchActive: isSearching,
+                    isDemo: session.isDemo,
                     onTapMac: { activeSheet = .macSheet },
                     onTapSchedules: { path.append(SchedulesRoute()) },
                     onToggleSearch: toggleSearch
@@ -280,7 +281,7 @@ struct HomeView: View {
                         searchEmptyState
                     } else {
                         ForEach(matches, id: \.id) { task in
-                            taskRow(task, depth: 0, showsProject: true, isAttention: task.attention == .waiting)
+                            taskRow(task, depth: 0, showsProject: true)
                         }
                     }
                 } else if session.hasSnapshot && session.tasks.isEmpty {
@@ -293,6 +294,7 @@ struct HomeView: View {
             .scrollContentBackground(.hidden)
             // Room under the last row, so the list's end clears the bars below it instead of meeting them.
             .contentMargins(.bottom, 24, for: .scrollContent)
+            .contentMargins(.top, 0, for: .scrollContent)
             .background(YardletPalette.background)
             .environment(\.defaultMinListHeaderHeight, 28)
             .overlay {
@@ -385,22 +387,26 @@ struct HomeView: View {
                     .padding(.bottom, 8)
             }
             if !isSearching && !(isMailSearchFocused && selectedTab == .mail) {
-                if session.isDemo {
-                    demoBar
-                }
-                if selectedTab == .tasks {
-                    NewTaskBar(
-                        projectName: defaultNewTaskProject?.name,
-                        isEnabled: session.newTask != nil && session.isConnected
-                    ) {
-                        activeSheet = .newTask
+                // One band: the new task field and the tabs under a single hairline.
+                VStack(spacing: 0) {
+                    if selectedTab == .tasks {
+                        NewTaskBar(
+                            projectName: defaultNewTaskProject?.name,
+                            isEnabled: session.newTask != nil && session.isConnected
+                        ) {
+                            activeSheet = .newTask
+                        }
                     }
+                    BottomTabBar(
+                        selection: $selectedTab,
+                        tasksBadgeColor: tasksBadge?.color,
+                        tasksBadgeLabel: tasksBadge?.label
+                    )
                 }
-                BottomTabBar(
-                    selection: $selectedTab,
-                    tasksBadgeColor: tasksBadge?.color,
-                    tasksBadgeLabel: tasksBadge?.label
-                )
+                .background(YardletPalette.surface.ignoresSafeArea(edges: .bottom))
+                .overlay(alignment: .top) {
+                    Rectangle().fill(YardletPalette.outlineVariant).frame(height: 0.5)
+                }
             }
         }
     }
@@ -418,7 +424,7 @@ struct HomeView: View {
         if !waiting.isEmpty {
             Section {
                 ForEach(waiting, id: \.id) { task in
-                    taskRow(task, depth: 0, showsProject: true, isAttention: true)
+                    taskRow(task, depth: 0, showsProject: true)
                 }
             } header: {
                 sectionHeader("Waiting for You", count: waiting.count)
@@ -463,17 +469,14 @@ struct HomeView: View {
                 .foregroundStyle(YardletPalette.onSurfaceVariant)
             if let count {
                 Text(verbatim: "\(count)")
-                    .font(.caption2.weight(.semibold))
+                    .font(.footnote)
                     .monospacedDigit()
                     .foregroundStyle(YardletPalette.onSurfaceVariant)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 1)
-                    .background(YardletPalette.surfaceContainerHigh, in: Capsule())
             }
             Spacer(minLength: 0)
         }
         .textCase(nil)
-        .padding(.top, 6)
+        .padding(.top, 10)
         .padding(.bottom, 2)
     }
 
@@ -484,17 +487,14 @@ struct HomeView: View {
                 .foregroundStyle(YardletPalette.onSurfaceVariant)
             if let count {
                 Text(verbatim: "\(count)")
-                    .font(.caption2.weight(.semibold))
+                    .font(.footnote)
                     .monospacedDigit()
                     .foregroundStyle(YardletPalette.onSurfaceVariant)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 1)
-                    .background(YardletPalette.surfaceContainerHigh, in: Capsule())
             }
             Spacer(minLength: 0)
         }
         .textCase(nil)
-        .padding(.top, 6)
+        .padding(.top, 10)
         .padding(.bottom, 2)
     }
 
@@ -502,8 +502,7 @@ struct HomeView: View {
         ForEach(rows, id: \.task.id) { row in
             taskRow(row.task, depth: row.depth, showsProject: showsProject && row.depth == 0,
                     children: row.children,
-                    activityAt: row.depth == 0 ? row.latestActivityAt : row.task.lastActivityAt,
-                    isAttention: false)
+                    activityAt: row.depth == 0 ? row.latestActivityAt : row.task.lastActivityAt)
         }
     }
 
@@ -568,16 +567,16 @@ struct HomeView: View {
     }
 
     private func taskRow(_ task: RemoteTask, depth: Int, showsProject: Bool, children: Int = 0,
-                         activityAt: Int64? = nil, isAttention: Bool) -> some View {
+                         activityAt: Int64? = nil) -> some View {
         TaskRow(task: task, session: session, depth: depth, showsProject: showsProject, children: children,
-                isExpanded: expanded.contains(task.id), activityAt: activityAt, isAttention: isAttention,
+                isExpanded: expanded.contains(task.id), activityAt: activityAt,
                 open: { path.append(task.id) },
                 toggle: {
                     if expanded.contains(task.id) { expanded.remove(task.id) } else { expanded.insert(task.id) }
                 })
-        .listRowSeparator(.hidden)
+        .listRowSeparatorTint(YardletPalette.outlineVariant)
         .listRowBackground(Color.clear)
-        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+        .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
         .swipeActions(edge: .leading) {
             Button {
                 session.send(.setPinned(taskID: task.id, pinned: !task.pinned))
@@ -655,29 +654,12 @@ struct HomeView: View {
         .listRowSeparator(.hidden)
         .listRowBackground(Color.clear)
     }
-
-    private var demoBar: some View {
-        HStack {
-            Text("You're looking at a demo Mac.")
-                .font(.footnote)
-                .foregroundStyle(YardletPalette.onSurfaceVariant)
-            Spacer()
-            Button("Leave Demo") { model.leaveDemo() }
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(YardletPalette.onSurface)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(YardletPalette.surfaceContainer)
-        .overlay(alignment: .top) {
-            Rectangle().fill(YardletPalette.outlineVariant).frame(height: 0.5)
-        }
-    }
 }
 
 // MARK: - Task Row
 
-/// One monochrome surface-ladder task card: status mark, title, relative age, pending summary, and harness metadata.
+/// One task as a full-width list row: status mark, title, relative age, pending summary, and harness metadata. The
+/// list draws the hairline between rows, from the title's leading edge.
 struct TaskRow: View {
     let task: RemoteTask
     let session: HostSession
@@ -687,85 +669,78 @@ struct TaskRow: View {
     var isExpanded = false
     /// When the row says it last moved: a folded parent shows its latest subtask's time.
     var activityAt: Int64?
-    var isAttention = false
     var open: () -> Void = {}
     var toggle: () -> Void = {}
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Button(action: open) {
-                HStack(alignment: .top, spacing: 10) {
-                    TaskMark(indicator: task.indicator)
-                        .padding(.top, 5)
-                    VStack(alignment: .leading, spacing: 5) {
+        HStack(alignment: .top, spacing: 10) {
+            TaskMark(indicator: task.indicator)
+                .padding(.top, 5)
+                .onTapGesture(perform: open)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Button(action: open) {
+                    VStack(alignment: .leading, spacing: 3) {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
                             Text(task.title.isEmpty ? String(localized: "Untitled task") : task.title)
                                 .font(.body.weight(task.unread || task.attention == .waiting ? .semibold : .regular))
                                 .foregroundStyle(YardletPalette.onSurface)
-                                .lineLimit(2)
-                                .multilineTextAlignment(.leading)
+                                .lineLimit(1)
                             Spacer(minLength: 8)
                             Text(Formatting.shortAge(session.date(activityAt ?? task.lastActivityAt)))
                                 .font(.footnote)
                                 .foregroundStyle(YardletPalette.onSurfaceVariant)
                                 .monospacedDigit()
+                                .lineLimit(1)
+                                .fixedSize()
                         }
                         if task.attention == .waiting, let summary = task.pendingSummary, !summary.isEmpty {
                             Text(summary)
                                 .font(.subheadline)
                                 .foregroundStyle(YardletPalette.onSurfaceVariant)
-                                .lineLimit(2)
+                                .lineLimit(1)
                                 .multilineTextAlignment(.leading)
                         }
                         if children == 0 {
                             metadataRow
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityValue(children > 0 ? Text(subtitle) : Text(verbatim: ""))
+                .buttonStyle(.plain)
+                .accessibilityValue(accessibilityValue)
 
-            if children > 0 {
-                HStack(spacing: 6) {
-                    metadataRow
-                        .padding(.leading, 22)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                        .onTapGesture(perform: open)
-                        .accessibilityHidden(true)
+                if children > 0 {
+                    HStack(spacing: 8) {
+                        metadataRow
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                            .onTapGesture(perform: open)
+                            .accessibilityHidden(true)
 
-                    Button(action: toggle) {
-                        HStack(spacing: 3) {
-                            Text("\(children) subtasks")
-                            Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                                .font(.caption2.weight(.semibold))
+                        Button(action: toggle) {
+                            HStack(spacing: 3) {
+                                Text("\(children) subtasks")
+                                    .lineLimit(1)
+                                Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                                    .font(.caption2.weight(.semibold))
+                            }
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(YardletPalette.onSurfaceVariant)
+                            .fixedSize()
+                            .frame(minHeight: 28)
+                            .contentShape(Rectangle())
                         }
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(YardletPalette.onSurfaceVariant)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(YardletPalette.surfaceContainerHigh, in: Capsule())
-                        .contentShape(Capsule())
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
             }
+            // The divider under the row starts where its words do, as the system's lists draw it.
+            .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            isAttention ? YardletPalette.surfaceContainer : YardletPalette.surfaceContainerLow,
-            in: RoundedRectangle(cornerRadius: YardletMetrics.radiusRow, style: .continuous)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: YardletMetrics.radiusRow, style: .continuous)
-                .strokeBorder(YardletPalette.outlineVariant, lineWidth: isAttention ? 1 : 0.6)
-        )
-        .padding(.leading, CGFloat(depth) * 16)
+        .padding(.leading, CGFloat(depth) * 22)
     }
 
     private var metadataRow: some View {
@@ -776,6 +751,15 @@ struct TaskRow: View {
                 .foregroundStyle(YardletPalette.onSurfaceVariant)
                 .lineLimit(1)
         }
+    }
+
+    /// The row's state from its mark, which stands outside the row's button, and what it runs on where the subtasks'
+    /// line shows that outside the button too.
+    private var accessibilityValue: Text {
+        let parts = [TaskMark.label(task.indicator), children > 0 ? Text(subtitle) : nil].compactMap { $0 }
+        guard var value = parts.first else { return Text(verbatim: "") }
+        for part in parts.dropFirst() { value = value + Text(verbatim: ", ") + part }
+        return value
     }
 
     /// What it runs on, after its project or Chats where the list mixes them.
@@ -820,11 +804,8 @@ struct NewTaskBar: View {
         .disabled(!isEnabled)
         .opacity(isEnabled ? 1 : 0.45)
         .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .background(YardletPalette.surface)
-        .overlay(alignment: .top) {
-            Rectangle().fill(YardletPalette.outlineVariant).frame(height: 0.5)
-        }
+        .padding(.top, 10)
+        .padding(.bottom, 2)
         .accessibilityLabel(Text(label))
     }
 

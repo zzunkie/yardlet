@@ -310,20 +310,18 @@ struct MailTabView: View {
                     .padding(.top, 6)
                     .accessibilityHidden(true)
 
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text(verbatim: MailCalendarStore.senderDisplayName(name: summary.fromName, email: summary.fromEmail))
-                            .font(.subheadline.weight(summary.unread ? .semibold : .regular))
+                            .font(.body.weight(summary.unread ? .semibold : .regular))
                             .foregroundStyle(YardletPalette.onSurface)
                             .lineLimit(1)
                         if summary.messageCount > 1 {
                             Text(verbatim: "\(summary.messageCount)")
-                                .font(.caption2.weight(.semibold))
+                                .font(.footnote)
                                 .monospacedDigit()
                                 .foregroundStyle(YardletPalette.onSurfaceVariant)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 1)
-                                .background(YardletPalette.surfaceContainerHigh, in: Capsule())
+                                .fixedSize()
                         }
                         Spacer(minLength: 6)
                         if summary.starred {
@@ -337,44 +335,38 @@ struct MailTabView: View {
                                 .foregroundStyle(YardletPalette.onSurfaceVariant)
                         }
                         Text(Formatting.shortAge(Date(timeIntervalSince1970: Double(summary.dateMs) / 1_000)))
-                            .font(.caption)
+                            .font(.footnote)
                             .foregroundStyle(YardletPalette.onSurfaceVariant)
                             .monospacedDigit()
+                            .lineLimit(1)
+                            .fixedSize()
                     }
 
                     Text(summary.subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                          ? String(localized: "(No subject)")
                          : summary.subject)
-                        .font(.body.weight(summary.unread ? .semibold : .regular))
+                        .font(.subheadline.weight(summary.unread ? .semibold : .regular))
                         .foregroundStyle(YardletPalette.onSurface)
                         .lineLimit(1)
 
                     if !summary.snippet.isEmpty {
                         Text(verbatim: summary.snippet)
-                            .font(.footnote)
+                            .font(.subheadline)
                             .foregroundStyle(YardletPalette.onSurfaceVariant)
                             .lineLimit(2)
                             .multilineTextAlignment(.leading)
                     }
                 }
+                // The divider under the row starts where its words do, as Mail draws it.
+                .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                summary.unread ? YardletPalette.surfaceContainer : YardletPalette.surfaceContainerLow,
-                in: RoundedRectangle(cornerRadius: YardletMetrics.radiusRow, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: YardletMetrics.radiusRow, style: .continuous)
-                    .strokeBorder(YardletPalette.outlineVariant, lineWidth: summary.unread ? 0.9 : 0.6)
-            )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .listRowSeparator(.hidden)
+        .listRowSeparatorTint(YardletPalette.outlineVariant)
         .listRowBackground(Color.clear)
-        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+        .listRowInsets(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 16))
     }
 
     private var loadMoreRow: some View {

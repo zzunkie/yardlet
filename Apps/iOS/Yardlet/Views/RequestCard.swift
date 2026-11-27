@@ -121,11 +121,12 @@ private struct ApprovalAnswer: View {
             // The answers only: the command stays readable while the phone reconnects.
             Group {
                 if let choices = item.choices, !choices.isEmpty {
-                    ForEach(orderedChoices(choices), id: \.id) { choice in
-                        button(choice.title, role: choice.role, locked: choice.role != "destructive" && hidesCommand) {
+                    AnswerRow(answers: choices.map { choice in
+                        Answer(id: choice.id, title: choice.title, role: choice.role,
+                               locked: choice.role != "destructive" && hidesCommand) {
                             if choice.standing == true { standing = choice } else { choose(choice, note: nil) }
                         }
-                    }
+                    })
                     if let deny = choices.first(where: { $0.role == "destructive" }) {
                         Button("Deny and Say What to Do Instead…") {
                             noteFor = deny
@@ -156,11 +157,6 @@ private struct ApprovalAnswer: View {
         }
     }
 
-    /// The primary answer last, nearest the thumb; the card's own order otherwise.
-    private func orderedChoices(_ choices: [RemoteChoice]) -> [RemoteChoice] {
-        choices.filter { $0.role != "primary" } + choices.filter { $0.role == "primary" }
-    }
-
     /// Part of the command is not in view: the Mac sent only part of it (§6.5), or it is folded. The answers that
     /// allow it wait, so what is allowed is what was shown; a denial does not.
     private var hidesCommand: Bool {
@@ -168,45 +164,23 @@ private struct ApprovalAnswer: View {
         return item.truncated == true || (isCommandCut && !isCommandOpen)
     }
 
-    @ViewBuilder
     private var legacyButtons: some View {
         let options = item.options ?? []
+        var answers: [Answer] = []
         if options.contains("deny") {
-            button(item.optionTitles?["deny"] ?? String(localized: "Deny"), role: "destructive") { answer(.deny) }
+            answers.append(Answer(id: "deny", title: item.optionTitles?["deny"] ?? String(localized: "Deny"),
+                                  role: "destructive") { answer(.deny) })
         }
         if options.contains("allowForSession") {
-            button(item.optionTitles?["allowForSession"] ?? String(localized: "Allow for This Session"), role: "secondary",
-                   locked: hidesCommand) {
-                answer(.allowForSession)
-            }
+            answers.append(Answer(id: "allowForSession",
+                                  title: item.optionTitles?["allowForSession"] ?? String(localized: "Allow for This Session"),
+                                  role: "secondary", locked: hidesCommand) { answer(.allowForSession) })
         }
         if options.contains("allowOnce") {
-            button(item.optionTitles?["allowOnce"] ?? String(localized: "Allow Once"), role: "primary", locked: hidesCommand) {
-                answer(.allowOnce)
-            }
+            answers.append(Answer(id: "allowOnce", title: item.optionTitles?["allowOnce"] ?? String(localized: "Allow Once"),
+                                  role: "primary", locked: hidesCommand) { answer(.allowOnce) })
         }
-    }
-
-    /// An answer's button. A title that ends in a parenthesized note, such as where a rule is saved, keeps the answer
-    /// on the button and the note under it, so the button reads as one short line.
-    private func button(_ title: String, role: String, locked: Bool = false, action: @escaping () -> Void) -> some View {
-        let parts = Self.split(title)
-        return VStack(spacing: 4) {
-            Button(action: action) {
-                Text(verbatim: parts.answer)
-                    .frame(maxWidth: .infinity)
-                    .multilineTextAlignment(.center)
-            }
-            .buttonStyle(CardButtonStyle(role: role))
-            .disabled(locked)
-            if let note = parts.note {
-                Text(verbatim: note)
-                    .font(.caption)
-                    .foregroundStyle(YardletPalette.onSurfaceVariant)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: .infinity)
-            }
-        }
+        return AnswerRow(answers: answers)
     }
 
     /// "Always allow in this project (saved to .claude/settings.local.json)" as the answer and its note.
@@ -238,6 +212,99 @@ private struct ApprovalAnswer: View {
             await context.session.perform(.answerApproval(taskID: context.taskID, requestID: requestID, answer: answer))
             isSending = false
         }
+    }
+}
+
+/// One answer to an approval: its words, its role (`primary`, `secondary` or `destructive`), whether it waits for the
+/// whole command to show, and what it does.
+private struct Answer: Identifiable {
+    let id: String
+    let title: String
+    let role: String
+    var locked = false
+    let action: () -> Void
+}
+
+/// A request's answers on one line, as the Mac's card ends its row: Deny (or Decline), an approval's wider allows under
+/// one "Allow More" menu, and the primary answer last, nearest the thumb. A label never wraps: where the line has no
+/// room (a narrow phone, a large text size) the primary answer takes a line of its own above the others.
+private struct AnswerRow: View {
+    let answers: [Answer]
+
+    private var lead: Answer? {
+        answers.first { $0.role == "primary" } ?? answers.first { $0.role != "destructive" }
+    }
+
+    private var deny: Answer? { answers.first { $0.role == "destructive" } }
+
+    /// The rest: the session's and the project's allows, and any answer beyond the two. The card lists them from the
+    /// widest to the narrowest toward its primary answer; the menu starts from the narrowest, next to "Allow once".
+    private var more: [Answer] {
+        answers.filter { $0.id != lead?.id && $0.id != deny?.id }.reversed()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 6) {
+                    secondaryButtons
+                    if let lead { button(lead) }
+                }
+                VStack(spacing: 8) {
+                    if let lead { button(lead) }
+                    HStack(spacing: 8) { secondaryButtons }
+                }
+            }
+            ForEach([deny, lead].compactMap { $0 }) { answer in
+                if let note = ApprovalAnswer.split(answer.title).note {
+                    Text(verbatim: note)
+                        .font(.caption)
+                        .foregroundStyle(YardletPalette.onSurfaceVariant)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var secondaryButtons: some View {
+        if let deny { button(deny) }
+        if !more.isEmpty { moreMenu }
+    }
+
+    private func button(_ answer: Answer) -> some View {
+        Button(action: answer.action) {
+            Text(verbatim: ApprovalAnswer.split(answer.title).answer)
+                .lineLimit(1)
+                .fixedSize()
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(CardButtonStyle(role: answer.role))
+        .disabled(answer.locked)
+    }
+
+    /// The wider allows, each with where its rule is kept on a second line.
+    private var moreMenu: some View {
+        Menu {
+            ForEach(more) { answer in
+                let parts = ApprovalAnswer.split(answer.title)
+                Button(action: answer.action) {
+                    Text(verbatim: parts.answer)
+                    if let note = parts.note { Text(verbatim: note) }
+                }
+                .disabled(answer.locked)
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Text("Allow More")
+                    .lineLimit(1)
+                    .fixedSize()
+                Image(systemName: "chevron.down")
+                    .font(.caption.weight(.semibold))
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(CardButtonStyle(role: "secondary"))
+        .disabled(more.allSatisfy(\.locked))
     }
 }
 
@@ -298,7 +365,7 @@ struct CardButtonStyle: ButtonStyle {
         configuration.label
             .font(.body.weight(role == "primary" ? .semibold : .regular))
             .padding(.vertical, 12)
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 12)
             .foregroundStyle(foreground)
             .background(background.opacity(configuration.isPressed ? 0.7 : 1),
                         in: RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -533,20 +600,10 @@ private struct HandoffAnswer: View {
                     .font(.footnote)
                     .foregroundStyle(YardletPalette.onSurfaceVariant)
             }
-            HStack(spacing: 10) {
-                Button {
-                    answer(.decline)
-                } label: {
-                    Text("Decline").frame(maxWidth: .infinity)
-                }
-                .buttonStyle(CardButtonStyle(role: "destructive"))
-                Button {
-                    answer(.done)
-                } label: {
-                    Text("Hand Back").frame(maxWidth: .infinity)
-                }
-                .buttonStyle(CardButtonStyle(role: "primary"))
-            }
+            AnswerRow(answers: [
+                Answer(id: "decline", title: String(localized: "Decline"), role: "destructive") { answer(.decline) },
+                Answer(id: "done", title: String(localized: "Hand Back"), role: "primary") { answer(.done) }
+            ])
         }
         .disabled(isSending || !context.session.isConnected)
     }
