@@ -150,35 +150,13 @@ private struct AccentStyle: ShapeStyle, Hashable {
     var role: Role = .accent
 
     func resolve(in environment: EnvironmentValues) -> Color.Resolved {
-        let mode = ThemeMode(environment.colorScheme)
-        let theme = environment.yardletColorTheme
-        if theme[mode] != ThemeColors() {
-            let accent = Color(nsColor: theme.accent(in: mode)).resolve(in: environment)
-            switch role {
-            case .accent: return accent
-            case .text:
-                return ThemeContrast.readableAccent(theme, in: environment)
-            case .onAccent:
-                return (ThemeContrast.luminance(accent) > 0.179 ? Color.black : .white).resolve(in: environment)
-            case .buttonFill:
-                return ThemeContrast.accentButtonColors(for: accent, in: environment).fill
-            case .onButtonFill:
-                return ThemeContrast.accentButtonColors(for: accent, in: environment).foreground
-            }
-        }
+        let resolution = ThemeResolution.current(in: environment)
         switch role {
-        case .accent:
-            return Color(nsColor: ParityTheme.accentColor(for: environment.yardletAccent)).resolve(in: environment)
-        case .text:
-            return Color(nsColor: ParityTheme.linkTextColor(for: environment.yardletAccent)).resolve(in: environment)
-        case .onAccent:
-            return Color(nsColor: ParityTheme.foregroundOnAccent(for: environment.yardletAccent)).resolve(in: environment)
-        case .buttonFill:
-            let accent = Color(nsColor: ParityTheme.accentColor(for: environment.yardletAccent)).resolve(in: environment)
-            return ThemeContrast.accentButtonColors(for: accent, in: environment).fill
-        case .onButtonFill:
-            let accent = Color(nsColor: ParityTheme.accentColor(for: environment.yardletAccent)).resolve(in: environment)
-            return ThemeContrast.accentButtonColors(for: accent, in: environment).foreground
+        case .accent: return resolution.accent
+        case .text: return resolution.accentText
+        case .onAccent: return resolution.onAccent
+        case .buttonFill: return resolution.accentButtonFill
+        case .onButtonFill: return resolution.onAccentButton
         }
     }
 }
@@ -195,8 +173,9 @@ private struct AccentPalette {
             let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             var environment = EnvironmentValues()
             environment.colorScheme = dark ? .dark : .light
-            // Sidebar in light mode and input in dark mode bound the plain surfaces.
-            let surface = dark ? ParityTheme.input : ParityTheme.sidebar
+            // Sidebar in light mode and input in dark mode bound the plain surfaces. The palette is the
+            // default theme's, so it reads the native surfaces (`ThemeResolution` resolves this color).
+            let surface = dark ? ParityTheme.originalInput : ParityTheme.originalSidebar
             var readable = false
             appearance.performAsCurrentDrawingAppearance {
                 let foreground = Self.luminance(Color(nsColor: accent).resolve(in: environment))
@@ -266,7 +245,7 @@ enum ParityTheme {
         palette(for: preference).text
     }
 
-    fileprivate static func foregroundOnAccent(for preference: YardletAccentPreference) -> NSColor {
+    static func foregroundOnAccent(for preference: YardletAccentPreference) -> NSColor {
         palette(for: preference).onAccent
     }
 
@@ -295,29 +274,19 @@ enum ParityTheme {
     })
 
     static let canvas = Color(ThemeSurface.canvas)
-    static let originalCanvas = Color(nsColor: NSColor(name: "YardletCanvas") { appearance in
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(srgbRed: 0.098, green: 0.100, blue: 0.108, alpha: 1) // #191A1B
-            : NSColor(srgbRed: 0.988, green: 0.988, blue: 0.990, alpha: 1) // #FCFCFC
-    })
+    static let originalCanvas = native("YardletCanvas", .canvas)
     static let sidebar = Color(ThemeSurface.sidebar)
-    static let originalSidebar = Color(nsColor: NSColor(name: "YardletSidebar") { appearance in
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(srgbRed: 0.125, green: 0.129, blue: 0.141, alpha: 1) // #202124
-            : NSColor(srgbRed: 0.957, green: 0.961, blue: 0.969, alpha: 1) // #F4F5F7
-    })
+    static let originalSidebar = native("YardletSidebar", .sidebar)
     static let elevated = Color(ThemeSurface.elevated)
-    static let originalElevated = Color(nsColor: NSColor(name: "YardletElevated") { appearance in
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(srgbRed: 0.153, green: 0.157, blue: 0.173, alpha: 1) // #27282C
-            : .white
-    })
+    static let originalElevated = native("YardletElevated", .elevated)
     static let input = Color(ThemeSurface.input)
-    static let originalInput = Color(nsColor: NSColor(name: "YardletInput") { appearance in
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(srgbRed: 0.173, green: 0.176, blue: 0.192, alpha: 1) // #2C2D31
-            : .white
-    })
+    static let originalInput = native("YardletInput", .input)
+
+    private static func native(_ name: NSColor.Name, _ surface: ThemeSurface) -> Color {
+        Color(nsColor: NSColor(name: name) { appearance in
+            surface.native(in: appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? .dark : .light)
+        })
+    }
     /// Subtle stepped fill for inner section rails (Mail, Calendar, Personal agents) inside the detail surface.
     static let innerRail = Color(InnerRailSurfaceStyle())
     /// Crisp tinted surface for sent user message bubbles, adapting cleanly with custom themes.
@@ -958,44 +927,26 @@ struct WindowDragRegion: NSViewRepresentable {
 }
 
 private struct InnerRailSurfaceStyle: ShapeStyle, Hashable {
+    private static let light = ThemeSurface.resolvedFixed(NSColor(srgbRed: 0.973, green: 0.973, blue: 0.976, alpha: 1)) // #F8F8F9
+    private static let dark = ThemeSurface.resolvedFixed(NSColor(srgbRed: 0.078, green: 0.082, blue: 0.094, alpha: 1)) // #141518
+
     func resolve(in environment: EnvironmentValues) -> Color.Resolved {
-        let isDark = environment.colorScheme == .dark
-        let base = Color(nsColor: isDark
-            ? NSColor(srgbRed: 0.078, green: 0.082, blue: 0.094, alpha: 1) // #141518
-            : NSColor(srgbRed: 0.973, green: 0.973, blue: 0.976, alpha: 1) // #F8F8F9
-        ).resolve(in: environment)
-        guard let background = environment.yardletColorTheme[ThemeMode(environment.colorScheme)].background else {
-            return base
-        }
-        let canvas = ParityTheme.originalCanvas.resolve(in: environment)
-        let chosen = background.color.resolve(in: environment)
-        func shifted(_ channel: Float, _ surface: Float, _ original: Float) -> Float {
-            max(0, min(1, channel + surface - original))
-        }
-        return Color.Resolved(red: shifted(chosen.red, base.red, canvas.red),
-                              green: shifted(chosen.green, base.green, canvas.green),
-                              blue: shifted(chosen.blue, base.blue, canvas.blue))
+        let mode = ThemeMode(environment.colorScheme)
+        let base = mode == .dark ? Self.dark : Self.light
+        guard let background = environment.yardletColorTheme[mode].background else { return base }
+        return ThemeSurface.shifted(base, onto: background, in: mode)
     }
 }
 
 private struct UserBubbleSurfaceStyle: ShapeStyle, Hashable {
+    private static let light = ThemeSurface.resolvedFixed(NSColor(srgbRed: 0.949, green: 0.953, blue: 0.961, alpha: 1)) // #F2F3F5
+    private static let dark = ThemeSurface.resolvedFixed(NSColor(srgbRed: 0.137, green: 0.145, blue: 0.165, alpha: 1)) // #23252A
+
     func resolve(in environment: EnvironmentValues) -> Color.Resolved {
-        let isDark = environment.colorScheme == .dark
-        let base = Color(nsColor: isDark
-            ? NSColor(srgbRed: 0.137, green: 0.145, blue: 0.165, alpha: 1) // #23252A
-            : NSColor(srgbRed: 0.949, green: 0.953, blue: 0.961, alpha: 1) // #F2F3F5
-        ).resolve(in: environment)
-        guard let background = environment.yardletColorTheme[ThemeMode(environment.colorScheme)].background else {
-            return base
-        }
-        let canvas = ParityTheme.originalCanvas.resolve(in: environment)
-        let chosen = background.color.resolve(in: environment)
-        func shifted(_ channel: Float, _ surface: Float, _ original: Float) -> Float {
-            max(0, min(1, channel + surface - original))
-        }
-        return Color.Resolved(red: shifted(chosen.red, base.red, canvas.red),
-                              green: shifted(chosen.green, base.green, canvas.green),
-                              blue: shifted(chosen.blue, base.blue, canvas.blue))
+        let mode = ThemeMode(environment.colorScheme)
+        let base = mode == .dark ? Self.dark : Self.light
+        guard let background = environment.yardletColorTheme[mode].background else { return base }
+        return ThemeSurface.shifted(base, onto: background, in: mode)
     }
 }
 

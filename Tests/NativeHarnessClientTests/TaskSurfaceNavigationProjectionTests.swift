@@ -7,6 +7,21 @@ final class TaskSurfaceNavigationProjectionTests: XCTestCase {
     private let browserKey = UUID(uuidString: "00000000-0000-0000-0000-0000000000B1")!
     private var browser: String { TaskSurfaceNavigationProjection.browserTabID(browserKey) }
 
+    /// A subtask asked to stop stays marked until the transcript no longer shows it running; while none is
+    /// marked, or each marked one still runs, nothing is reported stopped and the mark is left as it is.
+    @MainActor func testStoppingSubtasksEndOnlyWhenTheyNoLongerRun() {
+        func subtask(_ id: String) -> HarnessActivity {
+            HarnessActivity(id: id, kind: "Agent", title: id,
+                            subtask: HarnessSubtaskReference(taskID: id, agentID: "agent", taskType: "local_agent"))
+        }
+        let transcript = TranscriptTurns([TranscriptEntry(content: .user(text: "Go")),
+                                          TranscriptEntry(content: .activity(subtask("running"), state: .running)),
+                                          TranscriptEntry(content: .activity(subtask("done"), state: .completed))])
+        XCTAssertEqual(TaskDetail.stoppedSubtasks([], in: transcript), [])
+        XCTAssertEqual(TaskDetail.stoppedSubtasks(["running"], in: transcript), [])
+        XCTAssertEqual(TaskDetail.stoppedSubtasks(["running", "done", "gone"], in: transcript), ["done", "gone"])
+    }
+
     func testLeftAndRightStayWithinSurfacePickerOrder() {
         XCTAssertEqual(
             TaskSurfaceNavigationProjection.targetSurfaceID(

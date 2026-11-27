@@ -47,15 +47,9 @@ enum ThemeContrast {
         return Double(min(opacity, 1))
     }
 
-    static func readableAccent(_ theme: MacColorTheme, in environment: EnvironmentValues) -> Color.Resolved {
-        let mode = ThemeMode(environment.colorScheme)
-        let accent = Color(nsColor: theme.accent(in: mode)).resolve(in: environment)
-        if accentReadsAsText(accent, in: environment) { return accent }
-        return (theme[mode].text?.color ?? .primary).resolve(in: environment)
-    }
-
-    private static func accentReadsAsText(_ accent: Color.Resolved, in environment: EnvironmentValues) -> Bool {
-        ThemeSurface.allCases.allSatisfy { ratio(accent, $0.resolve(in: environment)) >= 4.5 }
+    /// Whether `accent` keeps 4.5:1 over each of the theme's `surfaces`, so it can color text.
+    static func accentReadsAsText(_ accent: Color.Resolved, over surfaces: [Color.Resolved]) -> Bool {
+        surfaces.allSatisfy { ratio(accent, $0) >= 4.5 }
     }
 
     /// TextKit keeps an adaptive color, so the system accent can change while a message is open.
@@ -68,7 +62,8 @@ enum ThemeContrast {
             let accent = theme.accent(in: mode)
             var result = accent
             appearance.performAsCurrentDrawingAppearance {
-                if !accentReadsAsText(Color(nsColor: accent).resolve(in: environment), in: environment) {
+                let surfaces = ThemeResolution.current(in: environment).surfaces
+                if !accentReadsAsText(Color(nsColor: accent).resolve(in: environment), over: surfaces) {
                     result = theme[mode].text?.nsColor ?? .labelColor
                 }
             }
