@@ -150,12 +150,12 @@ struct ScheduledTaskEditor: View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(L10n.string("Time"))
             SentAttachmentFlow(spacing: 8, alignsTrailing: false) {
-                ForEach(draft.times.indices, id: \.self) { index in
+                ForEach(draft.timeRows) { row in
                     HStack(spacing: 4) {
-                        timePicker(index)
-                        if draft.times.count > 1 {
+                        timePicker(row)
+                        if draft.timeRows.count > 1 {
                             Button {
-                                draft.removeTime(at: index)
+                                draft.removeTime(row.id)
                             } label: {
                                 Image(systemName: "minus.circle")
                                     .foregroundStyle(.secondary)
@@ -179,17 +179,15 @@ struct ScheduledTaskEditor: View {
         }
     }
 
-    private func timePicker(_ index: Int) -> some View {
+    private func timePicker(_ row: ScheduleDraft.TimeRow) -> some View {
         DatePicker(L10n.string("Time"), selection: Binding(
             get: {
-                let time = draft.times.indices.contains(index) ? draft.times[index] : ScheduleTime(hour: 9, minute: 0)
-                return calendar.date(bySettingHour: time.hour, minute: time.minute, second: 0,
-                                     of: calendar.startOfDay(for: now())) ?? now()
+                calendar.date(bySettingHour: row.time.hour, minute: row.time.minute, second: 0,
+                              of: calendar.startOfDay(for: now())) ?? now()
             },
             set: { date in
-                guard draft.times.indices.contains(index) else { return }
                 let parts = calendar.dateComponents([.hour, .minute], from: date)
-                draft.times[index] = ScheduleTime(hour: parts.hour ?? 0, minute: parts.minute ?? 0)
+                draft.setTime(ScheduleTime(hour: parts.hour ?? 0, minute: parts.minute ?? 0), of: row.id)
             }), displayedComponents: .hourAndMinute)
             .datePickerStyle(.compact)
             .labelsHidden()

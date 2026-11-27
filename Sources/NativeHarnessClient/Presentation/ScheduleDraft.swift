@@ -23,12 +23,20 @@ struct ScheduleDraft: Equatable {
         case chat
     }
 
+    /// One of the editor's times of day. Its id stays with it while times are added and removed, so each
+    /// picker stays with its time, and no later row takes it.
+    struct TimeRow: Identifiable, Equatable {
+        let id: Int
+        var time: ScheduleTime
+    }
+
     var name = ""
     var prompt = ""
     var kind = Kind.daily
     /// The daily and weekly trigger's times of day, at least one, as the editor lists them; the trigger
     /// keeps them earliest first.
-    var times = [ScheduleTime(hour: 9, minute: 0)]
+    private(set) var timeRows = [TimeRow(id: 0, time: ScheduleTime(hour: 9, minute: 0))]
+    private var nextTimeRowID = 1
     /// The weekly trigger's days, and the days an interval runs on (all when it is every day).
     var days = ScheduleWeekday.weekdays
     var intervalDays = ScheduleWeekday.everyDay
@@ -97,6 +105,15 @@ struct ScheduleDraft: Equatable {
         parentTaskID = destination.parentTaskID
     }
 
+    /// The times in the editor's order. Setting them starts the rows afresh.
+    var times: [ScheduleTime] {
+        get { timeRows.map(\.time) }
+        set {
+            timeRows = newValue.enumerated().map { TimeRow(id: $0.offset, time: $0.element) }
+            nextTimeRowID = newValue.count
+        }
+    }
+
     /// The time Add time adds: an hour after the latest time, at its minute, or the next hour after it the list
     /// does not have yet. Nil once there are `ScheduleTrigger.maxTimes`, which also turns Add time off.
     var nextTime: ScheduleTime? {
@@ -108,13 +125,19 @@ struct ScheduleDraft: Equatable {
 
     mutating func addTime() {
         guard let next = nextTime else { return }
-        times.append(next)
+        timeRows.append(TimeRow(id: nextTimeRowID, time: next))
+        nextTimeRowID += 1
     }
 
     /// Removes a time, but never the last one.
-    mutating func removeTime(at index: Int) {
-        guard times.count > 1, times.indices.contains(index) else { return }
-        times.remove(at: index)
+    mutating func removeTime(_ id: TimeRow.ID) {
+        guard timeRows.count > 1 else { return }
+        timeRows.removeAll { $0.id == id }
+    }
+
+    mutating func setTime(_ time: ScheduleTime, of id: TimeRow.ID) {
+        guard let index = timeRows.firstIndex(where: { $0.id == id }) else { return }
+        timeRows[index].time = time
     }
 
     func trigger(now: Date, calendar: Calendar = .autoupdatingCurrent) -> ScheduleTrigger {

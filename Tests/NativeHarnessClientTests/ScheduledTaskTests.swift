@@ -851,8 +851,24 @@ final class ScheduledTaskTests: XCTestCase {
         XCTAssertEqual(adding.trigger(now: now, calendar: seoul), .daily([
             ScheduleTime(hour: 0, minute: 30), ScheduleTime(hour: 1, minute: 30), ScheduleTime(hour: 23, minute: 30),
         ]), "Saved earliest first")
-        for _ in 0..<3 { adding.removeTime(at: 0) }
+        for _ in 0..<3 { adding.removeTime(adding.timeRows[0].id) }
         XCTAssertEqual(adding.times, [ScheduleTime(hour: 1, minute: 30)], "The last time stays")
+
+        // Each time keeps its row, so a picker stays with its time: removing an earlier time leaves the other
+        // rows' ids as they were, and a new row never takes an old row's id.
+        var rows = ScheduleDraft(now: now, calendar: seoul)
+        rows.addTime()
+        rows.addTime()
+        let ids = rows.timeRows.map(\.id)
+        XCTAssertEqual(Set(ids).count, 3)
+        rows.removeTime(ids[0])
+        XCTAssertEqual(rows.timeRows.map(\.id), Array(ids[1...]))
+        XCTAssertEqual(rows.times, [ScheduleTime(hour: 10, minute: 0), ScheduleTime(hour: 11, minute: 0)])
+        rows.removeTime(ids[2])
+        rows.addTime()
+        XCTAssertFalse(ids.contains(rows.timeRows[1].id))
+        rows.setTime(ScheduleTime(hour: 8, minute: 15), of: ids[1])
+        XCTAssertEqual(rows.times, [ScheduleTime(hour: 8, minute: 15), ScheduleTime(hour: 11, minute: 0)])
 
         // A schedule holds at most 24 times; Add time stops there, and none or more is a problem to fix.
         var full = ScheduleDraft(now: now, calendar: seoul, harness: .claudeCode)
