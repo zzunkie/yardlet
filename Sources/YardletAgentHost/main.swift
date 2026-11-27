@@ -124,6 +124,14 @@ func bundle(of executable: URL) -> (url: URL, depth: Int) {
     return (url, executable.pathComponents.filter { $0.hasSuffix(".app") }.count)
 }
 
+/// The kind of the file at `url` itself, not of one a link there leads to, which a path ending in a slash would follow.
+func kind(of url: URL) -> mode_t? {
+    var path = url.path(percentEncoded: false)
+    while path.count > 1, path.hasSuffix("/") { path.removeLast() }
+    var attributes = stat()
+    return lstat(path, &attributes) == 0 ? attributes.st_mode & S_IFMT : nil
+}
+
 func hash(_ text: String) -> String {
     var value: UInt64 = 0xcbf2_9ce4_8422_2325
     for byte in text.utf8 { value = (value ^ UInt64(byte)) &* 0x100_0000_01b3 }
@@ -153,9 +161,8 @@ func copyOutsideTheApp() -> URL {
         fail("cannot read its own signature")
     }
     func isValid() -> Bool {
-        var attributes = stat()
         // The copy itself, not a link to elsewhere.
-        guard lstat(folder.path(percentEncoded: false), &attributes) == 0, attributes.st_mode & S_IFMT == S_IFDIR else { return false }
+        guard kind(of: folder) == S_IFDIR, kind(of: copy) == (inBundle ? S_IFDIR : S_IFREG) else { return false }
         var code: SecStaticCode?
         guard SecStaticCodeCreateWithPath(copy as CFURL, [], &code) == errSecSuccess, let code else { return false }
         return SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: kSecCSStrictValidate), requirement) == errSecSuccess
@@ -269,8 +276,11 @@ func host(_ launch: Launch) -> Never {
     sigprocmask(SIG_UNBLOCK, &blocked, nil)
     // The program has the pipes; Yardlet sees them end with it, not with this process.
     let null = open("/dev/null", O_RDWR)
-    dup2(null, STDIN_FILENO)
-    dup2(null, STDOUT_FILENO)
+    if null >= 0 {
+        dup2(null, STDIN_FILENO)
+        dup2(null, STDOUT_FILENO)
+        if null > STDERR_FILENO { close(null) }
+    }
     var status: Int32 = 0
     while waitpid(program, &status, 0) == -1 {
         guard errno == EINTR else { fail("lost the program: \(String(cString: strerror(errno)))") }

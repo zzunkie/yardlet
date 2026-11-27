@@ -104,7 +104,7 @@ struct CLIUpdatePlan: Equatable, Sendable {
     }
 
     var versionCommand: CLICommand {
-        CLICommand(executable: launcher, arguments: ["--version"], timeout: Self.versionTimeout)
+        CLICommand(executable: launcher, arguments: ["--version"], timeout: Self.versionTimeout, asAgent: true)
     }
 
     /// The commands that look for a newer version without installing one; the last one's output
@@ -125,7 +125,9 @@ struct CLIUpdatePlan: Equatable, Sendable {
         case let .npmGlobal(package, npm, _):
             return [CLICommand(executable: npm, arguments: ["view", package, "version", "--json"], timeout: Self.checkTimeout)]
         case let .selfUpdater(updater):
-            return updater.checkArguments.map { [CLICommand(executable: launcher, arguments: $0, timeout: Self.checkTimeout)] } ?? []
+            return updater.checkArguments.map {
+                [CLICommand(executable: launcher, arguments: $0, timeout: Self.checkTimeout, asAgent: true)]
+            } ?? []
         case .appBundled, .manual:
             return []
         }
@@ -145,7 +147,7 @@ struct CLIUpdatePlan: Equatable, Sendable {
             return CLICommand(executable: npm, arguments: ["install", "--global", "\(package)@latest"],
                 timeout: Self.updateTimeout)
         case let .selfUpdater(updater):
-            return CLICommand(executable: launcher, arguments: updater.updateArguments, timeout: Self.updateTimeout)
+            return CLICommand(executable: launcher, arguments: updater.updateArguments, timeout: Self.updateTimeout, asAgent: true)
         case .appBundled, .manual:
             return nil
         }

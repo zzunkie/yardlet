@@ -43,13 +43,19 @@ enum AgentLaunch {
             environment: process.environment ?? ProcessInfo.processInfo.environment,
             directory: (process.currentDirectoryURL ?? URL(filePath: FileManager.default.currentDirectoryPath))
                 .path(percentEncoded: false)))
+        var code: SecStaticCode?
+        var requirement: SecRequirement?
+        guard SecStaticCodeCreateWithPath(helper as CFURL, [], &code) == errSecSuccess, let code,
+              SecCodeCopyDesignatedRequirement(code, [], &requirement) == errSecSuccess, let requirement else {
+            throw POSIXError(.EBADEXEC)
+        }
         try AgentHostLaunches.shared.listen()
         // The helper itself needs neither: they are the program's, which the helper asks for.
         process.executableURL = helper
         process.arguments = ["--host"]
         process.environment = [:]
         process.currentDirectoryURL = URL(filePath: "/")
-        try AgentHostLaunches.shared.start(launch) {
+        try AgentHostLaunches.shared.start(launch, for: requirement) {
             try process.run()
             return process.processIdentifier
         }
@@ -77,7 +83,8 @@ enum AgentLaunch {
 
 /// Where the copies of Yardlet Agents that Yardlet starts ask what to run: a Unix socket in the user's temporary folder,
 /// named for Yardlet's process. Yardlet answers each helper process it started once, with the launch it was started
-/// for, and nothing else: a helper some other program started gets no answer and runs nothing.
+/// for, and nothing else: a helper some other program started, or a process of Yardlet's running other code than the
+/// helper's, gets no answer and runs nothing.
 final class AgentHostLaunches: @unchecked Sendable {
     struct Launch: Codable {
         var executable: String
@@ -89,19 +96,20 @@ final class AgentHostLaunches: @unchecked Sendable {
     static let shared = AgentHostLaunches()
 
     private let condition = NSCondition()
-    /// The launches not yet asked for, by the helper's process, with when each was started.
-    private var launches: [pid_t: (launch: Data, started: ContinuousClock.Instant)] = [:]
+    /// The launches not yet asked for, by the helper's process, with the requirement the helper's code meets and when
+    /// each was started.
+    private var launches: [pid_t: (launch: Data, helper: SecRequirement, started: ContinuousClock.Instant)] = [:]
     /// Helpers being started, whose launch is not recorded yet.
     private var starting = 0
     private var listener: Int32 = -1
     /// How long a helper has to ask after it starts, and the longest an answer waits for its launch to be recorded.
     private let patience = Duration.seconds(10)
 
-    /// The socket's path for the Yardlet process `process`.
-    static func socketPath(for process: pid_t) -> String {
+    /// The socket's path for the Yardlet process `process`; nil when macOS names no temporary folder for the user.
+    static func socketPath(for process: pid_t) -> String? {
         var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
-        let length = confstr(_CS_DARWIN_USER_TEMP_DIR, &buffer, buffer.count)
-        let folder = length > 0 ? String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self) : "/tmp/"
+        guard confstr(_CS_DARWIN_USER_TEMP_DIR, &buffer, buffer.count) > 0 else { return nil }
+        let folder = String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
         return "\(folder)Yardlet Agents \(process).socket"
     }
 
@@ -110,7 +118,7 @@ final class AgentHostLaunches: @unchecked Sendable {
         condition.lock()
         defer { condition.unlock() }
         guard listener < 0 else { return }
-        let path = Self.socketPath(for: getpid())
+        guard let path = Self.socketPath(for: getpid()) else { throw POSIXError(.ENOENT) }
         let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
@@ -146,8 +154,9 @@ final class AgentHostLaunches: @unchecked Sendable {
         }
     }
 
-    /// Starts a helper with `start`, which returns its process, and records the launch it will ask for.
-    func start(_ launch: Data, with start: () throws -> pid_t) throws {
+    /// Starts a helper with `start`, which returns its process, and records the launch it will ask for, given only to a
+    /// process whose code meets `helper`.
+    func start(_ launch: Data, for helper: SecRequirement, with start: () throws -> pid_t) throws {
         condition.lock()
         starting += 1
         condition.unlock()
@@ -161,7 +170,7 @@ final class AgentHostLaunches: @unchecked Sendable {
         condition.lock()
         let now = ContinuousClock.now
         launches = launches.filter { now - $0.value.started < patience }
-        launches[process] = (launch, now)
+        launches[process] = (launch, helper, now)
         condition.unlock()
     }
 
@@ -172,6 +181,7 @@ final class AgentHostLaunches: @unchecked Sendable {
                 if errno == EINTR || errno == ECONNABORTED { continue }
                 return
             }
+            _ = fcntl(connection, F_SETFD, FD_CLOEXEC)
             DispatchQueue.global(qos: .userInitiated).async { [self] in answer(connection) }
         }
     }
@@ -181,6 +191,9 @@ final class AgentHostLaunches: @unchecked Sendable {
         defer { close(connection) }
         var on: Int32 = 1
         setsockopt(connection, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+        var wait = timeval(tv_sec: Int(patience.components.seconds), tv_usec: 0)
+        setsockopt(connection, SOL_SOCKET, SO_RCVTIMEO, &wait, socklen_t(MemoryLayout<timeval>.size))
+        setsockopt(connection, SOL_SOCKET, SO_SNDTIMEO, &wait, socklen_t(MemoryLayout<timeval>.size))
         var process: pid_t = 0
         var length = socklen_t(MemoryLayout<pid_t>.size)
         var info = proc_bsdinfo()
@@ -194,11 +207,10 @@ final class AgentHostLaunches: @unchecked Sendable {
         while launches[process] == nil, starting > 0, condition.wait(until: deadline) {}
         let recorded = launches.removeValue(forKey: process)
         condition.unlock()
-        guard let recorded, ContinuousClock.now - recorded.started < patience else { return }
+        guard let recorded, ContinuousClock.now - recorded.started < patience,
+              runs(recorded.helper, connection) else { return }
         let launch = recorded.launch
         // The helper asks once it has checked who listens here; the connection stays open until then.
-        var wait = timeval(tv_sec: Int(patience.components.seconds), tv_usec: 0)
-        setsockopt(connection, SOL_SOCKET, SO_RCVTIMEO, &wait, socklen_t(MemoryLayout<timeval>.size))
         var ask: UInt8 = 0
         guard read(connection, &ask, 1) == 1 else { return }
         launch.withUnsafeBytes { bytes in
@@ -210,5 +222,17 @@ final class AgentHostLaunches: @unchecked Sendable {
                 offset += written
             }
         }
+    }
+
+    /// Whether the process on `connection` runs code that meets `requirement`, the helper's designated requirement.
+    /// It is checked on the code the process runs, so a copy changed after the helper checked it gets nothing.
+    private func runs(_ requirement: SecRequirement, _ connection: Int32) -> Bool {
+        var token = audit_token_t()
+        var length = socklen_t(MemoryLayout<audit_token_t>.size)
+        var code: SecCode?
+        guard getsockopt(connection, SOL_LOCAL, LOCAL_PEERTOKEN, &token, &length) == 0,
+              SecCodeCopyGuestWithAttributes(nil, [kSecGuestAttributeAudit: withUnsafeBytes(of: &token) { Data($0) }] as CFDictionary,
+                                             [], &code) == errSecSuccess, let code else { return false }
+        return SecCodeCheckValidity(code, [], requirement) == errSecSuccess
     }
 }

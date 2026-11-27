@@ -2,6 +2,7 @@ import AppKit
 import Darwin
 import Foundation
 import os
+import Security
 import SwiftTerm
 import XCTest
 @testable import NativeHarnessClient
@@ -329,6 +330,33 @@ final class NativeSurfaceRuntimeTests: XCTestCase {
         defer { if own.isRunning { NativeProcessTree.terminate(process: own) } }
         try await waitUntil { Self.executablePath(of: own.processIdentifier) == "/bin/sleep" }
         XCTAssertEqual(DisclaimedSpawn.responsibleProcess(for: own.processIdentifier), own.processIdentifier)
+
+        // A process Yardlet started for a launch gets it only when it runs the code the launch was recorded for.
+        func ask(asCodeOf program: URL) throws -> String {
+            var code: SecStaticCode?
+            var requirement: SecRequirement?
+            XCTAssertEqual(SecStaticCodeCreateWithPath(program as CFURL, [], &code), errSecSuccess)
+            XCTAssertEqual(SecCodeCopyDesignatedRequirement(try XCTUnwrap(code), [], &requirement), errSecSuccess)
+            let asking = Process()
+            let input = Pipe()
+            let output = Pipe()
+            asking.executableURL = URL(filePath: "/usr/bin/nc")
+            asking.arguments = ["-U", try XCTUnwrap(AgentHostLaunches.socketPath(for: getpid()))]
+            asking.standardInput = input
+            asking.standardOutput = output
+            try AgentHostLaunches.shared.listen()
+            try AgentHostLaunches.shared.start(Data("launch".utf8), for: try XCTUnwrap(requirement)) {
+                try asking.run()
+                return asking.processIdentifier
+            }
+            try input.fileHandleForWriting.write(contentsOf: Data([1]))
+            try input.fileHandleForWriting.close()
+            let answer = output.fileHandleForReading.readDataToEndOfFile()
+            asking.waitUntilExit()
+            return String(decoding: answer, as: UTF8.self)
+        }
+        XCTAssertEqual(try ask(asCodeOf: URL(filePath: "/usr/bin/nc")), "launch")
+        XCTAssertEqual(try ask(asCodeOf: helper), "", "a process running other code than the helper's gets nothing")
     }
 
     private static func executablePath(of process: pid_t) -> String? {

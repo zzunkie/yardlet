@@ -411,8 +411,9 @@ YARDLET_SIGNING_IDENTITY="Developer ID Application: <name> (<team>)" ./scripts/b
   its `Info.plist`.
 - Yardlet Agents (`Contents/Helpers/Yardlet Agents.app`) is signed with `<app identifier>.agents` as its
   identifier. It takes each program, with its arguments, environment and folder, from the Yardlet that
-  started it, over a local socket; signed by a team, it takes them only from the app with that identifier
-  signed by the same team. An agent whose own signature has a team and the Apple Events entitlement
+  started it, over a local socket. Yardlet gives them only to a process running the helper's own code, by
+  its designated requirement; signed by a team, the helper takes them only from the app with that
+  identifier signed by the same team. An agent whose own signature has a team and the Apple Events entitlement
   (Claude Code) starts responsible for itself instead, asking in its own name. A build without the
   helper starts agents as Yardlet's own children.
 - The lid helper behind Settings › General › "Keep tasks working with the lid closed"
