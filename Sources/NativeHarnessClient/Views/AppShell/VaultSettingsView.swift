@@ -5,7 +5,8 @@ import UniformTypeIdentifiers
 /// Settings → Passwords (docs/BROWSER_VAULT_DESIGN.md §8.1, §9, §14, §16): the switch that gives tasks
 /// `browser_fill_credential`, a search over the lists, the current two-factor codes as an authenticator app lists
 /// them, the codes with no site to link to theirs, the saved items with their sites, kinds, agent use and last use,
-/// adding one, importing a browser's CSV export or an authenticator app's export QR code, and emptying the vault.
+/// adding one, importing a browser's CSV export or an authenticator app's export QR code, exporting the sign-ins to
+/// CSV, and emptying the vault.
 /// "Import from Another Browser…" opens the browser panel's import sheet (docs/BROWSER_SESSION_ISOLATION.md 10), which
 /// brings sign-ins into the default profile, with no site chosen first. Rows follow Settings → General and Connectors.
 struct VaultSettingsView: View {
@@ -67,6 +68,9 @@ struct VaultSettingsView: View {
                     Group {
                         Button(L10n.string("Import QR Code…"), action: importQRCodes)
                         Button(L10n.string("Import CSV…"), action: importCSV)
+                        if !vault.items.isEmpty {
+                            Button(L10n.string("Export CSV…"), action: exportCSV)
+                        }
                         Button {
                             editing = Editing(item: nil)
                         } label: {
@@ -335,6 +339,34 @@ struct VaultSettingsView: View {
         let text = (try? String(contentsOf: url, usedEncoding: &encoding)) ?? ""
         let count = vault.importSignIns(VaultCSVImport.entries(text, suffixes: vault.suffixes))
         imported = Imported(title: L10n.format("Imported %lld sign-ins.", Int64(count)), count: count, files: [url])
+    }
+
+    /// Every sign-in and two-factor code to a CSV file another password manager imports (design §8.1): Touch ID
+    /// first, then where to save it, as a file only the person's account may read. Passkeys stay behind.
+    private func exportCSV() {
+        Task { @MainActor in
+            failure = nil
+            let export: VaultCenter.SignInExport
+            do {
+                guard let written = try await vault.exportSignIns(choosingFile: {
+                    let panel = NSSavePanel()
+                    panel.allowedContentTypes = [.commaSeparatedText]
+                    panel.nameFieldStringValue = L10n.string("Yardlet Passwords.csv")
+                    panel.message = L10n.string("Passkeys are not included. Anyone who can open the file can read the passwords in it.")
+                    panel.prompt = L10n.string("Export")
+                    return panel.runModal() == .OK ? panel.url : nil
+                }) else { return }
+                export = written
+            } catch {
+                failure = error.localizedDescription
+                return
+            }
+            let title = export.unreadable > 0
+                ? L10n.format("Exported %lld sign-ins. %lld could not be read and were left out.",
+                              Int64(export.count), Int64(export.unreadable))
+                : L10n.format("Exported %lld sign-ins.", Int64(export.count))
+            imported = Imported(title: title, count: 0, files: [])
+        }
     }
 
     /// Pictures of QR codes: an authenticator app's export (Google Authenticator's Transfer accounts, one

@@ -169,6 +169,8 @@ enum SettingsSearch {
                   keywords: "Chrome, Safari, Firefox, Whale, Edge, Arc, import passwords, browser sign-ins"),
         .pageItem(Anchor.importLogins, in: .vault, title: "Import CSV…", keywords: "CSV, 1Password, Bitwarden, export file"),
         .pageItem(Anchor.importLogins, in: .vault, title: "Import QR Code…", keywords: "QR code, authenticator app"),
+        .pageItem(Anchor.importLogins, in: .vault, title: "Export CSV…",
+                  keywords: "export passwords, back up passwords, move to another password manager"),
         .pageItem(Anchor.importLogins, in: .vault, title: "Add sign-in", keywords: "new password, save password"),
         .pageItem(Anchor.twoFactorCodes, in: .vault, title: "Two-factor codes",
                   keywords: "2FA, OTP, verification code, authenticator"),
