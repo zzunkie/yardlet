@@ -47,7 +47,7 @@ struct TaskSuggestionOptionsMenus {
     var place: Place
     /// A project's `Item.id`, or nil for a chat.
     var choosePlace: (String?) -> Void
-    /// Choose project…: a folder from this Mac's disk. Nil where the folders are another Mac's.
+    /// Choose folder…: a folder from this Mac's disk. Nil where the folders are another Mac's.
     var chooseFolder: (() -> Void)? = nil
     var run: Run?
     var chooseWorktree: (Bool) -> Void = { _ in }

@@ -207,7 +207,7 @@ final class ImportConversationPane {
         showPickers()
     }
 
-    /// Choose project…: a folder from Windows' own dialog, as New task's Choose project… chooses one.
+    /// Choose folder…: a folder from Windows' own dialog, as New task's Choose folder… chooses one.
     private func chooseFolder() {
         guard let chosen = WindowsFolderPicker.chooseFolder(window: windowHandle(), title: L10n.string("Choose project"))
         else { return }

@@ -545,8 +545,8 @@ final class NewTaskPane {
         return menu
     }
 
-    /// Choose project…: a folder from Windows' own dialog, in the project that holds it or as a folder the task's
-    /// start makes a project, as the Mac's Choose project… does.
+    /// Choose folder…: a folder from Windows' own dialog, in the project that holds it or as a chat in that folder,
+    /// as the Mac's Choose folder… does.
     private func chooseFolder() {
         guard let folder = WindowsFolderPicker.chooseFolder(window: windowHandle(), title: L10n.string("Choose project"))
         else { return }

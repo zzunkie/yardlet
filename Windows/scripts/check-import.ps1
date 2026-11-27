@@ -1,6 +1,6 @@
 # Imports a conversation that the stand-in harness check-harness.ps1 installed (fake-harness/, an ACP harness the app
 # knows as Kimi Code) saved before the app saw it: Import conversation from New task's link, the harness in its dialog,
-# a folder chosen in Windows' own folder dialog through the project menu's Choose project..., the conversation the
+# a folder chosen in Windows' own folder dialog through the project menu's Choose folder..., the conversation the
 # stand-in lists for that folder, and its turns drawn in
 # the main window with the task's row chosen once it is imported. The stand-in lists it only for a folder written as
 # Windows writes one, as an agent compares the folder it saved a session in, and replays it when it loads. It drives
@@ -246,7 +246,7 @@ $main = $UIA::FromHandle($process.MainWindowHandle)
 $homeItem = Wait-For { Find-Named $main 'Home' $Types::ListItem } 15
 if (-not $homeItem) { Finish 'no Home item' }
 $homeItem.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
-$chooseName = 'Choose project' + [char]0x2026
+$chooseName = 'Choose folder' + [char]0x2026
 $summary.importTries = 0
 $opened = $false
 $deadline = (Get-Date).AddSeconds(30)
@@ -266,13 +266,13 @@ if (-not $listed) { Finish "$Harness is not listed" }
 $picked = Wait-For { $found = Find-InApp $Harness $Types::Button; if ($found) { Invoke-Element $found }
     (Read-Events) -contains "import harness: $Harness" } 15
 if (-not $picked) { Finish "$Harness cannot be chosen" }
-# Choose project... is the last item of the project's menu.
+# Choose folder... is the last item of the project's menu.
 $choose = Wait-For { $picker = Find-InAppById 'ImportProject'; if ($picker) { Invoke-Element $picker }
     Wait-For { Find-InApp $chooseName $Types::MenuItem } 3 } 15
-if (-not $choose) { Finish 'no Choose project in the project menu' }
+if (-not $choose) { Finish 'no Choose folder in the project menu' }
 Save-Screen 'pane'
 
-# Choose project... opens Windows' folder dialog, which runs modally on the window's thread until it closes. The pane
+# Choose folder... opens Windows' folder dialog, which runs modally on the window's thread until it closes. The pane
 # opens it after the click returns, so invoking the button through UI Automation returns at once (a click that opened
 # it within the call left UI Automation waiting, seen on the runner). If no dialog comes, the button is pressed with
 # the keyboard, as a person presses it.
