@@ -52,6 +52,13 @@ final class BrowserDevToolsClient {
     var onAnswer: ((String) -> Void)?
     /// Called with every event as it arrives (the panel's vault watch).
     private var eventObservers: [UUID: (String, JSONValue) -> Void] = [:]
+    /// Called when a `Runtime.bindingCalled` arrives on the tab's session or any attached OOPIF session. The vault's
+    /// panel observer reads it (and the OOPIF's session id, which the page cannot forge) and refuses an event from an
+    /// OOPIF whose chain is not same-site to the main frame.
+    var onVaultBinding: ((JSONValue, String?) -> Void)?
+    /// Called with the session id of every iframe `Target.attachedToTarget` the client sees, including nested OOPIFs
+    /// whose attach arrives on an OOPIF session. The vault installs the watch on each attached OOPIF this way.
+    var onFrameAttached: ((String) -> Void)?
 
     func observeEvents(_ observer: @escaping (String, JSONValue) -> Void) -> UUID {
         let token = UUID()
@@ -133,11 +140,12 @@ final class BrowserDevToolsClient {
             let params = value["params"] ?? .null
             let session = value["sessionId"]?.stringValue
             followFrameSessions(method, params, from: session)
-            // The vault watch runs in every attached session, including OOPIFs, so its binding reports have to reach
-            // the observer whichever session carries them (Chromium delivers `Runtime.bindingCalled` on the session
-            // whose world ran the call; a cross-site OOPIF's answer is already enforced by `showing`/`fillFrames`).
+            // `Runtime.bindingCalled` from any attached session goes to the vault observer alone, with the session id
+            // the CDP envelope carried (a page's own script cannot write that id). The observer refuses an event from
+            // a session whose chain is not same-site to the main frame, so a cross-site OOPIF cannot push a save or a
+            // typed-secret notice onto the main frame.
             if method == "Runtime.bindingCalled" {
-                eventObservers.values.forEach { $0(method, params) }
+                onVaultBinding?(params, session)
                 return
             }
             guard session == nil else { return }
@@ -162,6 +170,9 @@ final class BrowserDevToolsClient {
             if attachesFrames {
                 Task { [weak self] in _ = try? await self?.send("Target.setAutoAttach", Self.frameAutoAttach, session: id) }
             }
+            // A nested OOPIF attaches on its parent OOPIF's session (`parent != nil`), so the vault installs the watch
+            // on it here too; the main-session case stays the same.
+            onFrameAttached?(id)
         case "Target.detachedFromTarget":
             guard let id = params["sessionId"]?.stringValue else { return }
             // A frame's own frames go with it.

@@ -2237,6 +2237,110 @@ final class BrowserAgentToolsTests: XCTestCase {
         XCTAssertEqual(withFirst.first?.name, "Z Later", "the `first:` item leads the order")
     }
 
+    /// `showing(_:cdp:sites:)` matches a report from an OOPIF the same way it matches a report from a same-process
+    /// subframe: when the OOPIF's own URL equals the report's `page`, the main-frame address comes back (so the bar's
+    /// state keeps a single address even across sessions); when the OOPIF is cross-site the `fillFrames` loop skips
+    /// it, and the report reads as not shown. The test builds a tab with a same-site OOPIF and then a cross-site
+    /// OOPIF (both on a session of their own) and runs `showing` end-to-end against both.
+    func testShowingMatchesSameSiteOOPIFReportsAndRefusesCrossSite() async throws {
+        let mainTree: JSONValue = .object([
+            "frameTree": .object([
+                "frame": .object([
+                    "id": .string("main"), "loaderId": .string("doc-main"),
+                    "url": .string("https://account.example.com/"),
+                    "securityOrigin": .string("https://account.example.com")
+                ]),
+                "childFrames": .array([])
+            ])
+        ])
+        cdp.responders["Page.getFrameTree"] = { _ in mainTree }
+        // The DOM fallback that PR #1117 added: `DOM.getFrameOwner` + `DOM.getDocument` link the OOPIF to the main.
+        cdp.responders["DOM.getFrameOwner"] = { _ in .object(["backendNodeId": .integer(42)]) }
+        cdp.responders["DOM.getDocument"] = { _ in
+            .object(["root": .object([
+                "nodeType": .integer(9), "backendNodeId": .integer(1),
+                "children": .array([.object([
+                    "nodeType": .integer(1), "nodeName": .string("IFRAME"),
+                    "backendNodeId": .integer(42), "frameId": .string("signin")
+                ])])
+            ])])
+        }
+
+        // Same-site OOPIF: `showing` returns the main frame's address so the bar's dismissed list carries one key.
+        cdp.frameSessions = [BrowserFrameSession(id: "s1", frameID: "signin", parent: nil)]
+        cdp.sessionResponder = { session, method, _ in
+            guard session == "s1", method == "Page.getFrameTree" else { throw BrowserDevToolsError.closed }
+            return .object(["frameTree": .object(["frame": .object([
+                "id": .string("signin"), "loaderId": .string("doc-signin"),
+                "url": .string("https://idmsa.example.com/signin"),
+                "securityOrigin": .string("https://idmsa.example.com")
+            ])])])
+        }
+        let sameSite = await VaultPageScripts.showing("https://idmsa.example.com/signin", cdp,
+                                                      sites: [["example.com"]], timeout: .seconds(2))
+        XCTAssertEqual(sameSite, "https://account.example.com/",
+                       "a same-site OOPIF's report matches as a frame of the tab and returns the main-frame address")
+
+        // Cross-site OOPIF: `fillFrames` drops it and the report reads as not shown anywhere.
+        cdp.frameSessions = [BrowserFrameSession(id: "s2", frameID: "signin", parent: nil)]
+        cdp.sessionResponder = { session, method, _ in
+            guard session == "s2", method == "Page.getFrameTree" else { throw BrowserDevToolsError.closed }
+            return .object(["frameTree": .object(["frame": .object([
+                "id": .string("signin"), "loaderId": .string("doc-signin"),
+                "url": .string("https://login.foreign.test/"),
+                "securityOrigin": .string("https://login.foreign.test")
+            ])])])
+        }
+        let crossSite = await VaultPageScripts.showing("https://login.foreign.test/", cdp,
+                                                       sites: [["example.com"]], timeout: .seconds(2))
+        XCTAssertNil(crossSite, "a cross-site OOPIF's report never matches the tab for an item's sites")
+    }
+
+    /// Three pins that cover the OOPIF watch path a page's own JavaScript could otherwise exploit:
+    /// 1. `installWatch` asks the browser to attach every out-of-process iframe (`attachFrames`), since the attach
+    ///    is what makes the OOPIF session reachable at all — without it the watch runs only in the tab's own
+    ///    process and misses Apple's sign-in iframe entirely.
+    /// 2. `showing` reads every attached session (no `sessions: []` shortcut), so a same-site OOPIF matches as a
+    ///    frame of the tab and a cross-site OOPIF is still refused by `fillFrames`.
+    /// 3. The panel discards every event from an OOPIF whose chain to the main frame is not same-site, read from
+    ///    the CDP envelope's `sessionId` (which the page cannot write): `isSameSiteOOPIF` uses the same
+    ///    `VaultSite.matches` chain the key button fill does. A regression that drops the guard would silently let
+    ///    a cross-site OOPIF push a save or typed-secret notice onto the main frame's address.
+    func testOOPIFWatchAndCrossSiteGuardStayWired() throws {
+        let agentSource = try String(contentsOf: Self.sourceURL(for: "AgentTools/BrowserAgentVault.swift"), encoding: .utf8)
+        XCTAssertTrue(agentSource.contains("try? await cdp.attachFrames()"),
+                      "installWatch asks the client to attach every OOPIF before it installs the watch on each session")
+        XCTAssertTrue(agentSource.contains("for session in cdp.frameSessions"),
+                      "installWatch loops over every attached session and runs on each")
+
+        // `showing` reads every attached session; the shortcut that only read the tab's own process is gone.
+        XCTAssertTrue(agentSource.contains("try? await frames(cdp, timeout: timeout)"),
+                      "showing reads every attached session, including OOPIFs")
+        XCTAssertFalse(agentSource.contains("try? await frames(cdp, sessions: [], timeout: timeout)"),
+                       "showing no longer limits itself to the tab's own process")
+
+        let vaultPane = try String(contentsOf: Self.sourceURL(for: "Platform/macOS/BrowserHost/BrowserHostPaneVault.swift"),
+                                   encoding: .utf8)
+        XCTAssertTrue(vaultPane.contains("isSameSiteOOPIF(session:"),
+                      "pageSaid routes OOPIF events through the cross-site guard")
+        XCTAssertTrue(vaultPane.contains("VaultSite.matches([site], origins: [sessionFrame.origin] + around)"),
+                      "the OOPIF guard uses the same same-site check as fillFrames")
+        XCTAssertTrue(vaultPane.contains("if let session {") && vaultPane.contains("handleWatchFields(fields, on: tab)"),
+                      "every event from an OOPIF session is routed through the guard before reaching the handler")
+
+        // The dev-tools client forwards `Runtime.bindingCalled` (with its session id) to the vault observer alone,
+        // and forwards every iframe attach through `onFrameAttached` — the two hooks the panel listens on.
+        let client = try String(contentsOf: Self.sourceURL(for: "BrowserHost/BrowserDevToolsClient.swift"), encoding: .utf8)
+        XCTAssertTrue(client.contains("onVaultBinding?(params, session)") && client.contains("onFrameAttached?(id)"),
+                      "the dev-tools client exposes the vault binding and iframe attach callbacks")
+    }
+
+    private static func sourceURL(for relative: String) -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/NativeHarnessClient").appendingPathComponent(relative)
+    }
+
     /// `BrowserVaultSignInOffer` carries only `Sendable` leaves and stays `Equatable`, so SwiftUI redraws the bar
     /// only when a field of it changed. The tiny check pins both.
     func testSignInOfferEqualityAndIdentity() {

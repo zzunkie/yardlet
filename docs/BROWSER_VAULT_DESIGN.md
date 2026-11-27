@@ -484,8 +484,8 @@ one, shows only as "Passkey · made <date>", and it is not created here (section
   right-click "Use Strong Password".
 - **Sign-in focus (§6.1):** when an empty username, email or password field takes the focus on a site the vault has
   an item for, the bar above the page: one saved item reads "Sign in as ada on github.com? [Not Now] [Fill]" at the
-  username step (the item's username when it has one, else its name), or "Fill the password for “GitHub” on
-  github.com? [Not Now] [Fill]" at the password step; several items read "Sign in on github.com with a saved
+  username step (the item's username when it has one, else its name), or "Fill the password for ada on github.com?
+  [Not Now] [Fill]" at the password step; several items read "Sign in on github.com with a saved
   account? [Not Now] [Fill ▾]" with the accounts in the menu, in the order the key button's list uses
   (`VaultCenter.pickerItems`: last-used first, then by account name; an item the person filled at this sign-in's
   earlier step comes first — `BrowserVaultSignInStep`). Focus alone fills nothing — the person has to click Fill, so

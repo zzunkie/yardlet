@@ -167,26 +167,29 @@ extension BrowserHostPaneController {
         }
         // The watch tells of the person's sign-ins, which the vault offers to save.
         guard vault.isAllowedBuild && (vault.isEnabled || vault.isWalletEnabled) else { return }
-        let token = tab.devTools.observeEvents { [weak self, weak tab] method, params in
-            if method == "Runtime.bindingCalled", params["name"]?.stringValue == VaultPageScripts.offerBinding,
-               let tab, let payload = params["payload"]?.stringValue {
-                self?.pageSaid(payload, on: tab)
-                return
-            }
-            // An OOPIF that attaches after `installWatch` ran — Apple's `idmsa.apple.com` on `account.apple.com`, for
-            // one — needs the watch installed in its session too so its focusin and sign-in events reach the panel.
-            if method == "Target.attachedToTarget",
-               params["targetInfo"]?["type"]?.stringValue == "iframe",
-               let session = params["sessionId"]?.stringValue, let tab {
-                Task { await VaultPageScripts.installWatchForAttached(tab.devTools, session: session) }
-            }
+        // The vault binding carries the OOPIF's session id, read from the CDP envelope (not from the page's own
+        // script), so `pageSaid` can refuse an event from a session whose chain is not same-site to the main frame —
+        // the cross-site OOPIF defense this PR's second round added.
+        tab.devTools.onVaultBinding = { [weak self, weak tab] params, session in
+            guard params["name"]?.stringValue == VaultPageScripts.offerBinding,
+                  let tab, let payload = params["payload"]?.stringValue else { return }
+            self?.pageSaid(payload, session: session, on: tab)
         }
-        vaultWatch = (tab.id, token)
+        // A nested OOPIF attaches on its parent OOPIF's session (the dev-tools client forwards it through
+        // `onFrameAttached`), so the watch also goes into frames that come to life after `installWatch` ran.
+        tab.devTools.onFrameAttached = { [weak tab] session in
+            guard let tab else { return }
+            Task { await VaultPageScripts.installWatchForAttached(tab.devTools, session: session) }
+        }
+        vaultWatch = (tab.id, UUID())
         Task { await VaultPageScripts.installWatch(tab.devTools) }
     }
 
     func releaseVault(_ tab: BrowserTab) {
-        if let watch = vaultWatch, watch.tab == tab.id { tab.devTools.stopObservingEvents(watch.token) }
+        if let watch = vaultWatch, watch.tab == tab.id {
+            tab.devTools.onVaultBinding = nil
+            tab.devTools.onFrameAttached = nil
+        }
         vaultWatch = nil
         vaultOffer = nil
         vaultCodeOffer = nil
@@ -225,10 +228,38 @@ extension BrowserHostPaneController {
         if let offer = walletFillOffer, offer.page != address { walletFillOffer = nil }
     }
 
-    /// What the watch in the page saw (`VaultPageScripts.offerBinding`).
-    private func pageSaid(_ payload: String, on tab: BrowserTab) {
+    /// What the watch in the page saw (`VaultPageScripts.offerBinding`). `session` is the CDP session id of the frame
+    /// that sent the payload: `nil` is the tab's own session (the main frame or a same-process subframe), and anything
+    /// else is an attached out-of-process iframe. An OOPIF whose chain to the main frame is not same-site has every
+    /// event it sends discarded, so a cross-site OOPIF cannot push a save prompt, a typed-secret notice or a sign-in
+    /// focus onto the main frame's address.
+    private func pageSaid(_ payload: String, session: String?, on tab: BrowserTab) {
         guard let data = payload.data(using: .utf8),
               let fields = try? JSONDecoder().decode([String: String].self, from: data) else { return }
+        if let session {
+            Task { @MainActor [weak self] in
+                guard let self, await self.isSameSiteOOPIF(session: session, on: tab) else { return }
+                self.handleWatchFields(fields, on: tab)
+            }
+            return
+        }
+        handleWatchFields(fields, on: tab)
+    }
+
+    /// Whether an OOPIF whose own session id is `session` sits in a chain that is same-site to the tab's main frame:
+    /// every origin on the way (`origins(around:)`) and the OOPIF's own origin have to be pages of the main frame's
+    /// site (`VaultSite.matches`). A frame the browser does not describe, or a chain that reaches no main frame,
+    /// reads as not same-site — fail-closed, matching the rest of the vault.
+    private func isSameSiteOOPIF(session: String, on tab: BrowserTab) async -> Bool {
+        guard let frames = try? await VaultPageScripts.frames(tab.devTools, timeout: .seconds(5)),
+              let main = frames.first,
+              let sessionFrame = frames.first(where: { $0.session == session }),
+              let around = VaultPageScripts.origins(around: sessionFrame, in: frames),
+              let site = VaultSite.suggestion(for: main.origin, suffixes: vault.suffixes) else { return false }
+        return VaultSite.matches([site], origins: [sessionFrame.origin] + around)
+    }
+
+    private func handleWatchFields(_ fields: [String: String], on tab: BrowserTab) {
         switch fields["kind"] {
         case "codeField":
             codeFieldShown(on: tab, page: fields["page"] ?? "")

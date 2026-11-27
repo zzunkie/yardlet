@@ -661,15 +661,14 @@ enum VaultPageScripts {
               } else {
                 const ac = (e.target.getAttribute('autocomplete') || '').toLowerCase().split(/\\s+/);
                 // `one-time-code` on the autocomplete, and known search/filter words in the field's name or label,
-                // keep `signInFocus` off; the username pattern matches Apple's `#account_name_text_field` and the
-                // common "아이디"/"이메일" labels.
+                // keep `signInFocus` off; every branch is guarded by `textTypes` so that an input of type checkbox
+                // or radio (which a page could still mark `autocomplete="username"`) is never a sign-in field.
                 const isSearchy = /\\b(search|query|filter|find|lookup)\\b|검색|필터|찾기/i.test(codeFieldWords(e.target));
-                const looksLikeUsername = !ac.includes('one-time-code') && !isSearchy && (
-                  e.target.type === 'email'
-                  || ac.some(t => t === 'username' || t === 'email')
-                  || (textTypes.includes(e.target.type)
-                      && /user|e\\s?mail|login|account|아이디|이메일|계정/i.test(codeFieldWords(e.target)))
-                );
+                const looksLikeUsername = !ac.includes('one-time-code') && !isSearchy
+                  && textTypes.includes(e.target.type)
+                  && (e.target.type === 'email'
+                      || ac.some(t => t === 'username' || t === 'email')
+                      || /user|e\\s?mail|login|account|아이디|이메일|계정/i.test(codeFieldWords(e.target)));
                 if (looksLikeUsername) send({ kind: 'signInFocus', step: 'username', page: location.href });
               }
             }
@@ -1319,10 +1318,14 @@ enum VaultPageScripts {
 
     /// Starts the watch in a panel's tab: in every new document and in the one shown now.
     static func installWatch(_ cdp: any BrowserAgentCDP, timeout: Duration = .seconds(10)) async {
+        // Ask the browser to attach every out-of-process iframe (and nested ones in turn) to this client: without
+        // this, `cdp.frameSessions` is empty when a human opens a page in the panel, and the OOPIF watch never runs.
+        _ = try? await cdp.attachFrames()
         await installWatch(cdp, session: nil, timeout: timeout)
         // Each out-of-process iframe answers on a session of its own: the watch has to run in its world too so that
         // a focus or submit inside Apple's `idmsa.apple.com` reaches the panel. Cross-site OOPIFs still cannot raise
-        // a sign-in bar — `showing` and `fillFrames` enforce the same-site chain for every event the watch sends.
+        // a sign-in bar — `showing` and the panel's cross-site check enforce the same-site chain for every event
+        // the watch sends.
         for session in cdp.frameSessions {
             await installWatch(cdp, session: session.id, timeout: timeout)
         }
