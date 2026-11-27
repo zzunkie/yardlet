@@ -294,8 +294,9 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
 - **Notifications.** The engine decides when to notify by the Mac's rules (`AppModel+SystemNotifications.swift`): a
   task that waits for an approval, finished a turn the person asked for, or failed, while it is not the task the main
   window shows. `Platform/Windows/WindowsNotifications.swift` posts them as the Windows App SDK's app notifications:
-  none while a Yardlet window is in front, as the Mac shows none while Yardlet is active, an approval's with "Allow
-  once", withdrawn once its request is answered, and a click brings the main window forward and shows its task
+  none while a Yardlet window is in front (the Mac shows the ones that ask to while Yardlet is active,
+  `SystemNotification.showsWhileActive`), an approval's with "Allow once", withdrawn once its request is answered,
+  and a click brings the main window forward and shows its task
   (`Platform/Windows/WindowsApplicationAttention.swift`). Whether they show is the person's switch in Windows'
   Settings › System › Notifications, which the app reads; Windows asks no permission first. A new approval while
   Yardlet is behind flashes the main window's taskbar button until it comes forward, as the Mac bounces its Dock icon.

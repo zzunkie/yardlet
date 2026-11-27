@@ -1195,6 +1195,13 @@ final class AppModel {
         return workspace.panels.trailingSurfaceID == "sideChat" && workspace.sideChatSessionID == id
     }
 
+    /// Whether a window draws the task: the one it shows, the side chat beside it, or another pane of the split it
+    /// shows. A pane beside the chosen one is not visible (`isSessionVisible`), so a request it waits on notifies, but
+    /// the request is in sight.
+    func isSessionDrawn(_ id: UUID) -> Bool {
+        isSessionVisible(id) || (!taskWindowIDs.isEmpty && splits.activeSplit?.sessionIDs.contains(id) == true)
+    }
+
     private func contextualDraft(_ draft: CodexComposerDraft, for sessionID: UUID) throws -> CodexComposerDraft {
         guard let context = store.sessions.first(where: { $0.id == sessionID })?.inheritedContext,
               context.nativeForkSource == nil, context.nativeConversationOrigin == nil,
@@ -7271,7 +7278,8 @@ final class AppModel {
     }
 
     /// Notifies how a task's turn ended or what it waits on, as Settings › Notifications lets each kind
-    /// (`TaskNotificationKind`): out of the box only for a task that is not on screen.
+    /// (`TaskNotificationKind`): out of the box only for a task that is not on screen. What it waits on shows while
+    /// Yardlet is in front too, unless a window draws the task (`TaskNotificationKind.showsWhileActive`).
     private func postBackgroundNotification(
         for sessionID: UUID,
         status: SessionStatus,
@@ -7328,7 +7336,7 @@ final class AppModel {
             identifier: identifier,
             target: SystemNotificationTarget(sessionID: sessionID, requestID: requestID),
             offersAllowOnce: offersAllowOnce,
-            showsWhileActive: kind.showsWhileActive(in: preferences)
+            showsWhileActive: kind.showsWhileActive(drawn: isSessionDrawn(sessionID), in: preferences)
         ))
     }
 

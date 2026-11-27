@@ -262,7 +262,34 @@ final class NotificationRoutingTests: XCTestCase {
         let question = try await waitForPost(in: center, count: 2)
         XCTAssertEqual(question.target.requestID, "question-1", "Neither the finished turn nor the approval notified")
         XCTAssertEqual(question.title, L10n.string("Task has a question"))
-        XCTAssertFalse(question.showsWhileActive)
+        XCTAssertTrue(question.showsWhileActive, "No window draws the task: it shows while Yardlet is in front")
+
+        // A task in a pane beside the chosen one is not on screen, so it notifies, but what it asks is in sight: its
+        // notification does not show while Yardlet is in front.
+        await model.respond(
+            to: "question-1",
+            answer: .questions([.init(question: "Which layout?", selectedLabels: ["Grid"])]),
+            in: session
+        )
+        let createdBeside = await model.createSession(
+            harness: .codex, workspaceURL: URL(filePath: "/tmp/notification-beside"),
+            runtimeExecutableURL: URL(filePath: "/tmp/codex"), title: "Beside"
+        )
+        let beside = try XCTUnwrap(createdBeside)
+        model.setShowsTasks(true, inWindow: window)
+        model.splits.activate(.session(session.id))
+        model.splits.split(.right, placing: beside.id)
+        XCTAssertFalse(model.isSessionVisible(session.id))
+        XCTAssertTrue(model.isSessionDrawn(session.id))
+        await transport.emit(canUseTool("question-2", tool: "AskUserQuestion", input: .object([
+            "questions": .array([.object([
+                "question": .string("Which color?"), "header": .string("Color"), "multiSelect": .bool(false),
+                "options": .array([.object(["label": .string("Blue")]), .object(["label": .string("Green")])])
+            ])])
+        ])))
+        let drawn = try await waitForPost(in: center, count: 3)
+        XCTAssertEqual(drawn.target.requestID, "question-2")
+        XCTAssertFalse(drawn.showsWhileActive)
         await model.shutdown()
     }
 
@@ -407,6 +434,7 @@ final class NotificationRoutingTests: XCTestCase {
         XCTAssertTrue(approval.offersAllowOnce)
         XCTAssertEqual(approval.identifier, "yardlet-session-\(session.id.uuidString)-waitingForApproval-bash-1")
         XCTAssertEqual(approval.title, L10n.string("Task needs your attention"))
+        XCTAssertTrue(approval.showsWhileActive, "\"Allow once\" answers it while Yardlet is in front")
 
         await model.respond(to: "bash-1", decision: .deny, in: session)
         await transport.emit(canUseTool("question-1", tool: "AskUserQuestion", input: .object([

@@ -9,8 +9,8 @@ import WinUIApplication
 /// (`AppNotificationManager`), as the Mac's go through UserNotifications. The engine decides when to post, by the
 /// Mac's rules (`AppModel+SystemNotifications.swift`): a task that waits for the person or finished a turn they asked
 /// for, when it is not the task shown. Each notification leads back to its task, an approval's offers "Allow once",
-/// and one is withdrawn by the identifier it was posted under. While a Yardlet window is in front, none is shown, as
-/// the Mac shows none while Yardlet is the active app.
+/// and one is withdrawn by the identifier it was posted under. While a Yardlet window is in front, none is shown,
+/// though the Mac shows the ones that ask to while Yardlet is the active app (`SystemNotification.showsWhileActive`).
 ///
 /// Windows asks no permission first: whether Yardlet's notifications show is the person's switch in Settings ›
 /// System › Notifications, which `authorization()` reads. An app without a package registers at launch, handing

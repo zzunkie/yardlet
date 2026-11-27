@@ -291,9 +291,15 @@ enum TaskNotificationKind: Equatable, Sendable {
         }
     }
 
-    /// Shown while Yardlet is in front as well: a finished turn the person asked to hear about always.
-    func showsWhileActive(in defaults: UserDefaults) -> Bool {
-        self == .turnEnded && TurnCompletionNotifications.current(in: defaults) == .always
+    /// Shown while Yardlet is in front as well: a finished turn the person asked to hear about always, and a request
+    /// or a question of a task no window draws (`AppModel.isSessionDrawn`), which waits out of sight while the person
+    /// works in another task: the Claude app in front leaves out only the permission request of the session it shows
+    /// (`isUserViewingSession`).
+    func showsWhileActive(drawn isDrawn: Bool, in defaults: UserDefaults) -> Bool {
+        switch self {
+        case .turnEnded: TurnCompletionNotifications.current(in: defaults) == .always
+        case .approval, .question: !isDrawn
+        }
     }
 }
 
