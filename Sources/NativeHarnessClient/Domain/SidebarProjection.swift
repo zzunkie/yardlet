@@ -66,7 +66,10 @@ struct SidebarRow: Identifiable, Hashable, Sendable {
 
     /// The row's tasks and every task nested under it, shown or hidden: what a collapsed project
     /// summarizes.
-    var familySessions: [SessionRecord] { sessions + children.flatMap(\.sessions) + hiddenChildren }
+    var familySessions: [SessionRecord] { sessions + nestedSessions }
+
+    /// Every task nested under the row, shown or hidden: those of a collapsed family too.
+    var nestedSessions: [SessionRecord] { children.flatMap(\.sessions) + hiddenChildren }
 
     var sessions: [SessionRecord] {
         switch content {

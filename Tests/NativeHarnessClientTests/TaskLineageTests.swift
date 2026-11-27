@@ -196,6 +196,53 @@ final class TaskLineageTests: XCTestCase {
         XCTAssertTrue(selected.rows.contains { $0.id == .session(lateChild.id) })
     }
 
+    /// A task's menu offers to archive the tasks nested under it whose pull request merged, at any
+    /// depth and whether its family is shown or collapsed, in the order the list shows them. The task
+    /// itself, and a nested task whose pull request is open, a draft, closed, of a state GitHub did
+    /// not give, or none at all, stay out.
+    func testATaskOffersToArchiveTheTasksNestedUnderItWhosePullRequestsMerged() {
+        let root = task("Coordinate the release", minutesAgo: 60)
+        let login = task("Fix the login", parent: root, minutesAgo: 10)
+        let export = task("Add the export", parent: root, minutesAgo: 20)
+        let docs = task("Update the docs", parent: export, minutesAgo: 30)
+        let cache = task("Try the cache", parent: root, minutesAgo: 40)
+        let icons = task("Redraw the icons", parent: root, minutesAgo: 45)
+        let version = task("Bump the version", parent: root, minutesAgo: 50)
+        let logs = task("Read the logs", parent: root, minutesAgo: 55)
+        let url = URL(string: "https://github.com/example-org/yardlet/pull/1")!
+        func pullRequest(_ state: TaskPullRequest.State?) -> TaskPullRequest {
+            TaskPullRequest(number: 1, url: url, repository: nil, state: state)
+        }
+        let pullRequests: [UUID: TaskPullRequest] = [
+            root.id: pullRequest(.merged), login.id: pullRequest(.merged), export.id: pullRequest(.open),
+            docs.id: pullRequest(.merged), cache.id: pullRequest(.closed), icons.id: pullRequest(.draft),
+            version.id: pullRequest(nil)
+        ]
+        let sessions = [root, login, export, docs, cache, icons, version, logs]
+        func merged(_ row: SidebarRow) -> SidebarMergedNestedTasks? {
+            SidebarMergedNestedTasks(nested: row.nestedSessions.map(\.id), pullRequest: { pullRequests[$0] })
+        }
+
+        let family = SidebarProjection.nest(rows(sessions))[0]
+        XCTAssertEqual(titles([family]), ["Coordinate the release", "  Fix the login", "  Add the export",
+                                          "    Update the docs", "  Try the cache", "  Redraw the icons",
+                                          "  Bump the version", "  Read the logs"])
+        XCTAssertEqual(merged(family)?.taskIDs, [login.id, docs.id])
+        XCTAssertEqual(merged(family)?.title, L10n.format("Archive %lld tasks with merged pull requests…", 2))
+
+        // Collapsed, with a waiting task kept in view: the hidden ones count as the shown one does.
+        let collapsed = SidebarProjection.nest(rows(sessions), collapsedKeys: [SidebarProjection.familyKey(for: root.id)],
+                                               keepingShown: [docs.id])[0]
+        XCTAssertEqual(collapsed.children.map(\.title), ["Update the docs"])
+        XCTAssertEqual(merged(collapsed)?.taskIDs, [docs.id, login.id])
+
+        // One merged task is named in the singular; with none, or under a nested row, there is no item.
+        let single = SidebarProjection.nest(rows([root, login, export]))[0]
+        XCTAssertEqual(merged(single)?.title, L10n.string("Archive 1 task with a merged pull request…"))
+        XCTAssertNil(merged(SidebarProjection.nest(rows([root, export, cache, icons, version, logs]))[0]))
+        XCTAssertTrue(family.children.allSatisfy { merged($0) == nil })
+    }
+
     // MARK: - The link in the index
 
     func testTheIndexKeepsTheLinkAndAnOlderIndexGainsItsColumn() async throws {

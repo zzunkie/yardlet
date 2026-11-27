@@ -162,6 +162,30 @@ struct TaskPullRequestRowMark: Equatable, Sendable {
     }
 }
 
+/// "Archive N tasks with merged pull requests…" in the menu of a task with tasks nested under it:
+/// those of them, shown or hidden, whose pull request GitHub said has merged, which the person
+/// archives in one step after confirming, as a project's "Archive chats" archives its tasks. Only
+/// what Yardlet already knows counts: a task whose pull request GitHub was not asked about (its row
+/// has not been in view, `TaskPullRequestMonitor`) or did not answer for is left out, and the menu
+/// asks nothing.
+struct SidebarMergedNestedTasks: Equatable, Sendable {
+    /// In the order the sidebar lists them.
+    let taskIDs: [UUID]
+
+    /// Nil when none of `nested` has a merged pull request.
+    init?(nested: [UUID], pullRequest: (UUID) -> TaskPullRequest?) {
+        let merged = nested.filter { pullRequest($0)?.state == .merged }
+        guard !merged.isEmpty else { return nil }
+        taskIDs = merged
+    }
+
+    /// The menu item, which says how many tasks it archives.
+    var title: String {
+        taskIDs.count == 1 ? L10n.string("Archive 1 task with a merged pull request…")
+            : L10n.format("Archive %lld tasks with merged pull requests…", Int64(taskIDs.count))
+    }
+}
+
 /// The new-task screen's warning, from the Claude app: the folder chosen for a new task already has
 /// a task running in it, and a worktree would keep their changes apart. A warning only: the task
 /// still starts locally if the person wants.

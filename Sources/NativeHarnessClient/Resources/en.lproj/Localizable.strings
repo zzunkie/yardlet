@@ -2250,6 +2250,10 @@
 "Move under task" = "Move under task";
 "Open pull request #%@" = "Open pull request #%@";
 
+/* A task's row menu: archiving the tasks nested under it whose pull requests merged, after asking. */
+"Archive 1 task with a merged pull request…" = "Archive 1 task with a merged pull request…";
+"Archive %lld tasks with merged pull requests…" = "Archive %lld tasks with merged pull requests…";
+
 /* Continuing work a quit or an update cut off (Settings › General, the line above the composer). */
 "Yardlet restarted while this task was working, so it picked up where it left off." = "Yardlet restarted while this task was working, so it picked up where it left off.";
 "Continue running work after a restart" = "Continue running work after a restart";
