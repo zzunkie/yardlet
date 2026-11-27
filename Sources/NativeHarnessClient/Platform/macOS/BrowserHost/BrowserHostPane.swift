@@ -104,6 +104,11 @@ final class BrowserHostPaneController {
     var vaultPasswordOffer: BrowserVaultPasswordOffer?
     @ObservationIgnored var focusedPasswordPage: String?
     @ObservationIgnored var offeredPasswordPages: Set<String> = []
+    /// Sign-in focus (§6.1): a bar beside the page offering a saved account at an empty username or password field,
+    /// as Chrome's and Safari's at-the-field suggestion does. Clicking Fill is what fills; focus alone never fills.
+    /// The pages the person dismissed with Not Now, so the bar does not keep reappearing on the same page.
+    var vaultSignInOffer: BrowserVaultSignInOffer?
+    @ObservationIgnored var dismissedSignInPages: Set<String> = []
     @ObservationIgnored var madePassword: BrowserVaultMadePassword?
     /// A sign-in's earlier step in a tab (§17): the username typed or the item filled there, for the password step.
     @ObservationIgnored var signInStep: BrowserVaultSignInStep?
@@ -1371,6 +1376,7 @@ struct BrowserHostPane: View {
                         }
                         if let offer = controller.vaultCodeOffer { vaultCodeBar(offer) }
                         if let offer = controller.vaultPasswordOffer { vaultPasswordBar(offer) }
+                        if let offer = controller.vaultSignInOffer { vaultSignInBar(offer) }
                         if let offer = controller.vaultLinkOffer { vaultLinkBar(offer) }
                         if let offer = controller.walletSaveOffer {
                             BrowserWalletSaveBar(offer: offer, accept: controller.acceptWalletOffer) { controller.walletSaveOffer = nil }
@@ -1794,6 +1800,43 @@ struct BrowserHostPane: View {
                 .controlSize(.small)
             Button(L10n.string("Save")) { controller.acceptVaultLinkOffer() }
                 .controlSize(.small)
+        }
+    }
+
+    /// The at-the-field sign-in suggestion password managers show (Chrome's and Safari's dropdown; design §6.1), as
+    /// a bar above the page. The person has to click Fill — focus alone fills nothing — and dismiss keeps the bar
+    /// off that page until a navigation.
+    private func vaultSignInBar(_ offer: BrowserVaultSignInOffer) -> some View {
+        let host = VaultSite.host(of: offer.origin)
+        return vaultBar(systemName: "person.crop.circle") {
+            if offer.items.count == 1 {
+                let item = offer.items[0]
+                let name = item.username.isEmpty ? item.name : item.username
+                Text(offer.step == .password
+                     ? L10n.format("Fill the password for “%@” on %@?", name, host)
+                     : L10n.format("Sign in as %@ on %@?", name, host))
+            } else {
+                Text(offer.step == .password
+                     ? L10n.format("Fill a password for %@?", host)
+                     : L10n.format("Sign in on %@ with a saved account?", host))
+            }
+        } actions: {
+            Button(L10n.string("Not Now")) { controller.dismissSignInOffer() }
+                .controlSize(.small)
+            if offer.items.count == 1 {
+                Button(L10n.string("Fill")) { controller.fillFromSignInOffer(offer.items[0]) }
+                    .controlSize(.small)
+            } else {
+                Menu(L10n.string("Fill")) {
+                    ForEach(offer.items) { item in
+                        Button([item.accountTitle, item.accountDetail].filter { !$0.isEmpty }.joined(separator: " · ")) {
+                            controller.fillFromSignInOffer(item)
+                        }
+                    }
+                }
+                .controlSize(.small)
+                .fixedSize()
+            }
         }
     }
 

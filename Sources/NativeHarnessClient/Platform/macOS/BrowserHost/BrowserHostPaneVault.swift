@@ -87,6 +87,24 @@ struct BrowserVaultDraft: Identifiable, Equatable {
     var username: String
 }
 
+/// An empty username, email or password field of a sign-in form took the focus on a site with a saved item: the bar
+/// above the page offers to fill it (design §6.1), as Chrome's and Safari's at-the-field suggestion does. Yardlet
+/// never fills from focus alone; the person has to click the bar's Fill button. A dismissed page stays dismissed for
+/// as long as the panel keeps that address; a new navigation or a new tab resets the dismissed list.
+struct BrowserVaultSignInOffer: Equatable {
+    /// The step the field is at: the username/email field of the first step, or the password field of the
+    /// second step (or a one-step form's password field). A password step prefers an item whose username
+    /// was filled in the tab's earlier step (`BrowserVaultSignInStep`) when there is one.
+    enum Step: String { case username, password }
+    var origin: String
+    /// The document the field is in; moving to another one ends the offer.
+    var page: String
+    var step: Step
+    /// The items the bar offers, in the order the key button's list would use. The step narrows them: a password
+    /// step keeps only items with a password; a username step keeps items with a username or a password.
+    var items: [VaultItem]
+}
+
 /// A one-time code field showed on a site whose items have a two-factor code (design §14): the code bar
 /// offers to fill the current code, as a password manager's suggestion at the field does.
 struct BrowserVaultCodeOffer: Equatable {
@@ -149,26 +167,40 @@ extension BrowserHostPaneController {
         }
         // The watch tells of the person's sign-ins, which the vault offers to save.
         guard vault.isAllowedBuild && (vault.isEnabled || vault.isWalletEnabled) else { return }
-        let token = tab.devTools.observeEvents { [weak self, weak tab] method, params in
-            guard method == "Runtime.bindingCalled", params["name"]?.stringValue == VaultPageScripts.offerBinding,
+        // The vault binding carries the OOPIF's session id, read from the CDP envelope (not from the page's own
+        // script), so `pageSaid` can refuse an event from a session whose chain is not same-site to the main frame —
+        // the cross-site OOPIF defense this PR's second round added.
+        tab.devTools.onVaultBinding = { [weak self, weak tab] params, session in
+            guard params["name"]?.stringValue == VaultPageScripts.offerBinding,
                   let tab, let payload = params["payload"]?.stringValue else { return }
-            self?.pageSaid(payload, on: tab)
+            self?.pageSaid(payload, session: session, on: tab)
         }
-        vaultWatch = (tab.id, token)
+        // A nested OOPIF attaches on its parent OOPIF's session (the dev-tools client forwards it through
+        // `onFrameAttached`), so the watch also goes into frames that come to life after `installWatch` ran.
+        tab.devTools.onFrameAttached = { [weak tab] session in
+            guard let tab else { return }
+            Task { await VaultPageScripts.installWatchForAttached(tab.devTools, session: session) }
+        }
+        vaultWatch = (tab.id, UUID())
         Task { await VaultPageScripts.installWatch(tab.devTools) }
     }
 
     func releaseVault(_ tab: BrowserTab) {
-        if let watch = vaultWatch, watch.tab == tab.id { tab.devTools.stopObservingEvents(watch.token) }
+        if let watch = vaultWatch, watch.tab == tab.id {
+            tab.devTools.onVaultBinding = nil
+            tab.devTools.onFrameAttached = nil
+        }
         vaultWatch = nil
         vaultOffer = nil
         vaultCodeOffer = nil
         vaultSetupOffer = nil
         vaultPasswordOffer = nil
+        vaultSignInOffer = nil
         vaultLinkOffer = nil
         isVaultPickerShown = false
         focusedPasswordPage = nil
         offeredPasswordPages = []
+        dismissedSignInPages = []
         madePassword = nil
         walletFillOffer = nil
         walletSaveOffer = nil
@@ -186,16 +218,51 @@ extension BrowserHostPaneController {
             if offer.ask != nil, tab?.vaultSetupAsk?.id == offer.ask { tab?.answerSetupAsk(.pageMoved) }
         }
         if let offer = vaultPasswordOffer, offer.page != address { vaultPasswordOffer = nil }
+        if let offer = vaultSignInOffer, offer.page != address { vaultSignInOffer = nil }
+        // Moving to another address clears the sign-in dismissed list — Not Now holds only on the page it was pressed,
+        // as design §8.3 states. Pages in `offeredPasswordPages` are independent.
+        if !dismissedSignInPages.contains(address) { dismissedSignInPages.removeAll() }
         // A filled code often sends the page on at once; the offer stays while the page is on that site.
         if let offer = vaultLinkOffer, !VaultSite.matches(offer.site, origin: address) { vaultLinkOffer = nil }
         if focusedPasswordPage != address { focusedPasswordPage = nil }
         if let offer = walletFillOffer, offer.page != address { walletFillOffer = nil }
     }
 
-    /// What the watch in the page saw (`VaultPageScripts.offerBinding`).
-    private func pageSaid(_ payload: String, on tab: BrowserTab) {
+    /// What the watch in the page saw (`VaultPageScripts.offerBinding`). `session` is the CDP session id of the frame
+    /// that sent the payload: `nil` is the tab's own session (the main frame or a same-process subframe), and anything
+    /// else is an attached out-of-process iframe. An OOPIF whose chain to the main frame is not same-site has every
+    /// event it sends discarded, so a cross-site OOPIF cannot push a save prompt, a typed-secret notice or a sign-in
+    /// focus onto the main frame's address.
+    private func pageSaid(_ payload: String, session: String?, on tab: BrowserTab) {
         guard let data = payload.data(using: .utf8),
               let fields = try? JSONDecoder().decode([String: String].self, from: data) else { return }
+        if let session {
+            Task { @MainActor [weak self, weak tab] in
+                // A late event that arrives after the panel switched to another tab goes nowhere: the handlers below
+                // read `self.tab`, so an event for a tab the panel no longer shows would land on the wrong page.
+                guard let self, let tab, self.tab === tab,
+                      await self.isSameSiteOOPIF(session: session, on: tab) else { return }
+                self.handleWatchFields(fields, on: tab)
+            }
+            return
+        }
+        handleWatchFields(fields, on: tab)
+    }
+
+    /// Whether an OOPIF whose own session id is `session` sits in a chain that is same-site to the tab's main frame:
+    /// every origin on the way (`origins(around:)`) and the OOPIF's own origin have to be pages of the main frame's
+    /// site (`VaultSite.matches`). A frame the browser does not describe, or a chain that reaches no main frame,
+    /// reads as not same-site — fail-closed, matching the rest of the vault.
+    private func isSameSiteOOPIF(session: String, on tab: BrowserTab) async -> Bool {
+        guard let frames = try? await VaultPageScripts.frames(tab.devTools, timeout: .seconds(5)),
+              let main = frames.first,
+              let sessionFrame = frames.first(where: { $0.session == session }),
+              let around = VaultPageScripts.origins(around: sessionFrame, in: frames),
+              let site = VaultSite.suggestion(for: main.origin, suffixes: vault.suffixes) else { return false }
+        return VaultSite.matches([site], origins: [sessionFrame.origin] + around)
+    }
+
+    private func handleWatchFields(_ fields: [String: String], on tab: BrowserTab) {
         switch fields["kind"] {
         case "codeField":
             codeFieldShown(on: tab, page: fields["page"] ?? "")
@@ -205,6 +272,9 @@ extension BrowserHostPaneController {
                                   asked: false)
         case "passwordFocus": passwordFieldFocused(on: tab, page: fields["page"] ?? "", isNew: fields["isNew"] == "1")
         case "passwordBlur": focusedPasswordPage = nil
+        case "signInFocus":
+            signInFieldFocused(on: tab, page: fields["page"] ?? "",
+                               step: BrowserVaultSignInOffer.Step(rawValue: fields["step"] ?? ""))
         case "madeCleared": madePasswordCleared(on: tab)
         case "username": usernameStepTyped(fields["username"] ?? "", on: tab)
         case "walletFocus": walletFieldFocused(on: tab, page: fields["page"] ?? "", which: fields["which"] ?? "")
@@ -376,6 +446,7 @@ extension BrowserHostPaneController {
                   !self.offeredPasswordPages.contains(page),
                   let shown = await VaultPageScripts.showing(page, tab.devTools, sites: [[site]]) else { return }
             self.offeredPasswordPages.insert(page)
+            self.vaultSignInOffer = nil
             self.vaultPasswordOffer = BrowserVaultPasswordOffer(origin: frame.origin, page: shown)
         }
     }
@@ -481,6 +552,65 @@ extension BrowserHostPaneController {
                               "Its fields were emptied before the form was seen to be sent; the item keeps it.")
     }
 
+    // MARK: Sign-in focus (design §6.1)
+
+    /// An empty username/email or password field took the focus in a document the vault may fill: the bar beside the
+    /// page offers a saved item (design §6.1). Nothing is filled from focus alone — the bar's Fill button is what
+    /// fills, matching Chrome's and Safari's behavior. A page the person dismissed stays dismissed until the panel
+    /// opens another address. Other bars take precedence: a one-time code bar at a code field, a strong-password bar
+    /// at an empty new-password field, and a wallet fill bar at a card or address field.
+    private func signInFieldFocused(on tab: BrowserTab, page: String, step: BrowserVaultSignInOffer.Step?) {
+        guard let step, vault.isAllowedBuild, vault.isEnabled,
+              vaultCodeOffer == nil, vaultPasswordOffer == nil, walletFillOffer == nil else { return }
+        Task { @MainActor [weak self] in
+            // The origin comes from the browser, not the page's script, as every other bar does.
+            guard let self, let frame = try? await VaultPageScripts.mainFrame(tab.devTools, timeout: .seconds(10)),
+                  self.tab === tab else { return }
+            // `pickerItems` orders the site's items the way the key button's list does (last-used first, then by
+            // account name) and puts the item filled at the sign-in's earlier step (`BrowserVaultSignInStep`) at the
+            // front — no hand-rolled `sorted` that could break Swift's strict weak ordering.
+            let step1 = self.vaultItemFromEarlierStep(on: tab.currentURL)
+            let items = self.vault.pickerItems(for: frame.origin, matching: "", kind: .signIn, first: step1).here
+                .filter { step == .password ? $0.hasPassword : !$0.username.isEmpty }
+            guard !items.isEmpty else { return }
+            // The field's document must be fillable by one of the items (the same chain `fillFrames` enforces for the
+            // key button). `showing` returns the main frame's address when a frame `page` is below it, so the offer
+            // keeps `page` as its own address and matches by main-frame address — a report from any subframe URL
+            // raises the bar the same way it does for the one-time code and strong-password bars.
+            guard let shown = await VaultPageScripts.showing(page, tab.devTools, sites: items.map(\.sites)) else { return }
+            // `dismissedSignInPages` holds the main-frame address `shown` names, so a report from a different subframe
+            // of the same page stays dismissed too.
+            guard !self.dismissedSignInPages.contains(shown) else { return }
+            // Another bar may have taken the page after the browser answered.
+            guard self.vaultCodeOffer == nil, self.vaultPasswordOffer == nil, self.walletFillOffer == nil else { return }
+            self.vaultSignInOffer = BrowserVaultSignInOffer(origin: frame.origin, page: shown, step: step, items: items)
+        }
+    }
+
+    /// The person closed the sign-in bar: the same page does not offer it again. A new navigation or a new tab resets
+    /// the dismissed list (`releaseVault`, `vaultPageMoved`).
+    func dismissSignInOffer() {
+        guard let offer = vaultSignInOffer else { return }
+        vaultSignInOffer = nil
+        dismissedSignInPages.insert(offer.page)
+    }
+
+    /// The person chose an item from the sign-in bar: the fill goes through the same path as the key button's list,
+    /// so a frame of the item's site (the chain `fillFrames` builds) is filled the same way. Checks the panel's main
+    /// frame origin against the offer's origin before anything goes in: if the page moved while the person read the
+    /// bar, the click fills nothing. The bar is cleared either way, as a dismissed one.
+    func fillFromSignInOffer(_ item: VaultItem) {
+        let offer = vaultSignInOffer
+        vaultSignInOffer = nil
+        let item = vault.items.first { $0.id == item.id } ?? item
+        guard let tab, let offer else { return }
+        Task { @MainActor [weak self] in
+            guard let self, let frame = try? await VaultPageScripts.mainFrame(tab.devTools, timeout: .seconds(10)),
+                  self.tab === tab, frame.origin == offer.origin else { return }
+            self.fill(item, codeOnly: false)
+        }
+    }
+
     // MARK: Addresses and cards (design §18)
 
     /// An empty field of a card or an address form took the focus: the bar offers the saved ones, once a page.
@@ -490,6 +620,7 @@ extension BrowserHostPaneController {
               which == .card ? !vault.wallet.cards.isEmpty : !vault.wallet.addresses.isEmpty else { return }
         Task { @MainActor [weak self] in
             guard let self, self.tab === tab, await VaultPageScripts.shows(page, tab.devTools) else { return }
+            self.vaultSignInOffer = nil
             self.walletFillOffer = BrowserWalletFillOffer(which: which, page: page)
         }
     }
@@ -699,6 +830,7 @@ extension BrowserHostPaneController {
             // one of the items may fill (design §6.2).
             guard !items.isEmpty, self.tab === tab, self.vaultSetupOffer == nil,
                   let shown = await VaultPageScripts.showing(page, tab.devTools, sites: items.map(\.sites)) else { return }
+            self.vaultSignInOffer = nil
             self.vaultCodeOffer = BrowserVaultCodeOffer(
                 origin: frame.origin, page: shown, items: items,
                 newSite: own.isEmpty ? VaultSite.suggestion(for: frame.origin, suffixes: self.vault.suffixes) : nil)

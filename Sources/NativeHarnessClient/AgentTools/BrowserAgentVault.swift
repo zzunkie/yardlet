@@ -230,6 +230,9 @@ enum VaultPageScripts {
     /// - `typedSecret`: someone typed into a password field (trusted input), told once a document.
     /// - `passwordFocus`, with `page`, and `isNew` set for a new-password field still empty; `passwordBlur`:
     ///   a password field took or lost the focus.
+    /// - `signInFocus`, with `page` and `step` (`username` or `password`): an empty field of a sign-in form took the
+    ///   focus. The host offers to fill a saved item at the field (design §6.1); Yardlet fills nothing without the
+    ///   person's click on the bar.
     /// - `madeCleared`: the person emptied the fields that held a password the vault made (Chrome then drops it).
     /// - `codeField`, with `page`: a one-time code field showed.
     /// - `qr`, with `page`: a graphic the size and shape of a QR code showed; Yardlet reads the screen.
@@ -627,7 +630,47 @@ enum VaultPageScripts {
             if (kind) {
               const fields = walletFields(walletScope(e.target));
               const which = kind.startsWith('cc-') ? (isCardForm(fields) ? 'card' : '') : (isAddressForm(fields) ? 'address' : '');
-              if (which) send({ kind: 'walletFocus', which, page: location.href });
+              if (which) {
+                send({ kind: 'walletFocus', which, page: location.href });
+                return; // A wallet field is not also a sign-in field; fall-through would double-report.
+              }
+            }
+            // An empty username/email or password field (design §6.1): the host offers a saved sign-in in a bar. The
+            // target has to pass the strict visibility test (size on screen, visibility, display, opacity, and
+            // `checkVisibility` where the engine has it) and be neither disabled nor readOnly, so a clicked "Fill"
+            // on a readOnly field never reports "no sign-in field to fill". A new-password field, a one-time code
+            // field and a search field never send `signInFocus`: they have bars of their own, and a search box
+            // dropdown would be wrong.
+            const strictVisible = f => {
+              if (!(f instanceof Element) || f.disabled || f.readOnly || !f.isConnected) return false;
+              const r = f.getBoundingClientRect();
+              if (r.width <= 0 || r.height <= 0) return false;
+              if (typeof f.checkVisibility === 'function'
+                  && !f.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return false;
+              const st = getComputedStyle(f);
+              return st.visibility !== 'hidden' && st.display !== 'none' && st.opacity !== '0';
+            };
+            if (e.target instanceof HTMLInputElement && !e.target.value && strictVisible(e.target)
+                && !isCodeField(e.target) && !looksLikeCodeField(e.target)
+                && e.target.type !== 'search' && e.target.getAttribute('role') !== 'searchbox') {
+              if (isPasswordField(e.target)) {
+                // A new-password field goes to the strong-password bar (`passwordFocus`, `isNew`), not the sign-in bar.
+                if (!newPasswordFields(e.target).length) {
+                  send({ kind: 'signInFocus', step: 'password', page: location.href });
+                }
+              } else {
+                const ac = (e.target.getAttribute('autocomplete') || '').toLowerCase().split(/\\s+/);
+                // `one-time-code` on the autocomplete, and known search/filter words in the field's name or label,
+                // keep `signInFocus` off; every branch is guarded by `textTypes` so that an input of type checkbox
+                // or radio (which a page could still mark `autocomplete="username"`) is never a sign-in field.
+                const isSearchy = /\\b(search|query|filter|find|lookup)\\b|검색|필터|찾기/i.test(codeFieldWords(e.target));
+                const looksLikeUsername = !ac.includes('one-time-code') && !isSearchy
+                  && textTypes.includes(e.target.type)
+                  && (e.target.type === 'email'
+                      || ac.some(t => t === 'username' || t === 'email')
+                      || /user|e\\s?mail|login|account|아이디|이메일|계정/i.test(codeFieldWords(e.target)));
+                if (looksLikeUsername) send({ kind: 'signInFocus', step: 'username', page: location.href });
+              }
             }
             if (!isPasswordField(e.target)) return;
             const fresh = newPasswordFields(e.target);
@@ -1249,11 +1292,13 @@ enum VaultPageScripts {
     }
 
     /// The page a bar for a watch report from `page` stays with: `page` while the main frame shows it, or the main
-    /// frame's address while a frame shows it that one item's sites (each of `sites`) may fill (`fillFrames`); nil once
-    /// the tab shows neither. The watch runs in the documents of the tab's own process, so only its frames are read.
+    /// frame's address while a frame shows it that one item's sites (each of `sites`) may fill (`fillFrames`); nil
+    /// once the tab shows neither. Every attached session is read, so a report from a frame in another process
+    /// (Apple's `idmsa.apple.com` on `account.apple.com`) still matches a frame of the tab, and the cross-site
+    /// refusal from `fillFrames` still refuses a frame on another site's chain.
     static func showing(_ page: String, _ cdp: any BrowserAgentCDP, sites: [[String]],
                         timeout: Duration = .seconds(10)) async -> String? {
-        guard let all = try? await frames(cdp, sessions: [], timeout: timeout), let main = all.first else { return nil }
+        guard let all = try? await frames(cdp, timeout: timeout), let main = all.first else { return nil }
         if BrowserURLPolicy.sameAddress(main.url, page) { return page }
         let framed = sites.contains { sites in
             fillFrames(of: all, sites: sites).dropFirst().contains { BrowserURLPolicy.sameAddress($0.frame.url, page) }
@@ -1273,19 +1318,44 @@ enum VaultPageScripts {
 
     /// Starts the watch in a panel's tab: in every new document and in the one shown now.
     static func installWatch(_ cdp: any BrowserAgentCDP, timeout: Duration = .seconds(10)) async {
-        _ = try? await cdp.send("Runtime.enable", [:], timeout: timeout)
-        _ = try? await cdp.send("Page.enable", [:], timeout: timeout)
+        // Ask the browser to attach every out-of-process iframe (and nested ones in turn) to this client: without
+        // this, `cdp.frameSessions` is empty when a human opens a page in the panel, and the OOPIF watch never runs.
+        _ = try? await cdp.attachFrames()
+        await installWatch(cdp, session: nil, timeout: timeout)
+        // Each out-of-process iframe answers on a session of its own: the watch has to run in its world too so that
+        // a focus or submit inside Apple's `idmsa.apple.com` reaches the panel. Cross-site OOPIFs still cannot raise
+        // a sign-in bar — `showing` and the panel's cross-site check enforce the same-site chain for every event
+        // the watch sends.
+        for session in cdp.frameSessions {
+            await installWatch(cdp, session: session.id, timeout: timeout)
+        }
+    }
+
+    /// Installs the watch in an OOPIF that attached after `installWatch` ran, so the panel keeps receiving
+    /// `signInFocus` / `passwordFocus` / `walletFocus` and sign-in submits from inside those frames. Called from the
+    /// panel's tab-level event observer (`BrowserHostPaneController.adoptVault`) when `Target.attachedToTarget` for
+    /// an `iframe` target arrives.
+    static func installWatchForAttached(_ cdp: any BrowserAgentCDP, session: String, timeout: Duration = .seconds(10)) async {
+        await installWatch(cdp, session: session, timeout: timeout)
+    }
+
+    /// `installWatch` on one session (`nil` for the tab's own, otherwise an attached OOPIF session). Adds the binding,
+    /// registers the watch for every new document, and evaluates it against the document that is already shown.
+    private static func installWatch(_ cdp: any BrowserAgentCDP, session: String?, timeout: Duration) async {
+        _ = try? await cdp.send("Runtime.enable", [:], session: session, timeout: timeout)
+        _ = try? await cdp.send("Page.enable", [:], session: session, timeout: timeout)
         _ = try? await cdp.send("Runtime.addBinding", [
             "name": .string(offerBinding), "executionContextName": .string(BrowserAgentTools.vaultWorldName)
-        ], timeout: timeout)
+        ], session: session, timeout: timeout)
         _ = try? await cdp.send("Page.addScriptToEvaluateOnNewDocument", [
             "source": .string(watchScript), "worldName": .string(BrowserAgentTools.vaultWorldName)
-        ], timeout: timeout)
-        if let frame = try? await mainFrame(cdp, timeout: timeout), !frame.id.isEmpty,
-           let context = try? await vaultWorld(cdp, frame: frame.id, timeout: timeout) {
-            _ = try? await cdp.send("Runtime.evaluate", ["expression": .string(watchScript), "contextId": .integer(context)],
-                                    timeout: timeout)
-        }
+        ], session: session, timeout: timeout)
+        // The tree on this session's own target: the main frame's for `nil`, the OOPIF's root frame for a session.
+        guard let tree = try? await cdp.send("Page.getFrameTree", [:], session: session, timeout: timeout),
+              let id = tree["frameTree"]?["frame"]?["id"]?.stringValue, !id.isEmpty,
+              let context = try? await vaultWorld(cdp, frame: id, session: session, timeout: timeout) else { return }
+        _ = try? await cdp.send("Runtime.evaluate", ["expression": .string(watchScript), "contextId": .integer(context)],
+                                session: session, timeout: timeout)
     }
 
     /// The person's fill from the key button (the focused field's form, the page's sign-in form, or its

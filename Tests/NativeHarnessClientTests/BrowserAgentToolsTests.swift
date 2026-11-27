@@ -2161,6 +2161,198 @@ final class BrowserAgentToolsTests: XCTestCase {
                        "an OOPIF with no resolvable parent is dropped from fillFrames (fail-closed)")
     }
 
+    /// The watch raises `signInFocus` in the page's focusin handler when an empty username/email or password field
+    /// takes the focus, so the host can show the sign-in offer bar (design §6.1). The bar never fills from focus
+    /// alone — the person's Fill click is what fills — and the test pins the watch's shape so that:
+    /// 1. both `step: 'password'` and `step: 'username'` are emitted, and `passwordFocus` still fires alongside
+    ///    for the strong-password bar;
+    /// 2. the handler is gated by `e.target.value` (empty fields only) and the strict visibility test
+    ///    (`checkVisibility`, `opacity: '0'`, `disabled`, `readOnly`), so a readOnly or ancestor-hidden field never
+    ///    raises the bar;
+    /// 3. new-password, one-time code, search and wallet fields are excluded (they have their own bars, or they
+    ///    are not sign-in fields at all);
+    /// 4. a wallet field returns before the sign-in branch runs — no double report.
+    func testWatchScriptRaisesSignInFocusForEmptyUsernameOrPasswordFields() {
+        let script = VaultPageScripts.watchScript
+        for check in ["kind: 'signInFocus', step: 'password'", "kind: 'signInFocus', step: 'username'",
+                      "kind: 'passwordFocus'", "!e.target.value",
+                      "/user|e\\s?mail|login|account|아이디|이메일|계정/i",
+                      "codeFieldWords(e.target)",
+                      "checkVisibility",
+                      "f.disabled || f.readOnly",
+                      "!isCodeField(e.target) && !looksLikeCodeField(e.target)",
+                      "e.target.type !== 'search' && e.target.getAttribute('role') !== 'searchbox'",
+                      "!newPasswordFields(e.target).length",
+                      "!ac.includes('one-time-code')"] {
+            XCTAssertTrue(script.contains(check), "watchScript must include \(check)")
+        }
+        // A wallet field returns before the sign-in branch runs, so `walletFocus` cannot fall through to a stray
+        // `signInFocus` report on the same event.
+        guard let walletRange = script.range(of: "if (which) {") else {
+            return XCTFail("walletFocus branch missing")
+        }
+        let walletTail = script[walletRange.upperBound...]
+        let signInIndex = walletTail.range(of: "signInFocus")!.lowerBound
+        let returnInBetween = walletTail[..<signInIndex].contains("return;")
+        XCTAssertTrue(returnInBetween, "the walletFocus branch must return before the signInFocus branch")
+    }
+
+    /// `BrowserVaultSignInOffer.Step` raw values stay stable so the watch's payload keeps matching the host's parser.
+    /// A drift here would silently drop the bar.
+    func testSignInOfferStepRawValues() {
+        XCTAssertEqual(BrowserVaultSignInOffer.Step.username.rawValue, "username")
+        XCTAssertEqual(BrowserVaultSignInOffer.Step.password.rawValue, "password")
+    }
+
+    /// `pickerItems` returns the site's items ordered the same way the key button's list orders them (last-used
+    /// first, then by account title), with the item the person filled at the sign-in's earlier step (`first:`) at
+    /// the front. The sign-in bar reuses this order and filters it by step — a username step keeps items with a
+    /// username, a password step keeps items with a password — which guards against the strict-weak-ordering trap
+    /// a hand-rolled `sorted` on `.id == step1` would risk. The test runs on a small in-memory vault to pin the
+    /// ordering, so a refactor cannot quietly break it.
+    func testSignInBarUsesPickerItemsOrderAndStepFilter() async throws {
+        let item1 = VaultItem(id: UUID(), name: "Z Later", sites: ["example.com"], username: "zed", hasPassword: true,
+                              policy: .always, lastUsedAt: Date(timeIntervalSince1970: 100))
+        let item2 = VaultItem(id: UUID(), name: "A Recent", sites: ["example.com"], username: "ada", hasPassword: true,
+                              policy: .always, lastUsedAt: Date(timeIntervalSince1970: 200))
+        // A sign-in with no username: `pickerItems(kind: .signIn)` keeps it (it has a password), the bar's password
+        // step keeps it, and the bar's username step drops it — a username field has nothing to fill from it.
+        let item3 = VaultItem(id: UUID(), name: "Nameless", sites: ["example.com"], username: "",
+                              hasPassword: true, policy: .always, lastUsedAt: Date(timeIntervalSince1970: 300))
+        let vault = VaultCenter(environment: VaultCenter.Environment(
+            secrets: InMemoryVaultSecretStore([item1.id: VaultSecret(password: "p1"),
+                                               item2.id: VaultSecret(password: "p2"),
+                                               item3.id: VaultSecret(password: "p3")]),
+            repository: InMemoryVaultRepository(items: [item1, item2, item3]),
+            hmac: MacVault.hmac, isAllowedBuild: true, defaults: .vaultTests()))
+        // Last-used first → item3, item2, item1. The sign-in bar's step filter keeps or drops item3 accordingly.
+        let all = vault.pickerItems(for: "https://www.example.com", matching: "", kind: .signIn, first: nil).here
+        XCTAssertEqual(all.map(\.name), ["Nameless", "A Recent", "Z Later"])
+        XCTAssertEqual(all.filter(\.hasPassword).map(\.name), ["Nameless", "A Recent", "Z Later"],
+                       "a password-step filter keeps every item with a password")
+        XCTAssertEqual(all.filter { !$0.username.isEmpty }.map(\.name), ["A Recent", "Z Later"],
+                       "a username-step filter drops an item that has no username to fill")
+        // `first:` puts the sign-in's earlier step item at the front, ahead of the last-used order.
+        let withFirst = vault.pickerItems(for: "https://www.example.com", matching: "", kind: .signIn, first: item1.id).here
+        XCTAssertEqual(withFirst.first?.name, "Z Later", "the `first:` item leads the order")
+    }
+
+    /// `showing(_:cdp:sites:)` matches a report from an OOPIF the same way it matches a report from a same-process
+    /// subframe: when the OOPIF's own URL equals the report's `page`, the main-frame address comes back (so the bar's
+    /// state keeps a single address even across sessions); when the OOPIF is cross-site the `fillFrames` loop skips
+    /// it, and the report reads as not shown. The test builds a tab with a same-site OOPIF and then a cross-site
+    /// OOPIF (both on a session of their own) and runs `showing` end-to-end against both.
+    func testShowingMatchesSameSiteOOPIFReportsAndRefusesCrossSite() async throws {
+        let mainTree: JSONValue = .object([
+            "frameTree": .object([
+                "frame": .object([
+                    "id": .string("main"), "loaderId": .string("doc-main"),
+                    "url": .string("https://account.example.com/"),
+                    "securityOrigin": .string("https://account.example.com")
+                ]),
+                "childFrames": .array([])
+            ])
+        ])
+        cdp.responders["Page.getFrameTree"] = { _ in mainTree }
+        // The DOM fallback that PR #1117 added: `DOM.getFrameOwner` + `DOM.getDocument` link the OOPIF to the main.
+        cdp.responders["DOM.getFrameOwner"] = { _ in .object(["backendNodeId": .integer(42)]) }
+        cdp.responders["DOM.getDocument"] = { _ in
+            .object(["root": .object([
+                "nodeType": .integer(9), "backendNodeId": .integer(1),
+                "children": .array([.object([
+                    "nodeType": .integer(1), "nodeName": .string("IFRAME"),
+                    "backendNodeId": .integer(42), "frameId": .string("signin")
+                ])])
+            ])])
+        }
+
+        // Same-site OOPIF: `showing` returns the main frame's address so the bar's dismissed list carries one key.
+        cdp.frameSessions = [BrowserFrameSession(id: "s1", frameID: "signin", parent: nil)]
+        cdp.sessionResponder = { session, method, _ in
+            guard session == "s1", method == "Page.getFrameTree" else { throw BrowserDevToolsError.closed }
+            return .object(["frameTree": .object(["frame": .object([
+                "id": .string("signin"), "loaderId": .string("doc-signin"),
+                "url": .string("https://idmsa.example.com/signin"),
+                "securityOrigin": .string("https://idmsa.example.com")
+            ])])])
+        }
+        let sameSite = await VaultPageScripts.showing("https://idmsa.example.com/signin", cdp,
+                                                      sites: [["example.com"]], timeout: .seconds(2))
+        XCTAssertEqual(sameSite, "https://account.example.com/",
+                       "a same-site OOPIF's report matches as a frame of the tab and returns the main-frame address")
+
+        // Cross-site OOPIF: `fillFrames` drops it and the report reads as not shown anywhere.
+        cdp.frameSessions = [BrowserFrameSession(id: "s2", frameID: "signin", parent: nil)]
+        cdp.sessionResponder = { session, method, _ in
+            guard session == "s2", method == "Page.getFrameTree" else { throw BrowserDevToolsError.closed }
+            return .object(["frameTree": .object(["frame": .object([
+                "id": .string("signin"), "loaderId": .string("doc-signin"),
+                "url": .string("https://login.foreign.test/"),
+                "securityOrigin": .string("https://login.foreign.test")
+            ])])])
+        }
+        let crossSite = await VaultPageScripts.showing("https://login.foreign.test/", cdp,
+                                                       sites: [["example.com"]], timeout: .seconds(2))
+        XCTAssertNil(crossSite, "a cross-site OOPIF's report never matches the tab for an item's sites")
+    }
+
+    /// Three pins that cover the OOPIF watch path a page's own JavaScript could otherwise exploit:
+    /// 1. `installWatch` asks the browser to attach every out-of-process iframe (`attachFrames`), since the attach
+    ///    is what makes the OOPIF session reachable at all — without it the watch runs only in the tab's own
+    ///    process and misses Apple's sign-in iframe entirely.
+    /// 2. `showing` reads every attached session (no `sessions: []` shortcut), so a same-site OOPIF matches as a
+    ///    frame of the tab and a cross-site OOPIF is still refused by `fillFrames`.
+    /// 3. The panel discards every event from an OOPIF whose chain to the main frame is not same-site, read from
+    ///    the CDP envelope's `sessionId` (which the page cannot write): `isSameSiteOOPIF` uses the same
+    ///    `VaultSite.matches` chain the key button fill does. A regression that drops the guard would silently let
+    ///    a cross-site OOPIF push a save or typed-secret notice onto the main frame's address.
+    func testOOPIFWatchAndCrossSiteGuardStayWired() throws {
+        let agentSource = try String(contentsOf: Self.sourceURL(for: "AgentTools/BrowserAgentVault.swift"), encoding: .utf8)
+        XCTAssertTrue(agentSource.contains("try? await cdp.attachFrames()"),
+                      "installWatch asks the client to attach every OOPIF before it installs the watch on each session")
+        XCTAssertTrue(agentSource.contains("for session in cdp.frameSessions"),
+                      "installWatch loops over every attached session and runs on each")
+
+        // `showing` reads every attached session; the shortcut that only read the tab's own process is gone.
+        XCTAssertTrue(agentSource.contains("try? await frames(cdp, timeout: timeout)"),
+                      "showing reads every attached session, including OOPIFs")
+        XCTAssertFalse(agentSource.contains("try? await frames(cdp, sessions: [], timeout: timeout)"),
+                       "showing no longer limits itself to the tab's own process")
+
+        let vaultPane = try String(contentsOf: Self.sourceURL(for: "Platform/macOS/BrowserHost/BrowserHostPaneVault.swift"),
+                                   encoding: .utf8)
+        XCTAssertTrue(vaultPane.contains("isSameSiteOOPIF(session:"),
+                      "pageSaid routes OOPIF events through the cross-site guard")
+        XCTAssertTrue(vaultPane.contains("VaultSite.matches([site], origins: [sessionFrame.origin] + around)"),
+                      "the OOPIF guard uses the same same-site check as fillFrames")
+        XCTAssertTrue(vaultPane.contains("if let session {") && vaultPane.contains("handleWatchFields(fields, on: tab)"),
+                      "every event from an OOPIF session is routed through the guard before reaching the handler")
+
+        // The dev-tools client forwards `Runtime.bindingCalled` (with its session id) to the vault observer alone,
+        // and forwards every iframe attach through `onFrameAttached` — the two hooks the panel listens on.
+        let client = try String(contentsOf: Self.sourceURL(for: "BrowserHost/BrowserDevToolsClient.swift"), encoding: .utf8)
+        XCTAssertTrue(client.contains("onVaultBinding?(params, session)") && client.contains("onFrameAttached?(id)"),
+                      "the dev-tools client exposes the vault binding and iframe attach callbacks")
+    }
+
+    private static func sourceURL(for relative: String) -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/NativeHarnessClient").appendingPathComponent(relative)
+    }
+
+    /// `BrowserVaultSignInOffer` carries only `Sendable` leaves and stays `Equatable`, so SwiftUI redraws the bar
+    /// only when a field of it changed. The tiny check pins both.
+    func testSignInOfferEqualityAndIdentity() {
+        let item = VaultItem(name: "Example", sites: ["example.com"], username: "ada", hasPassword: true)
+        let offer = BrowserVaultSignInOffer(origin: "https://www.example.com", page: "https://www.example.com/",
+                                            step: .username, items: [item])
+        XCTAssertEqual(offer, offer)
+        var updated = offer
+        updated.step = .password
+        XCTAssertNotEqual(offer, updated, "a step change makes the offer a different value for SwiftUI")
+    }
+
     /// A code fill on a page that shows a two-factor setup the vault does not hold (docs/BROWSER_VAULT_DESIGN.md §20)
     /// asks the person to keep it before anything is saved: Save keeps it in the site's item and its first code goes
     /// in, Not Now keeps nothing and the agent hears so. The key never reaches a result, and the page is a filled one.

@@ -3062,6 +3062,10 @@
 "Code %@, %lld seconds left" = "Code %@, %lld seconds left";
 "Use a strong password for %@? The password manager saves it." = "Use a strong password for %@? The password manager saves it.";
 "Use Strong Password" = "Use Strong Password";
+"Sign in as %@ on %@?" = "Sign in as %@ on %@?";
+"Sign in on %@ with a saved account?" = "Sign in on %@ with a saved account?";
+"Fill the password for “%@” on %@?" = "Fill the password for “%@” on %@?";
+"Fill a password for %@?" = "Fill a password for %@?";
 "This page has no password field to fill." = "This page has no password field to fill.";
 "Yardlet could not make a password." = "Yardlet could not make a password.";
 "Saved the new password in “%@”." = "Saved the new password in “%@”.";
