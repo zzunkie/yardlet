@@ -99,7 +99,8 @@ final class VaultSettingsRenderingTests: XCTestCase {
         let spoken = host.accessibilityElements().map { "\($0.label) \($0.value)" }
         for text in ["GitHub (work)", "Vercel", "Example Bank", "github.com", L10n.string("Password manager for agents"),
                      L10n.string("Every time"), L10n.string("While unlocked"), Self.github.kindsTitle,
-                     L10n.string("Import CSV…"), L10n.string("Add sign-in"), L10n.string("Delete all passwords…"),
+                     L10n.string("Import CSV…"), L10n.string("Export CSV…"), L10n.string("Add sign-in"),
+                     L10n.string("Delete all passwords…"),
                      L10n.string("Two-factor codes"), L10n.string("Import QR Code…"), L10n.string("Copy Code"),
                      L10n.string("Import from Another Browser…")] {
             XCTAssertTrue(spoken.contains { $0.contains(text) }, "No \(text): \(spoken)")
@@ -693,8 +694,8 @@ final class VaultSettingsRenderingTests: XCTestCase {
     /// Chrome's and Bitwarden's exports: columns found by name in any order, a quoted name with a
     /// comma, a doubled quote and a line break in a note, Bitwarden's two-factor codes; rows without a
     /// site or without a password or code left out. Importing again updates the saved item rather than
-    /// adding a second one.
-    func testCSVExportsFromBrowsersAndPasswordManagersImport() throws {
+    /// adding a second one. Then Yardlet's own export (design §8.1), which its import reads back.
+    func testCSVExportsFromBrowsersAndPasswordManagersImportAndYardletsOwnExportRoundTrips() async throws {
         let chrome = """
         name,url,username,password,note\r
         github.com,https://www.github.com/login,ada@example.test,not-a-real-password,"two\r
@@ -733,6 +734,92 @@ final class VaultSettingsRenderingTests: XCTestCase {
         XCTAssertEqual(vercel.password, "not-a-real-password")
         XCTAssertEqual(vercel.oneTimeCode?.key, Data("12345678901234567890".utf8))
         XCTAssertEqual(vercel.passkey, Self.passkey, "The saved passkey stays")
+
+        // Yardlet's export: Apple Passwords' columns, which Chrome, Bitwarden and 1Password import too; a row for each
+        // site of a sign-in, its other fields in the notes; a code with no site in a row with no address; a passkey
+        // alone left out, and an item the keychain did not give counted; a comma and a quote with a combining mark
+        // still quoted. One confirmation reads every item, the one an agent may use only after Touch ID too; without
+        // it no file is chosen, and without a file nothing is written. The file replaces one already there, only its
+        // owner may read it, its folder keeps its own mode, and nothing else is left beside it.
+        let bank = VaultItem(name: "Example, \"Bank\"", sites: ["examplebank.test", "http://localhost:3000"],
+                             username: "+82 10-0000-0000", hasPassword: true, policy: .everyTime,
+                             fields: [VaultFormField(id: "account", name: "", label: "Account ID", value: "123456789012")])
+        let codeOnly = VaultItem(name: "Example Code", sites: [], username: "grace", hasOneTimeCode: true)
+        let eightDigits = OneTimeCodeSecret(key: Data("an-eight-digit-key!!".utf8), digits: 8, period: 60, algorithm: .sha256)
+        let githubCode = OneTimeCodeSecret(key: Data("12345678901234567890".utf8))
+        let bankPassword = "not,a \"real\"\npassword,\u{301}x\"\u{301}"
+        var answer = false
+        var reasons: [String] = []
+        let source = VaultCenter(environment: VaultCenter.Environment(
+            secrets: InMemoryVaultSecretStore([
+                Self.github.id: VaultSecret(password: "not-a-real-password", oneTimeCode: githubCode, passkey: Self.passkey),
+                Self.vercel.id: VaultSecret(passkey: Self.passkey),
+                bank.id: VaultSecret(password: bankPassword,
+                                     fields: [VaultFormField(id: "org", name: "", label: "Organization password",
+                                                             value: "not-a-real-secret")]),
+                codeOnly.id: VaultSecret(oneTimeCode: eightDigits)
+            ]),
+            repository: InMemoryVaultRepository(items: [Self.github, Self.vercel, bank, codeOnly, Self.bank]),
+            hmac: MacVault.hmac, isAllowedBuild: true, confirm: { reasons.append($0); return answer },
+            defaults: .vaultTests()))
+        let folder = FileManager.default.temporaryDirectory.appending(path: "vault-export-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o755])
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appending(path: "Yardlet Passwords.csv")
+        try Data("an older export".utf8).write(to: file)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
+        var chosen = 0
+        let refused = try await source.exportSignIns { chosen += 1; return file }
+        XCTAssertNil(refused)
+        XCTAssertEqual(chosen, 0, "no file is chosen before the person confirms")
+        answer = true
+        let unchosen = try await source.exportSignIns { nil }
+        XCTAssertNil(unchosen)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "an older export")
+        let written = try await source.exportSignIns { file }
+        let export = try XCTUnwrap(written)
+        let exportReason = L10n.string("export all saved passwords to a file")
+        XCTAssertEqual(reasons, [exportReason, exportReason, exportReason])
+        XCTAssertEqual(export, VaultCenter.SignInExport(count: 3, unreadable: 1))
+        func mode(_ url: URL) throws -> Int? {
+            (try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber)?.intValue
+        }
+        XCTAssertEqual(try mode(file), 0o600)
+        XCTAssertEqual(try mode(folder), 0o755)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path), ["Yardlet Passwords.csv"])
+        let text = try String(contentsOf: file, encoding: .utf8)
+        let githubAuth = "otpauth://totp/GitHub%20%28work%29:ada%40example.test?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+            + "&issuer=GitHub%20%28work%29&algorithm=SHA1&digits=6&period=30"
+        let codeAuth = "otpauth://totp/Example%20Code:grace?secret=\(Base32.encode(eightDigits.key))&issuer=Example%20Code"
+            + "&algorithm=SHA256&digits=8&period=60"
+        let bankNotes = "Account ID: 123456789012\nOrganization password: not-a-real-secret"
+        XCTAssertTrue(text.hasPrefix("Title,URL,Username,Password,Notes,OTPAuth\r\n"))
+        XCTAssertEqual(VaultCSVImport.records(text), [
+            VaultCSVExport.header,
+            ["GitHub (work)", "https://github.com/", "ada@example.test", "not-a-real-password", "", githubAuth],
+            ["Example, \"Bank\"", "https://examplebank.test/", "+82 10-0000-0000", bankPassword, bankNotes, ""],
+            ["Example, \"Bank\"", "http://localhost:3000/", "+82 10-0000-0000", bankPassword, bankNotes, ""],
+            ["Example Code", "", "grace", "", "", codeAuth]
+        ])
+        let marked = VaultCSVExport.Row(title: "a,\u{301}b", url: "", username: "", password: "c\"\u{301}d", notes: "", otpAuth: "")
+        XCTAssertEqual(VaultCSVImport.records(VaultCSVExport.text([marked])).last, marked.fields)
+
+        // Import CSV brings each item back whole, once: importing the file again adds nothing. Rows of the same
+        // sign-in apart from each other stay two items.
+        let returned = self.vault(items: [])
+        let entries = VaultCSVImport.entries(text)
+        XCTAssertEqual(returned.importSignIns(entries), 3)
+        XCTAssertEqual(returned.items.map(\.name), ["GitHub (work)", "Example, \"Bank\"", "Example Code"])
+        XCTAssertEqual(returned.items.map(\.sites), [["github.com"], ["examplebank.test", "http://localhost:3000"], []])
+        XCTAssertEqual(returned.items.map(\.username), ["ada@example.test", "+82 10-0000-0000", "grace"])
+        XCTAssertEqual(returned.items.map { returned.secret(of: $0.id)?.password }, ["not-a-real-password", bankPassword, nil])
+        XCTAssertEqual(returned.items.map { returned.secret(of: $0.id)?.oneTimeCode }, [githubCode, nil, eightDigits])
+        XCTAssertEqual(returned.importSignIns(entries), 2)
+        XCTAssertEqual(returned.items.count, 3)
+        let apart = "Title,URL,Username,Password\nLogin,https://a.example,ada,same\nOther,https://c.example,ada,x\n"
+            + "Login,https://b.example,ada,same\n"
+        XCTAssertEqual(VaultCSVImport.entries(apart).map(\.sites), [["a.example"], ["c.example"], ["b.example"]])
     }
 }
 

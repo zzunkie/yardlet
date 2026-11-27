@@ -2938,6 +2938,13 @@
 "Import CSV…" = "Import CSV…";
 "Add sign-in" = "Add sign-in";
 "Imported %lld sign-ins." = "Imported %lld sign-ins.";
+"Export CSV…" = "Export CSV…";
+"export all saved passwords to a file" = "export all saved passwords to a file";
+"Yardlet Passwords.csv" = "Yardlet Passwords.csv";
+"Passkeys are not included. Anyone who can open the file can read the passwords in it." = "Passkeys are not included. Anyone who can open the file can read the passwords in it.";
+"Export" = "Export";
+"Exported %lld sign-ins." = "Exported %lld sign-ins.";
+"Exported %lld sign-ins. %lld could not be read and were left out." = "Exported %lld sign-ins. %lld could not be read and were left out.";
 "Move the file to the Trash" = "Move the file to the Trash";
 "Keep" = "Keep";
 "Delete all passwords…" = "Delete all passwords…";
@@ -4380,6 +4387,7 @@
 "Zoom meetings" = "Zoom meetings";
 "Chrome, Safari, Firefox, Whale, Edge, Arc, import passwords, browser sign-ins" = "Chrome, Safari, Firefox, Whale, Edge, Arc, import passwords, browser sign-ins";
 "CSV, 1Password, Bitwarden, export file" = "CSV, 1Password, Bitwarden, export file";
+"export passwords, back up passwords, move to another password manager" = "export passwords, back up passwords, move to another password manager";
 "QR code, authenticator app" = "QR code, authenticator app";
 "new password, save password" = "new password, save password";
 "2FA, OTP, verification code, authenticator" = "2FA, OTP, verification code, authenticator";

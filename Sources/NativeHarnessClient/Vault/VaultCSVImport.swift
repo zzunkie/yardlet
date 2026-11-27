@@ -20,8 +20,11 @@ enum VaultCSVImport {
     private static let passwordColumns = ["password", "login_password"]
     private static let codeColumns = ["otpauth", "login_totp", "totp"]
 
-    /// The sign-ins in an export, in file order. A row is left out without a site Yardlet can fill
-    /// on (`VaultSite.suggestion(for:)`) or without a password or two-factor code.
+    /// The sign-ins in an export, in file order. A row is left out without a password or two-factor code; one
+    /// without a site Yardlet can fill on (`VaultSite.suggestion(for:)`) keeps only its code, as a code with no site
+    /// the person links (design §14.3). A row that follows one of the same name, username, password and code joins it
+    /// with its sites: an export writes a sign-in's sites in rows one after another (`VaultCSVExport`). Rows apart from
+    /// each other stay apart, as two accounts that share a password are.
     static func entries(_ text: String, suffixes: PublicSuffixList = .bundled) -> [Entry] {
         let rows = records(text)
         guard let header = rows.first else { return [] }
@@ -31,21 +34,30 @@ enum VaultCSVImport {
         }
         guard let address = column(addressColumns), let password = column(passwordColumns) else { return [] }
         let name = column(nameColumns), username = column(usernameColumns), code = column(codeColumns)
-        return rows.dropFirst().compactMap { row in
+        var entries: [Entry] = []
+        for row in rows.dropFirst() {
             func value(_ index: Int?) -> String {
                 guard let index, row.indices.contains(index) else { return "" }
                 return row[index]
             }
-            let secret = value(password)
+            var secret = value(password)
             let oneTimeCode = OneTimeCodeSecret(setupText: value(code))
-            guard !secret.isEmpty || oneTimeCode != nil else { return nil }
             let sites = Self.sites(in: value(address), suffixes: suffixes)
-            guard let first = sites.first else { return nil }
+            if sites.isEmpty { secret = "" }
+            guard !secret.isEmpty || oneTimeCode != nil else { continue }
             let title = value(name).trimmingCharacters(in: .whitespacesAndNewlines)
-            return Entry(name: title.isEmpty ? first : title, sites: sites,
-                         username: value(username).trimmingCharacters(in: .whitespacesAndNewlines), password: secret,
-                         oneTimeCode: oneTimeCode)
+            let username = value(username).trimmingCharacters(in: .whitespacesAndNewlines)
+            let entry = Entry(name: title.isEmpty ? sites.first ?? username : title, sites: sites, username: username,
+                              password: secret, oneTimeCode: oneTimeCode)
+            if let last = entries.indices.last, !sites.isEmpty, !entries[last].sites.isEmpty,
+               entries[last].name == entry.name, entries[last].username == entry.username,
+               entries[last].password == entry.password, entries[last].oneTimeCode == entry.oneTimeCode {
+                entries[last].sites += sites.filter { !entries[last].sites.contains($0) }
+            } else {
+                entries.append(entry)
+            }
         }
+        return entries
     }
 
     /// The sites of one row's address field. Bitwarden puts several addresses in one field; an
@@ -63,50 +75,58 @@ enum VaultCSVImport {
     }
 
     /// RFC 4180 records: fields split at commas, a quoted field may hold commas, line breaks and
-    /// doubled quotes, and lines end in CRLF, LF or CR. Blank lines are left out.
+    /// doubled quotes, and lines end in CRLF, LF or CR. Blank lines are left out. Read by Unicode
+    /// scalar, as other managers' parsers read bytes: a comma or quote followed by a combining mark
+    /// is still a comma or a quote.
     static func records(_ text: String) -> [[String]] {
         var records: [[String]] = []
         var record: [String] = []
-        var field = ""
+        var field = String.UnicodeScalarView()
         var quoted = false
         var fieldWasQuoted = false
-        let characters = Array(text.hasPrefix("\u{FEFF}") ? String(text.dropFirst()) : text)
+        var scalars = Array(text.unicodeScalars)
+        if scalars.first == "\u{FEFF}" { scalars.removeFirst() }
         var index = 0
-        func endRecord() {
-            record.append(field)
-            if !(record.count == 1 && record[0].isEmpty && !fieldWasQuoted) { records.append(record) }
-            record = []
-            field = ""
+        func endField() {
+            record.append(String(field))
+            field = String.UnicodeScalarView()
             fieldWasQuoted = false
         }
-        while index < characters.count {
-            let character = characters[index]
+        func endRecord() {
+            let wasQuoted = fieldWasQuoted
+            endField()
+            if !(record.count == 1 && record[0].isEmpty && !wasQuoted) { records.append(record) }
+            record = []
+        }
+        while index < scalars.count {
+            let scalar = scalars[index]
             index += 1
             if quoted {
-                if character == "\"" {
-                    if index < characters.count, characters[index] == "\"" {
+                if scalar == "\"" {
+                    if index < scalars.count, scalars[index] == "\"" {
                         field.append("\"")
                         index += 1
                     } else {
                         quoted = false
                     }
                 } else {
-                    field.append(character)
+                    field.append(scalar)
                 }
                 continue
             }
-            switch character {
+            switch scalar {
             case "\"" where field.isEmpty && !fieldWasQuoted:
                 quoted = true
                 fieldWasQuoted = true
             case ",":
-                record.append(field)
-                field = ""
-                fieldWasQuoted = false
-            case "\r\n", "\n", "\r":
+                endField()
+            case "\r":
+                if index < scalars.count, scalars[index] == "\n" { index += 1 }
+                endRecord()
+            case "\n":
                 endRecord()
             default:
-                field.append(character)
+                field.append(scalar)
             }
         }
         if !field.isEmpty || !record.isEmpty || fieldWasQuoted { endRecord() }
@@ -118,12 +138,14 @@ extension VaultCenter {
     /// Saves imported sign-ins and says how many were saved. One already in the vault for the same
     /// site and username takes the new password and keeps the rest; any other becomes a new item
     /// the agent may use at any time, as an item made by hand is. A name already taken gets the
-    /// username after it, so an agent can name either. Codes with no site whose account's sign-in came
-    /// in take its site (`linkCodesToTheirSignIns`).
+    /// username after it, so an agent can name either. A code with no site is left out when an item
+    /// already keeps it, as an authenticator app's import is. Codes with no site whose account's
+    /// sign-in came in take its site (`linkCodesToTheirSignIns`).
     @discardableResult
     func importSignIns(_ entries: [VaultCSVImport.Entry]) -> Int {
         var saved = 0
         for entry in entries {
+            if entry.sites.isEmpty, let code = entry.oneTimeCode, holds(code) { continue }
             if let existing = items.first(where: { item in
                 item.username == entry.username && item.sites.contains { entry.sites.contains($0) }
             }) {
@@ -134,7 +156,7 @@ extension VaultCenter {
                 if let code = entry.oneTimeCode { secret.oneTimeCode = code }
                 guard (try? save(existing, secret: secret)) != nil else { continue }
             } else {
-                var name = entry.name
+                var name = entry.name.isEmpty ? L10n.string("Two-factor code") : entry.name
                 if !entry.username.isEmpty,
                    items.contains(where: { $0.name.compare(name, options: .caseInsensitive) == .orderedSame }) {
                     name += " (\(entry.username))"
