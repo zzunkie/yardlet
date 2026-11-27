@@ -67,6 +67,8 @@ final class CodeModeToolTests: XCTestCase {
         let threshold = CodeModePreference.claudeCodeConnectorToolThreshold
         let codex = try await listsCodeMode(.codex, connectorTools: 40)
         XCTAssertFalse(codex)
+        let pi = try await listsCodeMode(.pi, connectorTools: 40)
+        XCTAssertFalse(pi, "Pi reaches MCP tools from its own codemode scripts")
         let claudeBelow = try await listsCodeMode(.claudeCode, connectorTools: threshold - 1)
         XCTAssertFalse(claudeBelow)
         XCTAssertFalse(CodeModePreference.isOn(.auto, harness: nil, connectorToolCount: 100))
@@ -80,7 +82,7 @@ final class CodeModeToolTests: XCTestCase {
         XCTAssertEqual(openCode, supported)
 
         // Where Auto leaves it off, its tools are refused when called by name.
-        for (harness, count) in [(HarnessKind.codex, 40), (.claudeCode, threshold - 1)] {
+        for (harness, count) in [(HarnessKind.codex, 40), (.pi, 40), (.claudeCode, threshold - 1)] {
             let (broker, sessionID, token, _) = try makeBroker(
                 codeMode: .auto, connectors: ExperimentConnectorProvider(toolCount: count),
                 connectorScope: ConnectorTaskScope(harness: harness))

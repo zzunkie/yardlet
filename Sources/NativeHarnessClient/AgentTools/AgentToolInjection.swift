@@ -2,8 +2,9 @@ import Foundation
 import YardletAgentTools
 
 /// How a harness starts the Yardlet MCP server for one task. Each harness receives it through its
-/// own per-session route (Claude `--mcp-config`, Codex thread `config`, ACP `mcpServers`), so no
-/// harness configuration file is written and the harness's native app is unaffected.
+/// own per-session route (Claude `--mcp-config`, Codex thread `config`, ACP `mcpServers`, a Pi
+/// extension loaded with `-e`), so no harness configuration file is written and the harness's native
+/// app is unaffected.
 struct AgentToolServerLaunch: Equatable, Sendable {
     var name = AgentToolEnvironment.serverName
     /// Absolute path of `yardlet-mcp`.
@@ -118,23 +119,75 @@ struct AgentToolServerLaunch: Equatable, Sendable {
         ])
     }
 
+    /// Pi's `registerMcpServer` entry, in the shape of an `mcp.json` server. Pi reads `$NAME` and
+    /// `${NAME}` in an `env` value as variables and a value that starts with `!` as a command to run,
+    /// so each value goes with `$$` for `$` and a leading `$!` for `!`, which Pi reads back as written
+    /// (`resolve-config-value`, Pi 1.6.1). A connector's name, in the services list, may hold either.
+    var piServer: JSONValue {
+        .object([
+            "command": .string(command),
+            "args": .array(arguments.map { .string($0) }),
+            "env": .object(environment.mapValues { .string(Self.piLiteral($0)) })
+        ])
+    }
+
+    static func piLiteral(_ value: String) -> String {
+        let escaped = value.replacingOccurrences(of: "$", with: "$$")
+        return escaped.hasPrefix("!") ? "$" + escaped : escaped
+    }
+
+    /// The Pi extension that registers the server for the one process that loads it (`pi -e`): Pi
+    /// saves no registration and connects the server again whenever the session's runtime is rebuilt,
+    /// as on `switch_session`. It is CommonJS so that Pi's loader (jiti) runs it as written; an ES
+    /// module would leave a transpiled copy, token included, in the system's temporary folder. A Pi
+    /// before 0.99, without `registerMcpServer`, loads it and runs without the server.
+    func piExtensionSource() throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let name = String(decoding: try encoder.encode(JSONValue.string(self.name)), as: UTF8.self)
+        let server = String(decoding: try encoder.encode(piServer), as: UTF8.self)
+        return """
+            module.exports = function (pi) {
+              if (typeof pi.registerMcpServer !== "function") return;
+              pi.registerMcpServer(\(name), \(server));
+            };
+
+            """
+    }
+
     /// Writes Claude's config to a file only the user can read and returns its path. A file keeps
     /// the token out of the process list, where a JSON argument would show it.
     func writeClaudeConfig(for localSessionID: UUID) throws -> URL {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return try writePrivateFile(encoder.encode(claudeConfig),
+                                    named: "claude-\(localSessionID.uuidString.lowercased()).json")
+    }
+
+    /// Writes the Pi extension to a file only the user can read, for the same reason, and returns its path.
+    func writePiExtension(for localSessionID: UUID) throws -> URL {
+        try writePrivateFile(Data(piExtensionSource().utf8), named: Self.piExtensionName(for: localSessionID))
+    }
+
+    /// The Pi extension's file name for a task. It holds the task's token, so it goes when the Pi process
+    /// that loaded it stops (`PiRPCAdapter`) and when the task's tools are released (`AgentToolBroker`).
+    static func piExtensionName(for localSessionID: UUID) -> String {
+        "pi-\(localSessionID.uuidString.lowercased()).cjs"
+    }
+
+    private func writePrivateFile(_ data: Data, named name: String) throws -> URL {
         guard let privateDirectory else {
             throw CocoaError(.fileNoSuchFile, userInfo: [NSLocalizedDescriptionKey: "No private directory"])
         }
-        let url = privateDirectory.appending(path: "claude-\(localSessionID.uuidString.lowercased()).json")
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        try StateFile.write(encoder.encode(claudeConfig), to: url, isPrivate: true)
+        let url = privateDirectory.appending(path: name)
+        try StateFile.write(data, to: url, isPrivate: true)
         return url
     }
 }
 
 /// Which per-session route a harness offers for the Yardlet MCP server. Harnesses with none
-/// (Muse's MSP, Pi RPC and Cursor) run without it; their users can still
-/// register MCP servers in the harness itself.
+/// (Muse's MSP and Cursor) run without it; their users can still register MCP servers in the
+/// harness itself.
 enum AgentToolInjectionRoute: Equatable, Sendable {
     /// Claude Code `--mcp-config`.
     case claudeMCPConfig
@@ -143,12 +196,16 @@ enum AgentToolInjectionRoute: Equatable, Sendable {
     /// ACP `session/new` and `session/load` `mcpServers`. An agent that gives them to every session in
     /// the folder (`ACPProtocol.sharesMCPServersInFolder`) runs each task in a folder on its own process.
     case acpSessionMCPServers
+    /// Pi's `-e <extension>`, an extension in Yardlet's private folder that calls `registerMcpServer`
+    /// for that process only ("Registrations are not saved", Pi 1.6.1 docs/extensions.md).
+    case piExtension
 
     static func route(for harness: HarnessKind) -> AgentToolInjectionRoute? {
         switch HarnessCatalog.descriptor(for: harness)?.transport {
         case .claudeStreamJSON: .claudeMCPConfig
         case .codexAppServer: .codexThreadConfig
         case .acp: .acpSessionMCPServers
+        case .piRPC: .piExtension
         default: nil
         }
     }
@@ -156,7 +213,7 @@ enum AgentToolInjectionRoute: Equatable, Sendable {
 
 /// Optional Yardlet tool surface. An adapter whose harness takes MCP servers per session gets the
 /// Yardlet server before the session starts, resumes, or forks; nil leaves the session without
-/// it. Adapters with no such route (Muse, Pi, Cursor) do not conform.
+/// it. Adapters with no such route (Muse, Cursor) do not conform.
 protocol HarnessAgentToolConfiguring: Actor {
     func setAgentToolServer(_ server: AgentToolServerLaunch?, for localSessionID: UUID) async
 }

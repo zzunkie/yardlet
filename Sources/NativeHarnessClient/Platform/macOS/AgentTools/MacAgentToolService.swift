@@ -252,7 +252,7 @@ final class MacAgentToolService: NativeSurfaceResource {
 
     private nonisolated static let directoryPrefix = "Yardlet-tools-"
 
-    /// A run that crashed leaves its directory, with its socket and Claude config files, behind.
+    /// A run that crashed leaves its directory, with its socket, Claude config files and Pi extensions, behind.
     private nonisolated static func removeDirectoriesOfEndedRuns(in temporary: URL) {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: temporary.path(percentEncoded: false))) ?? []
         for name in names where name.hasPrefix(directoryPrefix) {

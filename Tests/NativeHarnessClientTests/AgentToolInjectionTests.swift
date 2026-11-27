@@ -63,15 +63,22 @@ final class AgentToolInjectionTests: XCTestCase {
         XCTAssertEqual(server.acpServer["env"]?.arrayValue?.compactMap { $0["name"]?.stringValue },
                        [AgentToolEnvironment.session, AgentToolEnvironment.endpoint, AgentToolEnvironment.token],
                        "ACP takes the environment as a name/value list, here in name order")
+
+        XCTAssertEqual(server.piServer["command"], .string(server.command))
+        XCTAssertEqual(server.piServer["env"]?[AgentToolEnvironment.token], .string(server.environment[AgentToolEnvironment.token]!))
+        XCTAssertNil(server.piServer["exposure"], "Pi's own default decides how the model reaches the tools")
+        XCTAssertEqual(AgentToolServerLaunch.piLiteral("!Gmail\n$HOME ${X} $$"), "$!Gmail\n$$HOME $${X} $$$$",
+                       "Pi would read a leading ! as a command and $ as a variable")
     }
 
-    func testOnlyClaudeCodexAndACPHaveARoute() {
+    func testClaudeCodexACPAndPiHaveARoute() {
         XCTAssertEqual(AgentToolInjectionRoute.route(for: .claudeCode), .claudeMCPConfig)
         XCTAssertEqual(AgentToolInjectionRoute.route(for: .codex), .codexThreadConfig)
         for harness in [HarnessKind.openCode, .antigravityCLI, .kimiCode, .grokBuild, .hermes, .kiroCLI] {
             XCTAssertEqual(AgentToolInjectionRoute.route(for: harness), .acpSessionMCPServers, "\(harness)")
         }
-        for harness in [HarnessKind.museCode, .pi, .cursorAgent] {
+        XCTAssertEqual(AgentToolInjectionRoute.route(for: .pi), .piExtension)
+        for harness in [HarnessKind.museCode, .cursorAgent] {
             XCTAssertNil(AgentToolInjectionRoute.route(for: harness), "\(harness) has no per-session route")
         }
     }
@@ -79,7 +86,7 @@ final class AgentToolInjectionTests: XCTestCase {
     func testTheAdaptersTheAppRoutesThroughAcceptTheServer() async {
         let registry = HarnessRegistry()
         let executable = URL(filePath: "/tmp/yardlet-agent-tool-routing-fixture")
-        for harness in [HarnessKind.codex, .claudeCode, .openCode, .antigravityCLI, .kimiCode, .grokBuild, .hermes, .kiroCLI] {
+        for harness in [HarnessKind.codex, .claudeCode, .openCode, .antigravityCLI, .kimiCode, .grokBuild, .hermes, .kiroCLI, .pi] {
             let routed = await registry.adapter(for: harness, executableURL: executable)
             XCTAssertNotNil(routed as? any HarnessAgentToolConfiguring,
                             "\(harness) reaches the app through a wrapper that has to carry the server")
@@ -271,6 +278,80 @@ final class AgentToolInjectionTests: XCTestCase {
                        .string(loaded.uuidString))
     }
 
+    // MARK: - Pi
+
+    func testThePiRouteTheAppShipsLoadsTheServerFromAPrivateExtensionOnlyWhileItsProcessRuns() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        func routed(_ transport: FakePiRPCTransport) throws -> (any HarnessAdapter, any HarnessAgentToolConfiguring) {
+            let adapter: any HarnessAdapter = YHPProviderCompatibilityAdapter(
+                adapter: PiRPCAdapter(kind: .pi, executableURL: URL(filePath: "/tmp/fake-pi"), transportFactory: { _ in transport }),
+                manifest: HarnessProtocolCompatibilityManifest.piRPC(.pi))
+            return (adapter, try XCTUnwrap(adapter as? any HarnessAgentToolConfiguring, "The server has to survive the protocol wrapper"))
+        }
+        let sessionID = UUID()
+        let server = launch(session: sessionID, directory: directory)
+        let file = directory.appending(path: "pi-\(sessionID.uuidString.lowercased()).cjs")
+        func written() -> Bool { FileManager.default.fileExists(atPath: file.path(percentEncoded: false)) }
+
+        let started = FakePiRPCTransport(sessionFile: "/tmp/pi-tools.jsonl")
+        let (starting, startingTools) = try routed(started)
+        await startingTools.setAgentToolServer(server, for: sessionID)
+        let created = try await starting.createSession(
+            CreateHarnessSessionRequest(localSessionID: sessionID, workspaceURL: workspace, initialPrompt: nil))
+        let attributes = try FileManager.default.attributesOfItem(atPath: file.path(percentEncoded: false))
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600, "The token is readable by the user only")
+        let source = try String(contentsOf: file, encoding: .utf8)
+        XCTAssertTrue(source.hasPrefix("module.exports = function (pi) {"),
+                      "CommonJS, which Pi's loader runs without leaving a transpiled copy behind")
+        let call = try XCTUnwrap(source.split(separator: "\n").first { $0.contains("pi.registerMcpServer(") })
+        XCTAssertTrue(call.contains("pi.registerMcpServer(\"yardlet\", {"))
+        let entry = try JSONDecoder().decode(JSONValue.self, from: Data(call.drop { $0 != "{" }.dropLast(2).utf8))
+        XCTAssertEqual(entry, server.piServer)
+        await starting.close(created)
+        XCTAssertFalse(written(), "Closing the session deletes the extension, which holds the token")
+
+        // A resumed session's process loads it again; when that process ends on its own, it goes too.
+        let resumed = FakePiRPCTransport(sessionFile: "/tmp/pi-tools.jsonl")
+        let (resuming, resumingTools) = try routed(resumed)
+        await resumingTools.setAgentToolServer(server, for: sessionID)
+        _ = try await resuming.resumeSession(providerSessionID: "/tmp/pi-tools.jsonl", localSessionID: sessionID,
+                                             workspaceURL: workspace)
+        XCTAssertTrue(written(), "Kept while the process may load it again")
+        await resumed.exit()
+        try await waitUntil(message: "the ended process's extension is deleted") { !written() }
+
+        for transport in [started, resumed] {
+            let arguments = try XCTUnwrapAsync(await transport.configuration?.arguments)
+            let flag = try XCTUnwrap(arguments.firstIndex(of: "-e"))
+            XCTAssertEqual(arguments[flag + 1], file.path(percentEncoded: false))
+            XCTAssertFalse(arguments.contains { $0.contains(server.environment[AgentToolEnvironment.token]!) },
+                           "The token stays out of the process arguments")
+        }
+
+        // A start that fails leaves none either.
+        let failing = FakePiRPCTransport(sessionFile: "/tmp/pi-tools.jsonl")
+        await failing.forgetSessionFile()
+        let (failingStart, failingTools) = try routed(failing)
+        await failingTools.setAgentToolServer(server, for: sessionID)
+        do {
+            _ = try await failingStart.createSession(
+                CreateHarnessSessionRequest(localSessionID: sessionID, workspaceURL: workspace, initialPrompt: nil))
+            XCTFail("A Pi that names no session file cannot start a kept session")
+        } catch {}
+        let failedArguments = try XCTUnwrapAsync(await failing.configuration?.arguments)
+        XCTAssertTrue(failedArguments.contains("-e"))
+        XCTAssertFalse(written())
+
+        let off = FakePiRPCTransport(sessionFile: "/tmp/pi-tools.jsonl")
+        let (plain, plainTools) = try routed(off)
+        await plainTools.setAgentToolServer(nil, for: sessionID)
+        await plain.close(try await plain.createSession(
+            CreateHarnessSessionRequest(localSessionID: sessionID, workspaceURL: workspace, initialPrompt: nil)))
+        let without = try XCTUnwrapAsync(await off.configuration?.arguments)
+        XCTAssertFalse(without.contains("-e"), "Without a server the launch is unchanged")
+    }
+
     func testAnACPAgentThatTurnsDownStdioServersGetsNone() async throws {
         XCTAssertTrue(ACPProtocol.acceptsStdioMCPServers(initializeResult: .object(["agentCapabilities": .object([:])])),
                       "ACP makes stdio servers mandatory, so silence means yes")
@@ -297,6 +378,21 @@ final class AgentToolInjectionTests: XCTestCase {
             ),
             tools: BrowserAgentTools(usesMacEditingCommands: true, pages: { _ in page })
         )
+    }
+
+    func testReleasingATasksToolsDeletesOnlyItsPiExtension() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let broker = AgentToolBroker(
+            environment: AgentToolBroker.Environment(executableURL: URL(filePath: "/bin/sh"), endpoint: "/tmp/Yardlet-tools-test/tools.sock",
+                                                     privateDirectory: directory, isEnabled: { true }),
+            tools: BrowserAgentTools(usesMacEditingCommands: true, pages: { _ in BrowserAgentPage(cdp: ScriptedCDP()) }))
+        let released = UUID()
+        let kept = UUID()
+        let files = try [released, kept].map { try launch(session: $0, directory: directory).writePiExtension(for: $0) }
+        broker.releaseAgentTools(for: released)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: files[0].path(percentEncoded: false)), "Its token ended with it")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: files[1].path(percentEncoded: false)))
     }
 
     func testTheSettingAndAMissingServerExecutableMeanNoInjection() {
@@ -474,17 +570,17 @@ final class AgentToolInjectionTests: XCTestCase {
         XCTAssertEqual(afterOff[secondID], .some(nil), "With the setting off the session starts without the server")
         await claudeModel.shutdown()
 
-        let pi = RecordingToolAdapter(kind: .pi)
-        let piModel = model(adapter: pi)
-        let piLaunches = RecordingLaunches()
-        piModel.agentTools = piLaunches
-        let piSession = await piModel.createSession(harness: .pi, workspaceURL: workspace,
-                                                    runtimeExecutableURL: URL(filePath: "/tmp/pi"), title: "Pi")
-        let piID = try XCTUnwrap(piSession?.id)
-        let piConfigured = await pi.configured
-        XCTAssertEqual(piConfigured[piID], .some(nil))
-        XCTAssertTrue(piLaunches.requested.isEmpty, "No token is issued for a harness that cannot take the server")
-        await piModel.shutdown()
+        let muse = RecordingToolAdapter(kind: .museCode)
+        let museModel = model(adapter: muse)
+        let museLaunches = RecordingLaunches()
+        museModel.agentTools = museLaunches
+        let museSession = await museModel.createSession(harness: .museCode, workspaceURL: workspace,
+                                                        runtimeExecutableURL: URL(filePath: "/tmp/muse"), title: "Muse")
+        let museID = try XCTUnwrap(museSession?.id)
+        let museConfigured = await muse.configured
+        XCTAssertEqual(museConfigured[museID], .some(nil))
+        XCTAssertTrue(museLaunches.requested.isEmpty, "No token is issued for a harness that cannot take the server")
+        await museModel.shutdown()
     }
 
     // MARK: - Tabs

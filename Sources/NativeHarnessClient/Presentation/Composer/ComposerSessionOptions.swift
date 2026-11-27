@@ -471,7 +471,7 @@ enum ComposerSessionOptionsProjection {
     }
 
     /// A session gets Yardlet's connectors where its harness takes the Yardlet MCP server per
-    /// session (Claude, Codex, ACP); the servers are whatever the harness reported.
+    /// session (Claude, Codex, ACP, Pi); the servers are whatever the harness reported.
     private static func connectorsSlot(harness: HarnessKind, servers: [HarnessMCPServerStatus]?) -> ComposerConnectorsSlot? {
         let route = AgentToolInjectionRoute.route(for: harness)
         let carries = route != nil

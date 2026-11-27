@@ -594,8 +594,8 @@ as before. Both carry `alwaysLoad`, so Claude Code loads them with the prompt ra
   Each call is checked and, where the task asks, asked about as a direct call is, and the script's result has keys and
   tokens hidden.
 
-`Auto` decides per task, from its harness and the number of connector tools it is offered: never in Codex, which runs
-its own code mode; in Claude Code from 30 connector tools (`CodeModePreference.claudeCodeConnectorToolThreshold`), since
+`Auto` decides per task, from its harness and the number of connector tools it is offered: never in Codex or Pi, which
+run their own code mode (Pi reaches an MCP server's tools from its `codemode` scripts by default); in Claude Code from 30 connector tools (`CodeModePreference.claudeCodeConnectorToolThreshold`), since
 with fewer its tool search loads the few it needs in fewer turns; in Antigravity and the other harnesses from one. The
 list changes when the setting or the connectors do (the "Tool lists of running tasks" section). The setting was a
 switch before it had three values and saved a value only once turned: a saved `true` stays `On` and a saved `false`
