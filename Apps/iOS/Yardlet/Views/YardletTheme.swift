@@ -4,8 +4,7 @@ import YardletRemote
 
 // MARK: - Palette
 
-/// Quiet monochrome mobile palette, the surface ladder Yardlet Android's Theme.kt takes too (docs/DESIGN_SYSTEM.md,
-/// "Mobile").
+/// Quiet monochrome mobile palette (docs/DESIGN_SYSTEM.md, "Mobile").
 /// Lists stand on the canvas as rows with hairlines between them; each step up the ladder (a field, a card, a pressed
 /// control) reads apart from the one under it in both appearances. Chromatic color is restricted to status indicators
 /// and error states.
@@ -278,7 +277,8 @@ struct MacHeaderBar: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(Text("Switch Mac or open menu"))
-            .accessibilityValue(Text(verbatim: "\(macName), \(connectionLabel)"))
+            .accessibilityValue(Text(verbatim: isDemo ? "\(macName), \(String(localized: "Tour")), \(connectionLabel)"
+                                               : "\(macName), \(connectionLabel)"))
 
             Spacer(minLength: 8)
 

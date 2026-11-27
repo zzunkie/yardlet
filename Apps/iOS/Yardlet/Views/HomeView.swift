@@ -281,7 +281,7 @@ struct HomeView: View {
                         searchEmptyState
                     } else {
                         ForEach(matches, id: \.id) { task in
-                            taskRow(task, depth: 0, showsProject: true, isAttention: task.attention == .waiting)
+                            taskRow(task, depth: 0, showsProject: true)
                         }
                     }
                 } else if session.hasSnapshot && session.tasks.isEmpty {
@@ -424,7 +424,7 @@ struct HomeView: View {
         if !waiting.isEmpty {
             Section {
                 ForEach(waiting, id: \.id) { task in
-                    taskRow(task, depth: 0, showsProject: true, isAttention: true)
+                    taskRow(task, depth: 0, showsProject: true)
                 }
             } header: {
                 sectionHeader("Waiting for You", count: waiting.count)
@@ -502,8 +502,7 @@ struct HomeView: View {
         ForEach(rows, id: \.task.id) { row in
             taskRow(row.task, depth: row.depth, showsProject: showsProject && row.depth == 0,
                     children: row.children,
-                    activityAt: row.depth == 0 ? row.latestActivityAt : row.task.lastActivityAt,
-                    isAttention: false)
+                    activityAt: row.depth == 0 ? row.latestActivityAt : row.task.lastActivityAt)
         }
     }
 
@@ -568,9 +567,9 @@ struct HomeView: View {
     }
 
     private func taskRow(_ task: RemoteTask, depth: Int, showsProject: Bool, children: Int = 0,
-                         activityAt: Int64? = nil, isAttention: Bool) -> some View {
+                         activityAt: Int64? = nil) -> some View {
         TaskRow(task: task, session: session, depth: depth, showsProject: showsProject, children: children,
-                isExpanded: expanded.contains(task.id), activityAt: activityAt, isAttention: isAttention,
+                isExpanded: expanded.contains(task.id), activityAt: activityAt,
                 open: { path.append(task.id) },
                 toggle: {
                     if expanded.contains(task.id) { expanded.remove(task.id) } else { expanded.insert(task.id) }
@@ -670,7 +669,6 @@ struct TaskRow: View {
     var isExpanded = false
     /// When the row says it last moved: a folded parent shows its latest subtask's time.
     var activityAt: Int64?
-    var isAttention = false
     var open: () -> Void = {}
     var toggle: () -> Void = {}
 
@@ -711,7 +709,7 @@ struct TaskRow: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityValue(children > 0 ? Text(subtitle) : Text(verbatim: ""))
+                .accessibilityValue(accessibilityValue)
 
                 if children > 0 {
                     HStack(spacing: 8) {
@@ -753,6 +751,15 @@ struct TaskRow: View {
                 .foregroundStyle(YardletPalette.onSurfaceVariant)
                 .lineLimit(1)
         }
+    }
+
+    /// The row's state from its mark, which stands outside the row's button, and what it runs on where the subtasks'
+    /// line shows that outside the button too.
+    private var accessibilityValue: Text {
+        let parts = [TaskMark.label(task.indicator), children > 0 ? Text(subtitle) : nil].compactMap { $0 }
+        guard var value = parts.first else { return Text(verbatim: "") }
+        for part in parts.dropFirst() { value = value + Text(verbatim: ", ") + part }
+        return value
     }
 
     /// What it runs on, after its project or Chats where the list mixes them.

@@ -225,9 +225,9 @@ private struct Answer: Identifiable {
     let action: () -> Void
 }
 
-/// An approval's answers on one line, as the Mac's card ends its row: Deny, the wider allows under one "Allow More"
-/// menu, and the primary answer last, nearest the thumb. A label never wraps: where the line has no room (a narrow
-/// phone, a large text size) the primary answer takes a line of its own above the others.
+/// A request's answers on one line, as the Mac's card ends its row: Deny (or Decline), an approval's wider allows under
+/// one "Allow More" menu, and the primary answer last, nearest the thumb. A label never wraps: where the line has no
+/// room (a narrow phone, a large text size) the primary answer takes a line of its own above the others.
 private struct AnswerRow: View {
     let answers: [Answer]
 
@@ -600,20 +600,10 @@ private struct HandoffAnswer: View {
                     .font(.footnote)
                     .foregroundStyle(YardletPalette.onSurfaceVariant)
             }
-            HStack(spacing: 10) {
-                Button {
-                    answer(.decline)
-                } label: {
-                    Text("Decline").frame(maxWidth: .infinity)
-                }
-                .buttonStyle(CardButtonStyle(role: "destructive"))
-                Button {
-                    answer(.done)
-                } label: {
-                    Text("Hand Back").frame(maxWidth: .infinity)
-                }
-                .buttonStyle(CardButtonStyle(role: "primary"))
-            }
+            AnswerRow(answers: [
+                Answer(id: "decline", title: String(localized: "Decline"), role: "destructive") { answer(.decline) },
+                Answer(id: "done", title: String(localized: "Hand Back"), role: "primary") { answer(.done) }
+            ])
         }
         .disabled(isSending || !context.session.isConnected)
     }

@@ -108,8 +108,9 @@ on their actual composite background; the table alone does not establish contras
 
 The phone apps keep one quiet palette of their own rather than the Mac's canvas tones: a list stands
 on the canvas, and each step up the ladder (a field, a card, a control's fill) reads apart from the one
-under it. The values are the iPhone app's (`YardletPalette` in `Apps/iOS/Yardlet/Views/YardletTheme.swift`);
-the Android app's `Theme.kt` takes the same ones. The Mac column
+under it. The values are the iPhone app's (`YardletPalette` in `Apps/iOS/Yardlet/Views/YardletTheme.swift`).
+The Android app's `Theme.kt` still has the ladder these replaced (#161618 to #2E2E31 in dark) and is to
+take the same values. The Mac column
 names the nearest Mac role for comparison; the values are not meant to match it.
 
 | Role / `YardletPalette` | Mac nearest (light / dark) | Mobile light | Mobile dark | Use |
@@ -120,7 +121,7 @@ names the nearest Mac role for comparison; the values are not meant to match it.
 | Step 3 / `surfaceContainerHigh` | — | #E8E8EB | #25282E | A pressed or disabled control |
 | Step 4 / `surfaceContainerHighest` | — | #DFDFE3 | #2E3138 | A card's secondary button |
 | Hairline / `outlineVariant` | Separator, black 9.5% / white 10.5% | #E3E3E6 | #2C2F35 | The divider between list rows, a field's edge |
-| Secondary words / `onSurfaceVariant` | Native secondary label | #626266 | #A3A5AC | 4.5:1 or more on every step: 4.57:1 light and 4.83:1 dark on step 4 |
+| Secondary words / `onSurfaceVariant` | Native secondary label | #626266 | #A3A5AC | 4.5:1 or more on every step: 4.57:1 light and 5.29:1 dark on step 4 |
 
 A list of tasks, mail or events is a column of full-width rows on the canvas, parted by the hairline
 from where the row's words start, as the system's Mail and Reminders lists are: no card, border or badge

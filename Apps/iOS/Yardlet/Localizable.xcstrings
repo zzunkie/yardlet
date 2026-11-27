@@ -7130,6 +7130,16 @@
         }
       }
     },
+    "Tour": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "둘러보기"
+          }
+        }
+      }
+    },
     "Try Again": {
       "localizations": {
         "ko": {

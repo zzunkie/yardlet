@@ -26,10 +26,11 @@ struct TaskMark: View {
             }
         }
         .frame(width: 12, height: 12)
-        .accessibilityLabel(label)
+        .accessibilityLabel(Self.label(indicator) ?? Text(verbatim: ""))
     }
 
-    private var label: Text {
+    /// What the mark says: for VoiceOver on the mark, or on a row that reads it with its own words.
+    static func label(_ indicator: RemoteIndicator?) -> Text? {
         switch indicator {
         case .awaitingApproval?: Text("Awaiting approval")
         case .needsInput?: Text("Awaiting an answer")
@@ -37,7 +38,7 @@ struct TaskMark: View {
         case .running?: Text("Running")
         case .failed?: Text("Failed")
         case .usageLimit?: Text("Stopped at a usage limit")
-        case nil: Text(verbatim: "")
+        case nil: nil
         }
     }
 }

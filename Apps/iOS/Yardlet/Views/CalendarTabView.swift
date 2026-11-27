@@ -309,6 +309,8 @@ struct CalendarTabView: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+        // Room under the last row, so the list's end clears the bars below it instead of meeting them.
+        .contentMargins(.bottom, 24, for: .scrollContent)
         .background(YardletPalette.background)
         .refreshable {
             await store.refreshCalendar()
