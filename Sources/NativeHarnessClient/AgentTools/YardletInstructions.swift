@@ -24,7 +24,7 @@ struct YardletInstructionsDelivery: Hashable, Sendable {
 ///   reads that first (`config/read`) and sends it ahead of its text.
 /// - Grok Build 1.0.30 — `grok agent stdio` has no `--rules` (that is the TUI's flag); its ACP
 ///   documents `_meta.rules` on `session/new`, "Extra rules appended to the system prompt".
-/// - Pi 0.84.1 — `--append-system-prompt <text>` (repeatable) on the `pi --mode rpc` launch. It
+/// - Pi 0.84.1 (the same in 1.6.1) — `--append-system-prompt <text>` (repeatable) on the `pi --mode rpc` launch. It
 ///   replaces the APPEND_SYSTEM.md Pi would find, so Yardlet passes the global one ahead of its
 ///   text and leaves a project that has its own unchanged.
 /// - Antigravity CLI 1.4.12 — `agy acp` advertises `_meta.antigravity.systemPrompt` `{"append": true}`

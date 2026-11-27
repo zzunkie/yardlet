@@ -52,7 +52,8 @@ enum CodeModePreference {
     }
 
     /// Whether a task of this harness, offered this many connector tools, gets Code Mode. In `auto`,
-    /// Codex never does (it runs its own code mode); Claude Code does from
+    /// Codex and Pi never do (each runs its own code mode; Pi's reaches an MCP server's tools by
+    /// default, docs/mcp.md "Control tool exposure"); Claude Code does from
     /// `claudeCodeConnectorToolThreshold` connector tools; Antigravity and the other harnesses do from one.
     static func isOn(_ mode: Mode, harness: HarnessKind?, connectorToolCount: Int) -> Bool {
         guard isSupported else { return false }
@@ -61,7 +62,7 @@ enum CodeModePreference {
         case .off: return false
         case .auto:
             switch harness {
-            case nil, .codex?: return false
+            case nil, .codex?, .pi?: return false
             case .claudeCode?: return connectorToolCount >= claudeCodeConnectorToolThreshold
             default: return connectorToolCount > 0
             }

@@ -1,7 +1,7 @@
 import Foundation
 
 actor PiRPCAdapter: HarnessAdapter, ProviderCapabilityProviding, HarnessWorkspaceRootsConfiguring,
-    HarnessHistoryFreeSessionConfiguring, HarnessYardletInstructionsConfiguring {
+    HarnessHistoryFreeSessionConfiguring, HarnessYardletInstructionsConfiguring, HarnessAgentToolConfiguring {
     private struct PermissionContext: Sendable {
         let localSessionID: UUID
         let providerRequestID: String
@@ -26,12 +26,13 @@ actor PiRPCAdapter: HarnessAdapter, ProviderCapabilityProviding, HarnessWorkspac
     private var eventChannel = HarnessEventChannel()
     private var additionalRootsByLocalSessionID: [UUID: [URL]] = [:]
     private var yardletInstructionsByLocalSessionID: [UUID: String] = [:]
+    private var agentToolServerByLocalSessionID: [UUID: AgentToolServerLaunch] = [:]
     private let environmentOverrides: [String: String]
     /// Sessions whose process saves no session file (`--no-session`, `run_agent`).
     private var historyFreeSessionIDs = Set<UUID>()
 
     /// The flag that keeps a session in memory only: Pi's `--no-session` ("Don't save session
-    /// (ephemeral)", `pi --help` 0.84.1).
+    /// (ephemeral)", `pi --help` 0.84.1; still so in 1.6.1).
     static func historyFreeArguments(for kind: HarnessKind) -> [String]? {
         kind == .pi ? ["--no-session"] : nil
     }
@@ -70,6 +71,19 @@ actor PiRPCAdapter: HarnessAdapter, ProviderCapabilityProviding, HarnessWorkspac
     /// Pi is not installed here to check, so it receives nothing.
     func setYardletInstructions(_ instructions: YardletInstructionsDelivery?, for localSessionID: UUID) {
         yardletInstructionsByLocalSessionID[localSessionID] = instructions?.text
+    }
+
+    /// The Yardlet MCP server for this session's next launch, loaded with `-e` (`AgentToolInjectionRoute.piExtension`).
+    func setAgentToolServer(_ server: AgentToolServerLaunch?, for localSessionID: UUID) {
+        agentToolServerByLocalSessionID[localSessionID] = server
+    }
+
+    /// The flag that loads the server's extension. An extension that cannot be written leaves the launch
+    /// as it was rather than failing the task.
+    func agentToolArguments(for localSessionID: UUID) -> [String] {
+        guard let server = agentToolServerByLocalSessionID[localSessionID],
+              let file = try? server.writePiExtension(for: localSessionID) else { return [] }
+        return ["-e", file.path(percentEncoded: false)]
     }
 
     /// The instruction flags for this session's launch in `workspaceURL` (`YardletInstructionsLaunch`).
@@ -382,6 +396,7 @@ actor PiRPCAdapter: HarnessAdapter, ProviderCapabilityProviding, HarnessWorkspac
         eventChannel.close(session.localSessionID)
         additionalRootsByLocalSessionID.removeValue(forKey: session.localSessionID)
         yardletInstructionsByLocalSessionID.removeValue(forKey: session.localSessionID)
+        agentToolServerByLocalSessionID.removeValue(forKey: session.localSessionID)
         historyFreeSessionIDs.remove(session.localSessionID)
         await detach(localSessionID: session.localSessionID)
     }
@@ -395,6 +410,7 @@ actor PiRPCAdapter: HarnessAdapter, ProviderCapabilityProviding, HarnessWorkspac
         try await transport.start(
             PiRPCLaunchConfiguration(
                 arguments: launchArguments(for: localSessionID)
+                    + agentToolArguments(for: localSessionID)
                     + instructionArguments(for: localSessionID, workspaceURL: workspaceURL),
                 workspaceURL: workspaceURL
             )
