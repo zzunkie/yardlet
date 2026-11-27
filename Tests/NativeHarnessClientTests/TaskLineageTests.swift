@@ -244,6 +244,20 @@ final class TaskLineageTests: XCTestCase {
         XCTAssertTrue(family.children.allSatisfy { merged($0) == nil })
     }
 
+    /// The confirmation lists the tasks it archives by title, the first eight and then "and N more",
+    /// so a family with many merged tasks keeps the alert readable. Nine are all listed, as a list
+    /// shows the one row "Show more" would leave behind.
+    func testTheConfirmationListsTheFirstEightTasksAndCountsTheRest() {
+        let titles = (1...12).map { "Task \($0)" }
+        func lines(_ count: Int) -> [String] {
+            SidebarMergedNestedTasks.confirmationList(Array(titles.prefix(count))).components(separatedBy: "\n")
+        }
+        XCTAssertEqual(lines(12), (1...8).map { "• Task \($0)" } + [L10n.format("and %lld more", Int64(4))])
+        XCTAssertEqual(lines(10).last, L10n.format("and %lld more", Int64(2)))
+        XCTAssertEqual(lines(9), (1...9).map { "• Task \($0)" })
+        XCTAssertEqual(lines(1), ["• Task 1"])
+    }
+
     // MARK: - The link in the index
 
     func testTheIndexKeepsTheLinkAndAnOlderIndexGainsItsColumn() async throws {

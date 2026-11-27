@@ -2931,7 +2931,7 @@ struct MainWindow: View {
         } message: {
             if let tasks = mergedTasksToArchive {
                 // Which tasks go, by name, as the agents' archive card lists them.
-                Text(tasks.map { "• " + $0.title }.joined(separator: "\n"))
+                Text(SidebarMergedNestedTasks.confirmationList(tasks.map(\.title)))
                 if model.containsAttachedCodexTask(tasks) {
                     Text(L10n.string("Archive attached Codex tasks confirmation"))
                 }

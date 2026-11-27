@@ -186,6 +186,22 @@ struct SidebarMergedNestedTasks: Equatable, Sendable {
         taskIDs.count == 1 ? L10n.string("Archive 1 task with a merged pull request…")
             : L10n.format("Archive %lld tasks with merged pull requests…", Int64(taskIDs.count))
     }
+
+    /// How many titles the confirmation lists before "and N more".
+    static let listedTitleLimit = 8
+
+    /// The confirmation's list of the tasks it archives, a title a line: the first `listedTitleLimit`
+    /// and then "and N more", so a standard alert stays readable for a family with many merged tasks.
+    /// When only one would be left out it is listed too, as a list shows the one row "Show more"
+    /// would leave behind (`SidebarProjection.visibleRows`).
+    static func confirmationList(_ titles: [String]) -> String {
+        let listed = titles.count > listedTitleLimit + 1 ? Array(titles.prefix(listedTitleLimit)) : titles
+        var lines = listed.map { "• " + $0 }
+        if listed.count < titles.count {
+            lines.append(L10n.format("and %lld more", Int64(titles.count - listed.count)))
+        }
+        return lines.joined(separator: "\n")
+    }
 }
 
 /// The new-task screen's warning, from the Claude app: the folder chosen for a new task already has
