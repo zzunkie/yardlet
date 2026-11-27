@@ -101,6 +101,11 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
     /// The width the text was last laid out whole at, which its lines are placed for; nil once the
     /// text changed.
     private var wholeLayoutWidth: CGFloat?
+    /// A fits-width message's text just changed, so the next `layOutWhole` must bounce the container
+    /// width through zero to shed TextKit 2's width high-water mark. The bounce lives inside
+    /// `layOutWhole` so no caller ever observes a zero-width container (a `rect(of:)` or `paintBackgrounds`
+    /// called between `update(blocks:)` and `size(forWidth:)` would otherwise lay out at 0pt).
+    private var pendingWidthReset = false
     /// Keep visible prose at its last exact layout while AppKit tracks a window resize. Offscreen
     /// texts keep measuring normally, so finishing a drag does not reflow every retained turn at once.
     private var liveResizeSize: CGSize?
@@ -187,6 +192,7 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
             built = []
             listItems = .init()
             textView.textStorage?.setAttributedString(NSAttributedString())
+            if fitsWidth { pendingWidthReset = true }
         }
         let builder = TranscriptProseBuilder(style: style, listItems: listItems)
         var next: [Built] = []
@@ -210,14 +216,22 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
         let kept = Self.unchangedParagraphsLength(of: storage, from: offset, in: replacement)
         replacement.deleteCharacters(in: NSRange(location: 0, length: kept))
         offset += kept
+        let rangeLength = storage.length - offset
         let edit = {
-            storage.replaceCharacters(in: NSRange(location: offset, length: storage.length - offset), with: replacement)
+            storage.replaceCharacters(in: NSRange(location: offset, length: rangeLength), with: replacement)
         }
         if let contentStorage = textView.textContentStorage {
             contentStorage.performEditingTransaction(edit)
         } else {
             edit()
         }
+        // The text height is read from the last layout fragment's `maxY` in `laidOutHeight(of:)`, so a
+        // shrink in an ordinary message needs no width bounce: TextKit 2's width high-water mark leaks
+        // into size reporting only through `usageBoundsForTextContainer.maxX`, which `size(forWidth:)`
+        // overrides with the proposed width. A fits-width message does return the container's own
+        // width, and that one needs the bounce; it happens inside `layOutWhole(atWidth:)` so no caller
+        // observes a zero-width container between `update(blocks:)` and `size(forWidth:)`.
+        if fitsWidth, rangeLength > 0 { pendingWidthReset = true }
         built = next
         var location = 0
         segments = []
@@ -303,15 +317,41 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
         guard let layout = textView.textLayoutManager, (textView.textStorage?.length ?? 0) > 0 else { return .zero }
         layOutWhole(atWidth: width)
         let usage = layout.usageBoundsForTextContainer
-        let size = CGSize(width: ceil(usage.maxX), height: ceil(leadingInset + usage.height + trailingInset))
+        let height = Self.laidOutHeight(of: layout)
+        let size = CGSize(width: ceil(usage.maxX), height: ceil(leadingInset + height + trailingInset))
         sizes[width] = size
         return size
+    }
+
+    /// The content height from the last laid-out fragment's `maxY`. TextKit 2's
+    /// `usageBoundsForTextContainer.height` is a high-water mark that does not shrink when the text
+    /// does: a block that ran to 357pt and then shrank to 34pt keeps the 357 in its usage bounds,
+    /// which drew an empty band below the shorter text. The last fragment's frame is what the text
+    /// actually occupies now; the reverse walk returns on the first fragment, so this is O(1).
+    private static func laidOutHeight(of layout: NSTextLayoutManager) -> CGFloat {
+        var height: CGFloat = 0
+        layout.enumerateTextLayoutFragments(from: layout.documentRange.endLocation,
+                                            options: [.reverse, .ensuresLayout]) { fragment in
+            height = fragment.layoutFragmentFrame.maxY
+            return false
+        }
+        return height
     }
 
     /// Lays the whole text out at `width`, the container's width from then on.
     private func layOutWhole(atWidth width: CGFloat) {
         guard let layout = textView.textLayoutManager, let container = textView.textContainer else { return }
-        if container.size.width != width {
+        let bounces = pendingWidthReset
+        if bounces || container.size.width != width {
+            if bounces {
+                // Shed TextKit 2's width high-water mark before setting the new width; `.zero` lives
+                // only inside this method, so a `rect(of:)` or `paintBackgrounds()` elsewhere does not
+                // find a zero-width container (2026-11-27: the previous placement in `update(blocks:)`
+                // let `update(find:)` lay out at 0pt).
+                container.size = .zero
+                pendingWidthReset = false
+                wholeLayoutWidth = nil
+            }
             container.size = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
 #if DEBUG
             newWidthLayouts += 1
@@ -353,7 +393,7 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
     /// The height the text is laid out at now, which is what it draws, for the tests.
     var laidOutHeight: CGFloat {
         guard let layout = textView.textLayoutManager, (textView.textStorage?.length ?? 0) > 0 else { return 0 }
-        return ceil(leadingInset + layout.usageBoundsForTextContainer.height + trailingInset)
+        return ceil(leadingInset + Self.laidOutHeight(of: layout) + trailingInset)
     }
 #endif
 

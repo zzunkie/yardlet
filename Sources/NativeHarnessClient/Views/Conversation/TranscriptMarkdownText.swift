@@ -280,9 +280,16 @@ private struct TranscriptMarkdownBlockView: View {
     }
 
     private func list(_ items: [TranscriptMarkdownListItem], start: Int?, isLoose: Bool) -> some View {
+        // `.firstTextBaseline` aligns the bullet's baseline with the item's first text baseline, which
+        // works when both columns report a text baseline. The right column is a non-text block
+        // (`TranscriptMarkdownBlocksView`), a table, an image or a `TranscriptProseText` whose
+        // `NSViewRepresentable` does not publish a first-text baseline, so SwiftUI falls back to the
+        // view's top (0pt) as its baseline and the bullet floats a line above the first row of text.
+        // Top-aligning the row keeps the bullet next to the first line in every case; a text block's
+        // first line and the leading `•` the font puts right under its top are a close visual match.
         Grid(alignment: .leading, horizontalSpacing: 9, verticalSpacing: (isLoose ? 15 : 10) * interfaceScale) {
             ForEach(Array(items.enumerated()), id: \.offset) { offset, item in
-                GridRow(alignment: .firstTextBaseline) {
+                GridRow(alignment: .top) {
                     Group {
                         if let checked = item.checked {
                             Image(systemName: checked ? "checkmark.square" : "square")

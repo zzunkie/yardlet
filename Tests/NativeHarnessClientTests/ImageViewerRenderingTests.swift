@@ -119,6 +119,52 @@ final class ImageViewerRenderingTests: XCTestCase {
         XCTAssertFalse(markedUp)
     }
 
+    /// The right-click menu over the image: Copy, Save…, Show in Finder (only for a file on disk),
+    /// Actual Size, Zoom to Fit, and Mark Up (only when the request offered it).
+    func testTheImageViewersRightClickMenuHasCopySaveZoomAndContextualItems() async throws {
+        // A file on disk, no markup: Show in Finder in, Mark Up out.
+        let onDisk = try write(Self.screenshot(width: 40, height: 30, dpiScale: 1), as: "shot.png")
+        try await assertContextMenu(
+            request: ImageViewerRequest(items: [ImageViewerItem(name: "shot.png", source: .url(onDisk))], index: 0),
+            keys: ["Copy Image", "Save Image…", "Show in Finder", "Actual Size", "Zoom to Fit"]
+        )
+
+        // Bytes with no file: Show in Finder out, Mark Up out.
+        let bytes = try Self.screenshot(width: 40, height: 30, dpiScale: 1)
+        try await assertContextMenu(
+            request: ImageViewerRequest(items: [ImageViewerItem(name: "bytes", source: .data(bytes))], index: 0),
+            keys: ["Copy Image", "Save Image…", "Actual Size", "Zoom to Fit"]
+        )
+
+        // A composer attachment with markup: Mark Up in.
+        try await assertContextMenu(
+            request: ImageViewerRequest(items: [ImageViewerItem(name: "shot.png", source: .url(onDisk))], index: 0,
+                                        markUp: {}),
+            keys: ["Copy Image", "Save Image…", "Show in Finder", "Actual Size", "Zoom to Fit", "Mark Up"]
+        )
+    }
+
+    private func assertContextMenu(request: ImageViewerRequest, keys: [String],
+                                   file: StaticString = #file, line: UInt = #line) async throws {
+        let host = WindowlessRender.Host(
+            ImageViewerProbe(request: request)
+                .imageViewerHost()
+                .frame(width: size.width, height: size.height)
+                .background(ParityTheme.canvas),
+            size: size, appearance: .light
+        )
+        defer { host.close() }
+        let canvas = try await canvas(in: host, showing: NSSize(width: 40, height: 30))
+        let menu = try XCTUnwrap(canvas.contextMenu, "The viewer builds a right-click menu once the image loads", file: file, line: line)
+        let titles = menu.items.filter { !$0.isSeparatorItem }.map(\.title)
+        XCTAssertEqual(titles, keys.map { L10n.string($0) }, file: file, line: line)
+        // Every item has a target so it is enabled when the menu opens.
+        for item in menu.items where !item.isSeparatorItem {
+            XCTAssertNotNil(item.target, "\(item.title) has no target", file: file, line: line)
+            XCTAssertNotNil(item.action, "\(item.title) has no action", file: file, line: line)
+        }
+    }
+
     func testASavedImageKeepsItsNameAndTypeAndCopyPutsTheOriginalOnThePasteboard() async throws {
         XCTAssertEqual(ImageViewerModel.fileName(for: "Screen Shot.png", type: .png), "Screen Shot.png")
         XCTAssertEqual(ImageViewerModel.fileName(for: "photo.JPG", type: .jpeg), "photo.JPG")
