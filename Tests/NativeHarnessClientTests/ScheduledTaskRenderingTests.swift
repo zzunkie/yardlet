@@ -5,7 +5,7 @@ import XCTest
 
 /// Scheduled tasks drawn for review into `.build/schedules-qa/`, light and dark: the sidebar entry,
 /// the list in the task list's place beside the chosen schedule with its run history (a run that went
-/// to another account among them, and its task's hover card), the empty
+/// to another account among them, and its task's hover card), a schedule that runs on mail too, the empty
 /// place, the editor for each trigger and for continuing a task, and the other-app import sheet
 /// before and after an import. No provider, runtime or app file is touched; the import sheet draws a
 /// listing made from made-up schedules.
@@ -197,6 +197,38 @@ final class ScheduledTaskRenderingTests: XCTestCase {
                 : "Missed: the task was unavailable for 24 hours"
             XCTAssertTrue(shows(elements, L10n.string(text)))
         }
+        await fixture.model.shutdown()
+    }
+
+    /// A schedule that continues a task and runs on mail from a sender too: its row says so after how it repeats, and its
+    /// detail names the sender under the task each run continues, with the run mail started in its history.
+    func testAScheduleThatRunsOnMailSaysSoInItsRowAndDetail() async throws {
+        let fixture = try await makeFixture()
+        var schedule = try XCTUnwrap(fixture.schedules["release"])
+        schedule.origin = nil
+        schedule.mailFrom = "prof@school.example"
+        let now = Date()
+        schedule.state.runs.insert(ScheduledTaskRun(at: now.addingTimeInterval(-600), trigger: .mail, outcome: .started,
+                                                    taskID: fixture.releaseTask.id, mode: .continueTask), at: 0)
+        let value = schedule
+        let nextRun = ScheduleRunPolicy.nextRun(of: value, now: now, calendar: .autoupdatingCurrent)
+        let detail = try render("detail-runs-on-mail", size: NSSize(width: 900, height: 640)) { _ in
+            ScheduledTaskDetail(schedule: value, nextRun: nextRun, isStarting: false, now: now,
+                context: ScheduledTaskContext(task: { id in fixture.model.store.sessions.first { $0.id == id } }),
+                actions: ScheduledTaskActions())
+        }
+        XCTAssertTrue(shows(detail, L10n.string("Also runs")))
+        XCTAssertTrue(shows(detail, L10n.format("When mail from %@ arrives", "prof@school.example")))
+        XCTAssertTrue(shows(detail, L10n.string("On new mail")), "The run mail started says so in the history")
+        let list = try render("list-runs-on-mail", size: NSSize(width: 280, height: 200)) { _ in
+            ScheduledTaskList(schedules: [value], sessionJobs: [], selection: nil, startingIDs: [], now: now,
+                              nextRun: { _ in nextRun },
+                              taskTitle: { id in fixture.model.store.sessions.first { $0.id == id }?.title },
+                              expandedSections: .constant([]), onBack: {}, actions: ScheduledTaskActions())
+        }
+        let row = try XCTUnwrap(list.first { $0.label == "Release heartbeat" })
+        XCTAssertTrue(row.value.contains(L10n.string("On new mail")), row.description)
+        XCTAssertTrue(row.value.contains(L10n.format("Continues “%@”", "Release watch")), row.description)
         await fixture.model.shutdown()
     }
 

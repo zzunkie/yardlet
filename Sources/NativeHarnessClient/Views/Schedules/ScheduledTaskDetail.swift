@@ -216,6 +216,7 @@ struct ScheduledTaskDetail: View {
             let title = destination.targetTaskID.flatMap(context.task)?.title
             rows.append((L10n.string("Each run"), title.map { L10n.format("Continues “%@”", $0) }
                          ?? L10n.string("Continues a task that is no longer in Yardlet")))
+            if let mail = ScheduleText.mail(schedule) { rows.append((L10n.string("Also runs"), mail)) }
         case .newTask:
             rows.append((L10n.string("Each run"), L10n.string("Starts a new task")))
             rows.append((L10n.string("Project"), context.projectName(schedule)))

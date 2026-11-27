@@ -119,7 +119,20 @@ enum ScheduleText {
             return L10n.string("Waiting until the task is available")
         }
         guard let nextRun else { return "\(L10n.string("No next run")) · \(cadence)" }
-        return "\(moment(nextRun, relativeTo: now, calendar: calendar)) · \(cadence)"
+        return "\(moment(nextRun, relativeTo: now, calendar: calendar)) · \(repeats(schedule, calendar: calendar))"
+    }
+
+    /// "When mail from prof@school.example arrives": the mail a schedule that continues a task runs on besides its
+    /// times (`ScheduledTask.mailFrom`), or nil.
+    static func mail(_ schedule: ScheduledTask) -> String? {
+        guard schedule.destination.mode == .continueTask, let from = schedule.mailFrom else { return nil }
+        return L10n.format("When mail from %@ arrives", from)
+    }
+
+    /// How it repeats, and "On new mail" after that for a schedule that runs on mail too.
+    private static func repeats(_ schedule: ScheduledTask, calendar: Calendar) -> String {
+        let cadence = cadence(schedule.trigger, calendar: calendar)
+        return mail(schedule) == nil ? cadence : "\(cadence) · \(L10n.string("On new mail"))"
     }
 
     /// A schedule's row in the list, read at a glance under its day (`ScheduleListSections.Day`): the time it
@@ -132,7 +145,7 @@ enum ScheduleText {
             return (nil, row(schedule, nextRun: nextRun, isStarting: isStarting, now: now, calendar: calendar))
         }
         return (time(nextRun, in: ScheduleListSections.Day(nextRun, now: now, calendar: calendar), calendar: calendar),
-                cadence(schedule.trigger, calendar: calendar))
+                repeats(schedule, calendar: calendar))
     }
 
     /// A next run as its day's group in the list leaves it to say: "9:00 AM" today or tomorrow, "Sat 9:00 AM"
