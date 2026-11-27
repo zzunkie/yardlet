@@ -49,6 +49,25 @@ final class BrowserFrameDisplayTests: XCTestCase {
         XCTAssertTrue(display.currentSurface === older, "a new tab's frames start over after a clear")
     }
 
+    func testPreparingForTheNextTabKeepsTheLastSurfaceAndRestartsTheSequence() {
+        let layer = CALayer()
+        let display = BrowserFrameDisplay(layer: layer)
+        display.setScale(2)
+        let onScreen = surface(width: 40, height: 20)
+        let cached = surface()
+        display.show(frame(100, width: 40, height: 20), surface: onScreen)
+        XCTAssertTrue(display.currentSurface === onScreen)
+
+        display.prepareForNextTab()
+        XCTAssertTrue(display.currentSurface === onScreen, "the last frame stays while the next tab paints")
+        XCTAssertTrue((layer.contents as AnyObject?) === onScreen)
+
+        // A cached frame of the next tab with a lower sequence than the one last shown is not skipped,
+        // so `showFrames(of:in:)` can place the latest cached frame of a tab the engine still draws.
+        display.show(frame(2), surface: cached)
+        XCTAssertTrue(display.currentSurface === cached)
+    }
+
     func testRouterKeepsTheLastPanelThatAdoptedTheTab() {
         let router = BrowserFrameRouter()
         let first = BrowserFrameDisplay(layer: CALayer())
