@@ -441,9 +441,23 @@ static const char kFocusedFieldQuery[] = "YardletFocusedFieldQuery";
 
 static const int kFieldPassword = 2;
 
+/// Whether the frame is the one the focused field is in. Borrows the frame's reference.
+static int is_field_frame(const BrowserSlot *slot, cef_frame_t *frame) {
+    if (slot->fieldFrame == NULL || frame == NULL) return 0;
+    cef_string_userfree_t value = frame->get_identifier(frame);
+    char *identifier = copy_string(value);
+    if (value) p_cef_string_userfree_utf16_free(value);
+    int same = strcmp(identifier, slot->fieldFrame) == 0;
+    free(identifier);
+    return same;
+}
+
 /// `kind` is the renderer's (FocusedField.c); `focus_moved`, the focus went to that field rather than the host
 /// asking. Borrows the frame's reference.
 static void set_field_focus(BrowserSlot *slot, int kind, cef_frame_t *frame, int focus_moved) {
+    // Focus that moved into another frame's field (an out-of-process iframe's too) can be told before the old
+    // frame's blur: only the frame that holds the focused field clears it. The host's own clears pass no frame.
+    if (kind == 0 && frame != NULL && slot->fieldFrame != NULL && !is_field_frame(slot, frame)) return;
     free(slot->fieldFrame);
     slot->fieldFrame = NULL;
     if (kind && frame) {
@@ -465,16 +479,6 @@ static void set_field_focus(BrowserSlot *slot, int kind, cef_frame_t *frame, int
     }
 }
 
-/// Whether the frame is the one the focused field is in. Borrows the frame's reference.
-static int is_field_frame(const BrowserSlot *slot, cef_frame_t *frame) {
-    if (slot->fieldFrame == NULL || frame == NULL) return 0;
-    cef_string_userfree_t value = frame->get_identifier(frame);
-    char *identifier = copy_string(value);
-    if (value) p_cef_string_userfree_utf16_free(value);
-    int same = strcmp(identifier, slot->fieldFrame) == 0;
-    free(identifier);
-    return same;
-}
 
 /// Asks the frame's renderer for its focused field; the answer comes as a focus report. Borrows the
 /// frame's reference.
@@ -999,6 +1003,8 @@ static void CEF_CALLBACK popup_frame_detached(cef_frame_handler_t *self, cef_bro
     (void)self;
     BrowserSlot *slot = browser && browser->is_valid(browser) ? slot_for_browser(browser) : NULL;
     if (slot && frame) clear_frame_popups(slot->tab, frame);
+    // A removed iframe takes its focused field along, and its late blur is dropped (`is_valid`).
+    if (slot && frame && slot->fieldKind && is_field_frame(slot, frame)) set_field_focus(slot, 0, NULL, 0);
     YARDLET_RELEASE(frame);
     YARDLET_RELEASE(browser);
 }

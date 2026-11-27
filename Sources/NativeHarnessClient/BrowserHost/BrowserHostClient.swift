@@ -2433,6 +2433,9 @@ final class BrowserTab {
             restore = .none
             isDiscardAsked = false
             crash = BrowserTabCrash(status: status ?? "crashed", code: code ?? 0, errorCode: reason)
+            // The ended renderer's focused field is gone with it.
+            isPasswordFieldFocused = false
+            editableField = nil
             // A renderer that ended takes its dialog and chooser with it.
             closedDialogs += [javaScriptDialog?.id, fileDialog?.id].compactMap { $0 }
             if let chooser = fileDialog { client?.send(.fileDialogResult(tab: id, dialog: chooser.id, paths: nil)) }

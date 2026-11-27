@@ -253,7 +253,8 @@ change and when Yardlet quits (`StateFileWriter`). Chromium's own `History` in e
   focus went into a text field) when the kind changes or focus moves into a text field, which a remote device uses
   to raise its keyboard (docs/REMOTE_PROTOCOL.md, "15.25 A task's browser tabs"). When a new document comes into the
   main frame (or the frame that had the focused field), the host turns the state off and asks that renderer for the
-  field focused now. This is because a page restored from the back-forward
+  field focused now. Only the frame that holds the focused field clears it: focus that moves into another frame's field
+  can be told before the old frame's blur. A removed iframe that held the focused field clears it as it detaches. This is because a page restored from the back-forward
   cache comes back with focus in a field and reports no focus change. Reports from frames a new document replaced
   (`is_valid` false) are dropped, and the state turns off when the renderer ends. The tab holds the last value and uses
   it when the panel shows it again.

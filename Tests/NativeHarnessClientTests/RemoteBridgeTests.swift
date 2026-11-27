@@ -1926,12 +1926,6 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertEqual(signals.changes.count, told, "a tab no one watches tells nothing")
     }
 
-    /// What a remote device may not do through a task's tab, each checked where the input is sent (the security review of
-    /// §15.25): keys outside characters and the editing and moving keys, and every spelling of the clipboard's commands;
-    /// typing into a password field the page cannot be marked for; anything once its watch ended, or while a Chromium
-    /// window whose tab is not known is up (Back included); a `file:` page outside the task's files, shown or driven; and
-    /// opening another app on this Mac from a remote click without asking here. A phone's size draws the tab as a phone
-    /// while it watches, and the tab takes back the size it had before, the agent's while its turn goes on.
     /// §15.25 `editableField`: the host's word on the focused field lists the tab with the keyboard it asks for and tells
     /// the list, and the count goes up for each focus that moves into a text field and for a tap that lands in the
     /// focused one once it settles; a tap that blurs the field within that time does not count.
@@ -2007,6 +2001,12 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertNil(entry.editableField)
     }
 
+    /// What a remote device may not do through a task's tab, each checked where the input is sent (the security review of
+    /// §15.25): keys outside characters and the editing and moving keys, and every spelling of the clipboard's commands;
+    /// typing into a password field the page cannot be marked for; anything once its watch ended, or while a Chromium
+    /// window whose tab is not known is up (Back included); a `file:` page outside the task's files, shown or driven; and
+    /// opening another app on this Mac from a remote click without asking here. A phone's size draws the tab as a phone
+    /// while it watches, and the tab takes back the size it had before, the agent's while its turn goes on.
     func testARemoteDeviceDrivesOnlyWhatThePanelWouldAndSizesTheTabAsAPhone() async throws {
         let folder = FileManager.default.temporaryDirectory.appending(path: "remote-tab-files-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

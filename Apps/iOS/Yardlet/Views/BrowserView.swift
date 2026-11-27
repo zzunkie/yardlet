@@ -53,6 +53,8 @@ struct BrowserView: View {
     private var browser: TaskBrowser { session.browser }
     private var tab: RemoteBrowserTab? { browser.watchedTab }
     private var isEnabled: Bool { session.isConnected && tab != nil }
+    /// The page's focused field is a password field, by either word the Mac sends.
+    private var isPasswordField: Bool { tab?.passwordField == true || tab?.inputMode == "password" }
     /// On a phone turned on its side a bar's buttons sit beside its words.
     private var isWide: Bool { verticalSizeClass == .compact }
     /// The Mac shows no tabs to the phone, or the task is gone: back to the conversation.
@@ -139,6 +141,7 @@ struct BrowserView: View {
                 // Tapped, the address field where the Mac takes addresses (§15.30).
                 if browser.controlsTabs && isEnabled {
                     Button {
+                        typing.endTyping()
                         address = tab?.url ?? ""
                         isEditingAddress = true
                     } label: {
@@ -152,6 +155,7 @@ struct BrowserView: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
+                    typing.endTyping()
                     isShowingTabs = true
                 } label: {
                     Image(systemName: "square.on.square")
@@ -403,7 +407,7 @@ struct BrowserView: View {
                 }
                 .accessibilityLabel("Reload")
                 Spacer(minLength: 8)
-                if isTyping && tab?.passwordField == true {
+                if isTyping && isPasswordField {
                     // What is typed goes to a password field: hidden here, and the keyboard learns nothing from it.
                     Label("Password", systemImage: "lock.fill")
                         .font(.footnote.weight(.semibold))
@@ -436,7 +440,7 @@ struct BrowserView: View {
         .background(YardletPalette.surface)
         // The field the keyboard types into, drawn nowhere: what is typed shows on the page's picture.
         .background(alignment: .bottomLeading) {
-            TabTypingField(typing: typing, isPassword: tab?.passwordField == true, inputMode: tab?.inputMode,
+            TabTypingField(typing: typing, isPassword: isPasswordField, inputMode: tab?.inputMode,
                            typed: { typed in
                                switch typed {
                                case let .text(text): browser.input(.text(text))
@@ -460,6 +464,8 @@ struct BrowserView: View {
             HStack(spacing: 8) {
                 Label("Drag mode", systemImage: "hand.draw")
                     .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .layoutPriority(1)
                 Text("One finger drags instead of scrolling")
                     .font(.footnote)
                     .foregroundStyle(YardletPalette.onSurfaceVariant)
@@ -468,6 +474,8 @@ struct BrowserView: View {
                 Spacer(minLength: 0)
                 Button("Done") { isDragging = false }
                     .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .layoutPriority(1)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)

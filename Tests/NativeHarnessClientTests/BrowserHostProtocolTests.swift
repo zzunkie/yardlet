@@ -76,6 +76,8 @@ final class BrowserHostProtocolTests: XCTestCase {
         // The memory saver's discards, which the host's TabDiscarder answers by hand (BROWSER_HOST section 3, "Memory saver").
         XCTAssertEqual(try json(BrowserHostCommand.discard(tab: 3, urgent: false)), #"{"discard":{"tab":3,"urgent":false}}"#)
         XCTAssertEqual(try decoder.decode(BrowserHostEvent.self, from: Data(#"{"discarded":{"tab":3}}"#.utf8)), .discarded(tab: 3))
+        XCTAssertEqual(try decoder.decode(BrowserHostEvent.self, from: Data(#"{"editableField":{"tab":3,"kind":4,"focusMoved":true}}"#.utf8)),
+                       .editableField(tab: 3, kind: BrowserEditableField.url.rawValue, focusMoved: true))
         XCTAssertEqual(try decoder.decode(BrowserHostEvent.self, from: Data(#"{"discardRefused":{"tab":3,"reason":"media"}}"#.utf8)),
                        .discardRefused(tab: 3, reason: "media"))
         // Chromium's own windows over their tabs (BROWSER_HOST section 3, "Chromium's windows and tabs").

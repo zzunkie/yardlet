@@ -961,7 +961,8 @@ final class RemoteTabBridge {
     /// host reports within the wait; a page that keeps focus on a tap outside the field (a toolbar that cancels its
     /// mousedown) counts as a tap in it.
     private func noteTapSettled(on tab: BrowserTab, reportsBefore reports: Int) {
-        guard tab.editableField != nil else { return }
+        // A tap that already moved focus, or blurred the field, was told by the host.
+        guard tab.editableField != nil, tab.editableFieldReports == reports else { return }
         Task { @MainActor [weak tab] in
             try? await Task.sleep(for: Self.tapSettle)
             tab?.noteEditableFieldTapped(reportsBefore: reports)

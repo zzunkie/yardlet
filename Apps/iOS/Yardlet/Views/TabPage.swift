@@ -277,26 +277,39 @@ final class TabPageView: UIView, UIGestureRecognizerDelegate {
 @MainActor
 final class TabTyping {
     fileprivate weak var field: TabTypingTextField?
+    /// A keyboard asked for and not yet up; an end, a clear or another ask cancels it.
+    private var raiseTask: Task<Void, Never>?
 
     /// What the field holds goes to the page now, composing or not, and the field empties: a tap moves on.
     func commit() { field?.commitAll() }
 
     /// Empties the field without sending what it holds: another tab, or the page's field changed.
-    func clear() { field?.clear() }
+    func clear() {
+        raiseTask?.cancel()
+        field?.clear()
+    }
 
     /// The keyboard comes up for the field, after the update under way has given the field the page field's kind (secure
     /// or not, and its keyboard), so the keyboard that comes up is that one.
     func beginTyping() {
-        Task { @MainActor [weak self] in
-            guard let field = self?.field, !field.isFirstResponder else { return }
+        raiseTask?.cancel()
+        raiseTask = Task { @MainActor [weak self] in
+            guard !Task.isCancelled, let field = self?.field, !field.isFirstResponder else { return }
             field.becomeFirstResponder()
         }
     }
 
-    /// What was typed goes to the page, and the keyboard goes down.
+    /// What was typed goes to the page, and the keyboard goes down. Only while the field has the keyboard: what it holds
+    /// otherwise was not meant for the page's field now.
     func endTyping() {
-        field?.commitAll()
-        field?.resignFirstResponder()
+        raiseTask?.cancel()
+        guard let field else { return }
+        if field.isFirstResponder {
+            field.commitAll()
+            field.resignFirstResponder()
+        } else {
+            field.clear()
+        }
     }
 }
 
