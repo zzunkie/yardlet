@@ -127,7 +127,7 @@ final class BrowserAgentTools {
     static let handoffDefaultWait: Duration = .seconds(600)
     /// How long `browser_file_upload` waits for the file chooser a click is opening.
     var fileChooserWait: Duration = .seconds(2)
-    /// How often a screenshot that waits asks the tab for a frame (`capture`).
+    /// How often a screenshot or wheel event that waits on the tab's drawing asks the tab for a frame (`askingForFrames`).
     var frameAskInterval: Duration = .seconds(3)
     /// A page that holds a password or code refuses the tools that could read it out, until it goes to another page.
     static let vaultBoundary = AgentToolFailure(.refused, retry: .no)
@@ -1192,10 +1192,14 @@ final class BrowserAgentTools {
                 let viewport = try await viewport(page)
                 point = (viewport.width / 2, viewport.height / 2)
             }
-            _ = try await send(page, "Input.dispatchMouseEvent", [
-                "type": .string("mouseWheel"), "x": .number(point.x), "y": .number(point.y),
-                "deltaX": .number(deltaX), "deltaY": .number(deltaY)
-            ])
+            // Chromium answers a wheel event once the tab's compositor has handled it, which a tab that draws no frame
+            // never does, as it never answers a screenshot (`capture`).
+            _ = try await askingForFrames(page) {
+                try await self.send(page, "Input.dispatchMouseEvent", [
+                    "type": .string("mouseWheel"), "x": .number(point.x), "y": .number(point.y),
+                    "deltaX": .number(deltaX), "deltaY": .number(deltaY)
+                ])
+            }
             // Wheel scrolling finishes asynchronously in the compositor.
             try? await Task.sleep(for: .milliseconds(150))
         }
@@ -1469,21 +1473,16 @@ final class BrowserAgentTools {
     }
 
     /// `Page.captureScreenshot`, which Chromium answers from the next frame the tab's view presents; it keeps a hidden
-    /// tab drawing while it captures, and answers in a few milliseconds. A capture that waits longer asks the tab for a
-    /// frame every few seconds, as a panel coming on screen asks (`BrowserHostClient.askForFrame`). One that times out
+    /// tab drawing while it captures, and answers in a few milliseconds. A capture that waits longer asks the tab for
+    /// frames (`askingForFrames`). One that times out
     /// while the page answers other calls says the tab drew no picture, and whether frames of the page came
     /// meanwhile, rather than that the browser did not answer.
     private func capture(_ page: BrowserAgentPage, _ params: [String: JSONValue]) async throws -> JSONValue {
         let started = ContinuousClock.now
-        let asking = Task { @MainActor in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: self.frameAskInterval)
-                if !Task.isCancelled { page.askForFrame() }
-            }
-        }
-        defer { asking.cancel() }
         do {
-            return try await send(page, "Page.captureScreenshot", params, timeout: loadTimeout)
+            return try await askingForFrames(page) {
+                try await self.send(page, "Page.captureScreenshot", params, timeout: self.loadTimeout)
+            }
         } catch let error as BrowserAgentToolError
             where error.failure?.kind == .timedOut && error.failure?.details["rendererAnswered"] == .bool(true) {
             let seconds = Self.format(Double(loadTimeout.components.seconds))
@@ -1498,6 +1497,21 @@ final class BrowserAgentTools {
                 + "The page answers other calls, so browser_snapshot and browser_evaluate still read it. browser_navigate to "
                 + "its address loads it again and draws it anew; browser_resize draws it at a size you set.", failure)
         }
+    }
+
+    /// Runs `command` while asking the tab for a frame every `frameAskInterval`, as a panel coming on screen asks
+    /// (`BrowserHostClient.askForFrame`): Chromium answers some commands only once the tab's compositor draws (a
+    /// screenshot) or has handled the input (a wheel event), and a page that does not change draws nothing of its own.
+    /// A command answered at once asks nothing.
+    private func askingForFrames<T>(_ page: BrowserAgentPage, _ command: () async throws -> T) async throws -> T {
+        let asking = Task { @MainActor in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: self.frameAskInterval)
+                if !Task.isCancelled { page.askForFrame() }
+            }
+        }
+        defer { asking.cancel() }
+        return try await command()
     }
 
     /// Chromium captures beyond the viewport by drawing the view at the capture's size for the moment

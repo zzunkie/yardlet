@@ -43,6 +43,20 @@ final class BrowserHostVisibilityTests: XCTestCase {
         XCTAssertLessThan(shown, command, "shown before the agent's command reaches the engine")
     }
 
+    /// An agent's screenshot or scroll that waits on a frame asks for one every few seconds; a wait that outlasts the
+    /// agent window (after a command that timed out) must not ask a hidden tab, which draws nothing.
+    func testAskingAHiddenAgentTabForAFrameShowsItAgain() async throws {
+        let client = makeClient()
+        let tab = try client.openTab(forSession: UUID(), url: "about:blank", viewport: .offscreenDefault)
+        tab.noteAgentActivity()
+        try await waitUntil { self.visibility(of: tab) == [true] }
+        tab.askForFrame()
+        XCTAssertTrue(tab.isShown)
+        XCTAssertEqual(visibility(of: tab), [true, false], "shown again for the frame")
+        tab.askForFrame()
+        XCTAssertEqual(visibility(of: tab), [true, false, false], "a shown tab is asked again")
+    }
+
     func testPanelKeepsTheTabShownAndClosingItHidesAnIdleTab() async throws {
         let client = makeClient()
         let tab = try client.openTab(forSession: UUID(), url: "about:blank", viewport: .offscreenDefault)

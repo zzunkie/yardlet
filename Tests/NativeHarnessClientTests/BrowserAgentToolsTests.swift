@@ -1111,11 +1111,13 @@ final class BrowserAgentToolsTests: XCTestCase {
         XCTAssertNil(BrowserAgentKeyPress.parse("Enterprise"))
     }
 
-    func testScrollSendsAWheelEventAtThePageCentreAndReportsThePosition() async {
+    func testScrollSendsAWheelEventAtThePageCentreAndReportsThePosition() async throws {
         cdp.responders["Page.getLayoutMetrics"] = { _ in
             .object(["cssVisualViewport": .object(["clientWidth": .number(1000), "clientHeight": .number(600),
                                                      "pageX": .number(0), "pageY": .number(0)])])
         }
+        var asks = 0
+        page.askForFrame = { asks += 1 }
         let result = await run(AgentToolCatalog.scroll, ["deltaY": .number(400)])
         XCTAssertFalse(result.isError, result.text)
         let wheel = cdp.params(of: "Input.dispatchMouseEvent").first
@@ -1124,6 +1126,22 @@ final class BrowserAgentToolsTests: XCTestCase {
         XCTAssertEqual(wheel?["y"], .number(300))
         XCTAssertEqual(wheel?["deltaY"], .number(400))
         XCTAssertEqual(result.text, "Scrolled. The page is at x=0, y=400 of 1280×5000.")
+        XCTAssertEqual(asks, 0, "a wheel event answered at once asks for no frame")
+
+        // Chromium answers a wheel event once the tab's compositor has handled it: one that waits asks the tab for
+        // frames, which wakes a tab that drew none, until it is answered.
+        tools.frameAskInterval = .milliseconds(10)
+        cdp.suspendOn = ["Input.dispatchMouseEvent"]
+        page.askForFrame = { [unowned self] in
+            asks += 1
+            self.cdp.suspendOn = []
+            self.cdp.resumeSuspended()
+        }
+        let waiting = Task { await run(AgentToolCatalog.scroll, ["deltaY": .number(400)]) }
+        try await waitUntil { asks >= 1 }
+        let waited = await waiting.value
+        XCTAssertFalse(waited.isError, waited.text)
+        XCTAssertEqual(cdp.params(of: "Input.dispatchMouseEvent").count, 2)
     }
 
     func testSelectOptionPassesTheValuesAndNamesTheOptionsWhenOneIsMissing() async {

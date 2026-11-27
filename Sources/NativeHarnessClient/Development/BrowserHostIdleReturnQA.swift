@@ -194,8 +194,8 @@ final class BrowserHostIdleReturnQA {
 
     /// The engine's frame for a show is lost (`--ui-fixture-browser-unpainted-shows`: the QA host holds back a shown
     /// tab's frames until it has taken that many of its steps for one): the host asks for a frame again (1), or hides
-    /// and shows the tab again (2), and the panel paints the page without a reload. host.log says the tab was shown
-    /// without a frame and which step brought one.
+    /// and shows the tab again (2), and the panel paints the page without a reload, also while the agent asks for frames
+    /// meanwhile. host.log says the tab was shown without a frame and which step brought one.
     private func lostFrame(_ controller: BrowserHostPaneController, _ tab: BrowserTab, steps: Int) async {
         guard let view = controller.view else { return }
         let hidden = events["hidden", default: 0]
@@ -205,7 +205,16 @@ final class BrowserHostIdleReturnQA {
         let before = frames.count
         let started = ContinuousClock.now
         view.isHidden = false
+        // An agent's screenshot or scroll waiting on the tab meanwhile asks it for a frame every few seconds
+        // (`BrowserAgentTools.askingForFrames`); the host's steps must go on through those asks, not start again.
+        let asking = Task { @MainActor in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                if !Task.isCancelled { tab.askForFrame() }
+            }
+        }
         let shown = await waitUntil(.seconds(15)) { self.frames.count > before && Self.showsPage(view) }
+        asking.cancel()
         let after = ContinuousClock.now - started
         let log = (try? String(contentsOf: MacBrowserHost.shared.paths.log, encoding: .utf8)) ?? ""
         let step = steps == 1 ? "asked-again" : "shown-again"

@@ -152,13 +152,29 @@ var callbacks = YardletCEFCallbacks(
     }
 )
 
-let rootCache = arguments.rootCachePath.isEmpty
+/// Makes a folder the browser keeps its data in and gives its real path: absolute, through every link (`/tmp` is
+/// `/private/tmp`), without a trailing slash, as Chromium compares a profile's folder with the root cache's. One that
+/// cannot be made ends the host here with a message that names it, not in Chromium, which stops the process at once
+/// when it cannot create its cache folder.
+func browserDirectory(_ path: String) -> String {
+    do {
+        try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+    } catch {
+        fail("could not create the browser's folder \(path): \(error.localizedDescription)")
+    }
+    guard let resolved = realpath(path, nil) else {
+        fail("could not resolve the browser's folder \(path): \(String(cString: strerror(errno)))")
+    }
+    defer { free(resolved) }
+    return String(cString: resolved)
+}
+
+let rootCache = browserDirectory(arguments.rootCachePath.isEmpty
     ? FileManager.default.temporaryDirectory.appending(path: "Yardlet-Browser-Host-\(getpid())").path(percentEncoded: false)
-    : arguments.rootCachePath
-let profile = arguments.profilePath.isEmpty ? rootCache + "/Default" : arguments.profilePath
-try? FileManager.default.createDirectory(atPath: profile, withIntermediateDirectories: true)
+    : arguments.rootCachePath)
+let profile = browserDirectory(arguments.profilePath.isEmpty ? rootCache + "/Default" : arguments.profilePath)
 MainActor.assumeIsolated { host.profiles = TaskProfiles(rootCache: rootCache, defaultProfile: profile) }
-try? FileManager.default.createDirectory(atPath: rootCache + "/Logs", withIntermediateDirectories: true)
+_ = browserDirectory(rootCache + "/Logs")
 let usesLoginKeychain = CookieKeychain.usesLoginKeychain()
 let switches = CookieKeychain.switches(arguments.switches, usesLoginKeychain: usesLoginKeychain)
 HostLog.write("Yardlet Browser Host: cookie key in "

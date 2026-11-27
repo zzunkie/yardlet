@@ -7,7 +7,8 @@
 set -uo pipefail
 TOOLS=${0:A:h}
 app=$1
-out=$2
+# Absolute: the app, which LaunchServices starts in /, writes its results there (qa-launch.sh).
+out=${2:A}
 shift 2
 [[ "$out" == */browser-host-qa/* ]] || { echo "output must be under a browser-host-qa directory" >&2; exit 2; }
 rm -rf "$out"

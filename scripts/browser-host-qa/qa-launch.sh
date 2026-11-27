@@ -15,6 +15,10 @@ log=$3
 shift 3
 [[ "$qa_home" == */browser-host-qa/* ]] || { echo "QA home must be under a browser-host-qa directory" >&2; exit 2; }
 mkdir -p "$qa_home"
+# LaunchServices starts the app in /, where a relative home (or log) names a folder on the read-only system volume and
+# Chromium stops at once without its cache folder: both go as absolute real paths.
+qa_home=${qa_home:A}
+log=${log:A}
 environment=(--env "CFFIXED_USER_HOME=$qa_home" --env "HOME=$qa_home" --env "YARDLET_QA_BACKGROUND=1"
     --env "YARDLET_BROWSER_KEYCHAIN=mock")
 while (( $# > 0 )) && [[ "$1" != "--" ]]; do

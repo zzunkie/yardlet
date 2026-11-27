@@ -14,7 +14,8 @@
 set -uo pipefail
 TOOLS=${0:A:h}
 app=$1
-out=$2
+# Absolute: the app, which LaunchServices starts in /, writes its results there (qa-launch.sh).
+out=${2:A}
 shift 2
 identifier=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$app/Contents/Info.plist") || exit 1
 [[ "${app:A}" == */browser-host-qa/*.app && "$identifier" != "com.zzunkie.yardlet" ]] || {

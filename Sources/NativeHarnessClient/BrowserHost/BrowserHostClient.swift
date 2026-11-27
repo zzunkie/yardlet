@@ -638,8 +638,11 @@ final class BrowserHostClient {
     /// The agent's screenshot waits for a frame: Chromium takes the picture from the next frame the tab draws, and a
     /// page that does not change draws none of its own, so the engine is asked for one as a panel coming on screen asks
     /// (`panelComesOnScreen`), also when it draws the tab already: the host shows the tab and invalidates its view.
+    /// The wait is the agent's use of the tab, so a tab hidden meanwhile (a wait that outlasted `agentVisibleWindow`
+    /// after a command that timed out, or its panel went) is shown again, as the agent's next command shows it.
     func askForFrame(of tab: BrowserTab) {
-        guard tabs[tab.id] === tab, tab.isShown else { return }
+        guard tabs[tab.id] === tab else { return }
+        guard tab.isShown else { return noteAgentActivity(on: tab) }
         connection?.send(.visibility(tab: tab.id, isHidden: false))
     }
 

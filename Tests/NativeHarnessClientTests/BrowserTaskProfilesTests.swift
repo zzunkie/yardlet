@@ -26,6 +26,30 @@ final class BrowserTaskProfilesTests: XCTestCase {
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     }
 
+    /// The host's folders are made and named as Chromium resolves them, so a task's profile stays inside the root cache;
+    /// one that cannot be made stops the start with its name, before Chromium, which ends its process at once without
+    /// its cache folder.
+    func testTheHostsFoldersAreMadeAsRealPathsAndOneThatCannotBeMadeIsAnError() throws {
+        let real = folder.appending(path: "real")
+        try makeFolder(real)
+        let link = folder.appending(path: "link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+        let resolved = try XCTUnwrap(realpath(real.path(percentEncoded: false), nil))
+        defer { free(resolved) }
+        let made = try BrowserHostPaths.makeDirectory(link.appending(path: "Browser/Default", directoryHint: .isDirectory))
+        XCTAssertEqual(made, String(cString: resolved) + "/Browser/Default", "through the links, without a trailing slash")
+        var isDirectory: ObjCBool = false
+        XCTAssertTrue(FileManager.default.fileExists(atPath: made, isDirectory: &isDirectory) && isDirectory.boolValue)
+
+        let file = folder.appending(path: "file")
+        try Data().write(to: file)
+        let underFile = file.appending(path: "Browser").path(percentEncoded: false)
+        XCTAssertThrowsError(try BrowserHostPaths.makeDirectory(file.appending(path: "Browser"))) { error in
+            XCTAssertTrue(error.localizedDescription.contains("The browser's folder \(underFile) could not be created"),
+                          error.localizedDescription)
+        }
+    }
+
     func testTasksShareTheDefaultProfileUntilTheySignInThemselvesAndKeepOnlyTheirOwnFolders() async throws {
         let profiles = BrowserTaskProfiles(root: folder, defaults: defaults)
         // Said here rather than left to the default, which another domain in the preferences search list could answer.
