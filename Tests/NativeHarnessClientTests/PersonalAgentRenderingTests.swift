@@ -126,6 +126,10 @@ final class PersonalAgentRenderingTests: XCTestCase {
     /// Switching to personal agents and back leaves the task list as it was left: scrolled where it was,
     /// the shown task's project still folded, the search still typed.
     func testTheTaskListComesBackAsItWasLeft() async throws {
+        // Scrollers over the content. With scrollers that take room (a mouse, or CI's runners), the list scrolls only
+        // until a pinned task opened from elsewhere reaches its top edge, which leaves it below its first viewport.
+        let restoreScrollers = WindowlessRender.overlayScrollers()
+        defer { restoreScrollers() }
         var folders: [String: URL] = [:]
         let (model, _) = try makeWindowModel { root in
             try ["alpha", "beta", "gamma"].flatMap { name in
@@ -801,6 +805,10 @@ final class PersonalAgentRenderingTests: XCTestCase {
         let readAt = scroll.documentVisibleRect.minY
         let bottom = (scroll.documentView?.frame.height ?? 0) - scroll.documentVisibleRect.height
         XCTAssertGreaterThan(abs(bottom - readAt), 200, "The conversation is read away from its end")
+        // The message at the top of what is read, and how far down it is: the list is lazy, so the height above it,
+        // and with it the scroll offset, is an estimate that can change while the same message stays in place.
+        let messages = (1...60).map { "Message \($0) about the launch plan" }
+        let (read, readTop) = try XCTUnwrap(Self.firstInView(messages, panel: scroll, in: host.hosting))
         let before = try host.capture()
         // Opened while the person is still writing: the covered editor stops taking their typing.
         XCTAssertTrue(host.window.makeFirstResponder(composer))
@@ -817,7 +825,9 @@ final class PersonalAgentRenderingTests: XCTestCase {
         await host.settle(until: { host.accessibilityElements().contains { $0.label == L10n.string("Send message") } })
         host.settle(passes: 30)
         let returned = try conversationScroll()
-        XCTAssertEqual(returned.documentVisibleRect.minY, readAt, accuracy: 2, "The conversation is where it was read")
+        XCTAssertEqual(try XCTUnwrap(Self.firstInView(messages, panel: returned, in: host.hosting)?.0), read)
+        XCTAssertEqual(try XCTUnwrap(Self.offset(of: read, panel: returned, in: host.hosting)), readTop, accuracy: 2,
+                       "The conversation is where it was read")
         XCTAssertEqual(try XCTUnwrap(composerField()).string, "Keep this draft while I read the task.")
         XCTAssertTrue(drafts.opened.first === draft)
         XCTAssertEqual(draft.files.map(\.id), ids)
@@ -2303,6 +2313,10 @@ final class PersonalAgentRenderingTests: XCTestCase {
     /// cannot be read as its retry, and other files by their names as before. Each picture is read only
     /// once its row is shown, and only pictures are read. Rendered at both window sizes and appearances.
     func testPicturesShowInPlaceFromTheDotAndThePersonWithARetry() async throws {
+        // Scrollers over the content. With scrollers that take room (a mouse, or CI's runners), the person's row brought
+        // into view at the conversation's top is drawn, its pictures read, but missing from the accessibility tree read here.
+        let restoreScrollers = WindowlessRender.overlayScrollers()
+        defer { restoreScrollers() }
         let (model, _) = try makeWindowModel()
         let agent = PersonalAgent(id: .init(accountID: "example", userID: "person", agentID: "dot", roomID: "room"),
                                   name: "Atlas", rootThreadID: nil, isPaused: false, isPrimary: true)

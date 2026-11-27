@@ -320,6 +320,20 @@ enum WindowlessRender {
         withAccessibilityTree { listedElements(in: root, within: visibleFrame) }
     }
 
+    /// Draws scrollers over the content, as with a trackpad, until the returned closure puts the setting back. A Mac
+    /// with a mouse, or one with no pointing device as CI's runners are, gives scrollers room of their own: a scroll
+    /// view is narrower, and its lazy rows are placed and read as they are there.
+    static func overlayScrollers() -> () -> Void {
+        let arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        UserDefaults.standard.setVolatileDomain(arguments.merging(["AppleShowScrollBars": "WhenScrolling"]) { $1 },
+                                                forName: UserDefaults.argumentDomain)
+        NotificationCenter.default.post(name: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil)
+        return {
+            UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
+            NotificationCenter.default.post(name: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil)
+        }
+    }
+
     /// Runs `body` with the application's accessibility tree built, then puts the previous setting
     /// back, also when `body` throws. SwiftUI builds the tree only after an assistive app announces
     /// itself by setting `AXEnhancedUserInterface` on the application, as VoiceOver does. An
