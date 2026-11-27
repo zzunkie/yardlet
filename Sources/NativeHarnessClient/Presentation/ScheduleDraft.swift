@@ -26,7 +26,9 @@ struct ScheduleDraft: Equatable {
     var name = ""
     var prompt = ""
     var kind = Kind.daily
-    var time = ScheduleTime(hour: 9, minute: 0)
+    /// The daily and weekly trigger's times of day, at least one, as the editor lists them; the trigger
+    /// keeps them earliest first.
+    var times = [ScheduleTime(hour: 9, minute: 0)]
     /// The weekly trigger's days, and the days an interval runs on (all when it is every day).
     var days = ScheduleWeekday.weekdays
     var intervalDays = ScheduleWeekday.everyDay
@@ -62,13 +64,13 @@ struct ScheduleDraft: Equatable {
         name = schedule.name
         prompt = schedule.prompt
         switch schedule.trigger {
-        case let .daily(time):
+        case let .daily(times):
             kind = .daily
-            self.time = time
-        case let .weekly(days, time):
+            self.times = times
+        case let .weekly(days, times):
             kind = .weekly
             self.days = days
-            self.time = time
+            self.times = times
         case let .interval(hours, anchor, days):
             kind = .interval
             intervalHours = hours
@@ -98,9 +100,10 @@ struct ScheduleDraft: Equatable {
     func trigger(now: Date, calendar: Calendar = .autoupdatingCurrent) -> ScheduleTrigger {
         switch kind {
         case .daily:
-            return .daily(time)
+            return .daily(ScheduleTime.ordered(times))
         case .weekly:
-            return days == ScheduleWeekday.everyDay ? .daily(time) : .weekly(days: days, time: time)
+            let times = ScheduleTime.ordered(times)
+            return days == ScheduleWeekday.everyDay ? .daily(times) : .weekly(days: days, times: times)
         case .interval:
             let anchor = intervalAnchor ?? calendar.startOfDay(for: now)
             return .interval(hours: intervalHours, anchor: anchor,
@@ -161,8 +164,8 @@ struct ScheduleDraft: Equatable {
             }
             destination.startsInNewWorktree = destination.workspacePath != nil && startsInNewWorktree
         }
-        var schedule = existing ?? ScheduledTask(name: "", prompt: "", trigger: .daily(time), destination: destination,
-                                                 createdAt: now)
+        var schedule = existing ?? ScheduledTask(name: "", prompt: "", trigger: trigger(now: now, calendar: calendar),
+                                                 destination: destination, createdAt: now)
         schedule.name = trimmedName.isEmpty ? SessionTitleProjection.provisionalTitle(from: prompt) : trimmedName
         // A prompt the person rewrote is theirs, whoever wrote the one before.
         if schedule.prompt != prompt { schedule.agentTaskID = nil }

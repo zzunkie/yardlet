@@ -830,6 +830,16 @@ final class ScheduledTaskTests: XCTestCase {
         XCTAssertEqual(reopened.mode, .continueTask)
         XCTAssertEqual(reopened.targetTaskID, target)
         XCTAssertEqual(reopened.kind, .daily)
+
+        let checks = ScheduledTask(name: "Checks", prompt: "Check the queue.", trigger: .weekly(
+            days: ScheduleWeekday.weekdays, times: [ScheduleTime(hour: 9, minute: 55), ScheduleTime(hour: 13, minute: 55)]),
+                                   destination: ScheduleDestination(harness: .claudeCode))
+        let editing = ScheduleDraft(editing: checks, now: now, calendar: seoul)
+        XCTAssertEqual(editing.kind, .weekly)
+        XCTAssertEqual(editing.times, [ScheduleTime(hour: 9, minute: 55), ScheduleTime(hour: 13, minute: 55)])
+        XCTAssertEqual(editing.schedule(projects: [], existing: checks, now: now, calendar: seoul).trigger, checks.trigger,
+                       "Saving keeps every time")
+        XCTAssertEqual(editing.nextRun(now: now, calendar: seoul), date(19, 9, 55), "Saturday night: Monday's first time")
     }
 
     func testTheQuitConfirmationSaysSchedulesWaitForYardlet() {

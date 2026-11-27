@@ -148,12 +148,12 @@ struct ScheduledTaskEditor: View {
     private var timeRow: some View {
         DatePicker(L10n.string("Time"), selection: Binding(
             get: {
-                calendar.date(bySettingHour: draft.time.hour, minute: draft.time.minute, second: 0,
+                calendar.date(bySettingHour: draft.times[0].hour, minute: draft.times[0].minute, second: 0,
                               of: calendar.startOfDay(for: now())) ?? now()
             },
             set: { date in
                 let parts = calendar.dateComponents([.hour, .minute], from: date)
-                draft.time = ScheduleTime(hour: parts.hour ?? 0, minute: parts.minute ?? 0)
+                draft.times[0] = ScheduleTime(hour: parts.hour ?? 0, minute: parts.minute ?? 0)
             }), displayedComponents: .hourAndMinute)
             .datePickerStyle(.compact)
             .fixedSize()

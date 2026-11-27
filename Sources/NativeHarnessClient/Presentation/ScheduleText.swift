@@ -2,17 +2,18 @@ import Foundation
 
 /// How schedules read in the list, the detail, the editor and the import sheet.
 enum ScheduleText {
-    /// "Every day at 9:00 AM", "Weekdays at 9:00 AM", "Every Mon, Wed at 9:00 AM", "Every 3 hours",
+    /// "Every day at 9:00 AM", "Weekdays at 9:00 AM, 1:00 PM", "Every Mon, Wed at 9:00 AM", "Every 3 hours",
     /// "Once, Oct 18 at 2:30 PM".
     static func summary(_ trigger: ScheduleTrigger, calendar: Calendar = .autoupdatingCurrent,
                         now: Date = Date()) -> String {
         switch trigger {
-        case let .daily(time):
-            return L10n.format("Every day at %@", timeText(time, calendar: calendar))
-        case let .weekly(days, time):
-            if days == ScheduleWeekday.everyDay { return L10n.format("Every day at %@", timeText(time, calendar: calendar)) }
-            if days == ScheduleWeekday.weekdays { return L10n.format("Weekdays at %@", timeText(time, calendar: calendar)) }
-            return L10n.format("Every %@ at %@", dayList(days, calendar: calendar), timeText(time, calendar: calendar))
+        case let .daily(times):
+            return L10n.format("Every day at %@", timeList(times, calendar: calendar))
+        case let .weekly(days, times):
+            let at = timeList(times, calendar: calendar)
+            if days == ScheduleWeekday.everyDay { return L10n.format("Every day at %@", at) }
+            if days == ScheduleWeekday.weekdays { return L10n.format("Weekdays at %@", at) }
+            return L10n.format("Every %@ at %@", dayList(days, calendar: calendar), at)
         case let .interval(hours, _, days):
             let every = hours == 1 ? L10n.string("Every hour") : L10n.format("Every %lld hours", Int64(hours))
             guard !days.isEmpty, days != ScheduleWeekday.everyDay else { return every }
@@ -29,6 +30,11 @@ enum ScheduleText {
         return ScheduleWeekday.ordered(days, calendar: calendar)
             .map { symbols[$0.rawValue - 1] }
             .joined(separator: ", ")
+    }
+
+    /// "9:00 AM, 1:00 PM, 5:00 PM", earliest first.
+    static func timeList(_ times: [ScheduleTime], calendar: Calendar = .autoupdatingCurrent) -> String {
+        ScheduleTime.ordered(times).map { timeText($0, calendar: calendar) }.joined(separator: ", ")
     }
 
     static func timeText(_ time: ScheduleTime, calendar: Calendar = .autoupdatingCurrent) -> String {

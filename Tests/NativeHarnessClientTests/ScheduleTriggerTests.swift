@@ -3,7 +3,8 @@ import XCTest
 @testable import NativeHarnessClient
 
 /// When a schedule's slots fall: wall-clock times across daylight saving time, month ends and time
-/// zones, elapsed-hour intervals, weekday filters and one-offs. Pure date math; nothing runs.
+/// zones, several times a day, elapsed-hour intervals, weekday filters and one-offs. Pure date math;
+/// nothing runs.
 final class ScheduleTriggerTests: XCTestCase {
     private func calendar(_ zone: String) -> Calendar {
         var calendar = Calendar(identifier: .gregorian)
@@ -57,6 +58,39 @@ final class ScheduleTriggerTests: XCTestCase {
         XCTAssertNil(ScheduleTrigger.weekly(days: [], time: ScheduleTime(hour: 7, minute: 0))
             .nextSlot(after: date(seoul, 2026, 10, 19), calendar: seoul))
         XCTAssertFalse(ScheduleTrigger.weekly(days: [], time: ScheduleTime(hour: 7, minute: 0)).isValid)
+    }
+
+    func testSeveralTimesADayComeDueInTurnAndTheLatestMissedOneCatchesUp() {
+        let seoul = calendar("Asia/Seoul")
+        let trigger = ScheduleTrigger.weekly(days: ScheduleWeekday.weekdays, times: [
+            ScheduleTime(hour: 9, minute: 55), ScheduleTime(hour: 13, minute: 55), ScheduleTime(hour: 17, minute: 55),
+        ])
+        // 2026-10-16 is a Friday.
+        XCTAssertEqual(local(trigger.nextSlot(after: date(seoul, 2026, 10, 16, 8), calendar: seoul), seoul),
+                       "2026-10-16 09:55 +09:00")
+        XCTAssertEqual(local(trigger.nextSlot(after: date(seoul, 2026, 10, 16, 9, 55), calendar: seoul), seoul),
+                       "2026-10-16 13:55 +09:00", "The day's next time")
+        XCTAssertEqual(local(trigger.nextSlot(after: date(seoul, 2026, 10, 16, 17, 55), calendar: seoul), seoul),
+                       "2026-10-19 09:55 +09:00", "After Friday's last time, Monday's first")
+        XCTAssertEqual(local(trigger.latestSlot(after: date(seoul, 2026, 10, 16, 9), notAfter: date(seoul, 2026, 10, 16, 15),
+                                                calendar: seoul), seoul),
+                       "2026-10-16 13:55 +09:00", "Of two times missed, the later runs")
+        XCTAssertEqual(local(trigger.latestSlot(after: date(seoul, 2026, 10, 16, 9), notAfter: date(seoul, 2026, 10, 19, 9),
+                                                calendar: seoul), seoul),
+                       "2026-10-16 17:55 +09:00", "Over the weekend, Friday's last time")
+        XCTAssertNil(trigger.latestSlot(after: date(seoul, 2026, 10, 16, 13, 55), notAfter: date(seoul, 2026, 10, 16, 17, 54),
+                                        calendar: seoul))
+        XCTAssertEqual(ScheduleTrigger.daily(ScheduleTime(hour: 9, minute: 0)), .daily([ScheduleTime(hour: 9, minute: 0)]),
+                       "One time is a list of one")
+        XCTAssertFalse(ScheduleTrigger.daily([]).isValid)
+        XCTAssertNil(ScheduleTrigger.daily([]).nextSlot(after: date(seoul, 2026, 10, 16), calendar: seoul))
+
+        // 2026-03-08 02:00 PST becomes 03:00 PDT: the skipped 02:30 runs right after the gap, then 03:30 as usual.
+        let la = calendar("America/Los_Angeles")
+        let skipped = ScheduleTrigger.daily([ScheduleTime(hour: 2, minute: 30), ScheduleTime(hour: 3, minute: 30)])
+        let first = skipped.nextSlot(after: date(la, 2026, 3, 8), calendar: la)
+        XCTAssertEqual(local(first, la), "2026-03-08 03:00 -07:00")
+        XCTAssertEqual(local(skipped.nextSlot(after: first!, calendar: la), la), "2026-03-08 03:30 -07:00")
     }
 
     func testMonthAndYearEnds() {
@@ -172,6 +206,8 @@ final class ScheduleTriggerTests: XCTestCase {
             .interval(hours: 6, anchor: anchor, days: [.saturday]),
             .interval(hours: 1, anchor: anchor, days: []),
             .once(anchor),
+            .daily([ScheduleTime(hour: 9, minute: 55), ScheduleTime(hour: 13, minute: 55)]),
+            .weekly(days: ScheduleWeekday.weekdays, times: [ScheduleTime(hour: 8, minute: 0), ScheduleTime(hour: 17, minute: 30)]),
         ]
         for trigger in triggers {
             let data = try JSONEncoder().encode(trigger)
@@ -180,5 +216,13 @@ final class ScheduleTriggerTests: XCTestCase {
         let text = String(decoding: try JSONEncoder().encode(triggers[1]), as: UTF8.self)
         XCTAssertTrue(text.contains("\"time\":\"22:00\""), text)
         XCTAssertTrue(text.contains("\"days\":[2,6]"), text)
+        XCTAssertFalse(text.contains("times"), "One time is stored as it always was: \(text)")
+        // Several times are listed, and the earliest is the `time` a build that reads only that runs at.
+        let several = String(decoding: try JSONEncoder().encode(triggers[5]), as: UTF8.self)
+        XCTAssertTrue(several.contains("\"times\":[\"09:55\",\"13:55\"]"), several)
+        XCTAssertTrue(several.contains("\"time\":\"09:55\""), several)
+        let unordered = Data(#"{"kind":"daily","time":"13:00","times":["13:00","09:00","13:00"]}"#.utf8)
+        XCTAssertEqual(try JSONDecoder().decode(ScheduleTrigger.self, from: unordered),
+                       .daily([ScheduleTime(hour: 9, minute: 0), ScheduleTime(hour: 13, minute: 0)]), "Earliest first, once each")
     }
 }
