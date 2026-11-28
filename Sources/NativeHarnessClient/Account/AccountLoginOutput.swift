@@ -18,8 +18,16 @@ extension AccountLoginController {
         return nil
     }
 
-    nonisolated static func outputRequiresInput(_ value: String) -> Bool {
-        let normalized = stripANSI(value).lowercased()
+    nonisolated static func outputRequiresInput(_ value: String, automaticPrompt: String? = nil) -> Bool {
+        var normalized = stripANSI(value).lowercased()
+        if let automaticPrompt, let prompt = normalized.range(of: automaticPrompt.lowercased(), options: .backwards) {
+            // The CLI may keep the answered prompt and its radio choices in scrollback.
+            let afterPrompt = normalized[prompt.upperBound...].split(separator: "\n")
+            normalized = afterPrompt.drop(while: { line in
+                let choice = line.trimmingCharacters(in: .whitespaces)
+                return choice.isEmpty || choice.hasPrefix("●") || choice.hasPrefix("○")
+            }).joined(separator: "\n")
+        }
         if normalized.contains("●"), normalized.contains("○") { return true }
         return [
             "select login method",

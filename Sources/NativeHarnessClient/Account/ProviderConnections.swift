@@ -1165,11 +1165,33 @@ final class ProviderConnectionStore {
 
     /// Reads a harness's default login, or the login a sign-in console works with (`connection`).
     func readDefault(_ descriptor: HarnessDescriptor, executableURL: URL?,
-                     connection: ProviderConnection? = nil) async -> HarnessAccountSnapshot {
+                     connection: ProviderConnection? = nil, authOnly: Bool = false) async -> HarnessAccountSnapshot {
         if let defaultLoader { return await defaultLoader(descriptor, executableURL) }
         let broker = connection.map { HarnessAccountBroker(connection: $0) }
             ?? HarnessAccountBroker(codexEnvironmentManager: codexEnvironmentManager)
+        if authOnly, descriptor.id == .antigravityCLI, let executableURL {
+            return await broker.antigravityAuthSnapshot(descriptor: descriptor, executableURL: executableURL)
+        }
         return await broker.snapshot(for: descriptor, executableURL: executableURL)
+    }
+
+    /// Finish the account reading after browser sign-in, even if its sheet has already closed.
+    func refreshAntigravityAfterLogin(_ descriptor: HarnessDescriptor, verified: HarnessAccountSnapshot?,
+                                      runtimeSelections: RuntimeSelectionStore) {
+        guard let executable = runtimeSelections.selectedURL(for: descriptor.id) else { return }
+        _ = schedule(AccountSnapshotCache.defaultKey(for: descriptor.id), policy: .restart) { isLatest in
+            let auth: HarnessAccountSnapshot
+            if let verified { auth = verified }
+            else {
+                auth = await self.readDefault(descriptor, executableURL: executable, authOnly: true)
+                guard isLatest(), runtimeSelections.selectedURL(for: descriptor.id) == executable else { return }
+                self.applyDefault(auth)
+            }
+            guard auth.state == .signedIn, self.defaultLoader == nil else { return }
+            let usage = await HarnessAccountBroker().antigravityUsage(executableURL: executable)
+            guard isLatest(), runtimeSelections.selectedURL(for: descriptor.id) == executable else { return }
+            self.applyDefault(auth.replacingUsage(usage))
+        }
     }
 
     private func read(_ connection: ProviderConnection, executableURL: URL?) async -> HarnessAccountSnapshot {

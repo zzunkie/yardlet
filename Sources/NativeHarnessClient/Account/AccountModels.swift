@@ -444,6 +444,7 @@ struct AccountInteractiveCommand: Sendable {
     let initialInputTrigger: String?
     let usesPseudoTerminal: Bool
     let environment: [String: String]
+    let opensBrowser: Bool
     let startupMessage: String?
     let operation: AccountConnectionOperation
     let interaction: AccountConnectionInteraction
@@ -456,6 +457,7 @@ struct AccountInteractiveCommand: Sendable {
         usesPseudoTerminal: Bool = false,
         environment: [String: String] = [:],
         startupMessage: String? = nil,
+        opensBrowser: Bool = false,
         operation: AccountConnectionOperation = .connect,
         interaction: AccountConnectionInteraction = .guided
     ) {
@@ -465,6 +467,7 @@ struct AccountInteractiveCommand: Sendable {
         self.initialInputTrigger = initialInputTrigger
         self.usesPseudoTerminal = usesPseudoTerminal
         self.environment = environment
+        self.opensBrowser = opensBrowser
         self.startupMessage = startupMessage
         self.operation = operation
         self.interaction = interaction

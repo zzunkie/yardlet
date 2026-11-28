@@ -10,7 +10,8 @@ final class AccountLoginController {
     private(set) var isRunning = false
     var phase: AccountConnectionPhase { .cancelled }
 
-    func start(_ command: AccountInteractiveCommand) {}
+    var connectionVerified: Bool { false }
+    func start(_ command: AccountInteractiveCommand, onSuccess: (() -> Void)? = nil) {}
     func stop() {}
     func completeVerifiedConnection() {}
 }

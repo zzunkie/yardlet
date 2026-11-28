@@ -18,7 +18,7 @@ final class AccountLoginController: NSObject, @MainActor LocalProcessTerminalVie
     /// Changes with each command, so the console makes its terminal anew for the next one (a
     /// sign-in that follows a sign-out in the same console).
     private(set) var commandID = UUID()
-    private var connectionVerified = false
+    private(set) var connectionVerified = false
 
     @ObservationIgnored private(set) var processIdentifier: pid_t?
     @ObservationIgnored private weak var terminalView: LocalProcessTerminalView?
@@ -27,6 +27,9 @@ final class AccountLoginController: NSObject, @MainActor LocalProcessTerminalVie
     @ObservationIgnored private var terminalOutputPrefix = ""
     @ObservationIgnored private var pendingInitialInput: String?
     @ObservationIgnored private var pendingInitialInputTrigger: String?
+    private var opensBrowser = false
+    private var automaticPrompt: String?
+    @ObservationIgnored private var onSuccess: (() -> Void)?
     private let outputLimit = 256 * 1024
 
     var phase: AccountConnectionPhase {
@@ -34,10 +37,10 @@ final class AccountLoginController: NSObject, @MainActor LocalProcessTerminalVie
         if wasCancelled { return .cancelled }
         if isRunning {
             if detectedURL != nil { return .browserHandoff }
-            if interaction == .terminalRequired || Self.outputRequiresInput(output) {
+            if interaction == .terminalRequired || Self.outputRequiresInput(output, automaticPrompt: automaticPrompt) {
                 return .inputRequired
             }
-            return .preparing
+            return opensBrowser ? .browserHandoff : .preparing
         }
         guard let exitCode else { return .preparing }
         return exitCode == 0 ? .completed : .failed
@@ -50,13 +53,16 @@ final class AccountLoginController: NSObject, @MainActor LocalProcessTerminalVie
 
     /// Prepares a command for the interactive SwiftTerm surface. The process starts
     /// when the view attaches on the next SwiftUI render pass.
-    func start(_ command: AccountInteractiveCommand) {
+    func start(_ command: AccountInteractiveCommand, onSuccess: (() -> Void)? = nil) {
         stop()
+        self.onSuccess = onSuccess
         output = command.startupMessage ?? ""
         detectedURL = nil
         detectedCode = nil
         exitCode = nil
         operation = command.operation
+        opensBrowser = command.opensBrowser
+        automaticPrompt = command.initialInputTrigger
         interaction = command.interaction
         wasCancelled = false
         terminalOutputPrefix = output
@@ -138,6 +144,7 @@ final class AccountLoginController: NSObject, @MainActor LocalProcessTerminalVie
     func completeVerifiedConnection() {
         guard isRunning, !wasCancelled else { return }
         connectionVerified = true
+        onSuccess?()
         stopProcess(clearOutcome: false)
         detectedURL = nil
         detectedCode = nil
@@ -158,6 +165,7 @@ final class AccountLoginController: NSObject, @MainActor LocalProcessTerminalVie
     }
 
     private func stopProcess(clearOutcome: Bool) {
+        onSuccess = nil
         terminalPollTask?.cancel()
         terminalPollTask = nil
         if let terminalView {
@@ -233,6 +241,8 @@ final class AccountLoginController: NSObject, @MainActor LocalProcessTerminalVie
         processIdentifier = nil
         isRunning = false
         self.exitCode = exitCode ?? -1
+        if exitCode == 0 { onSuccess?() }
+        onSuccess = nil
     }
 
     func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
@@ -252,6 +262,12 @@ final class AccountLoginController: NSObject, @MainActor LocalProcessTerminalVie
         let range = NSRange(value.startIndex..<value.endIndex, in: value)
         return detector.matches(in: value, range: range)
             .compactMap(\.url)
-            .first { $0.scheme == "https" }
+            .first { url in
+                guard url.scheme == "https" else { return false }
+                let parts = (url.host?.lowercased().components(separatedBy: ".") ?? [])
+                    + url.path.lowercased().components(separatedBy: "/")
+                return !parts.contains { $0.hasPrefix("terms") || $0.contains("privacy")
+                    || ["docs", "documentation", "policies", "tos"].contains($0) }
+            }
     }
 }

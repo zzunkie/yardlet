@@ -865,7 +865,6 @@
 "OpenCode provider status could not be confirmed." = "OpenCode provider status could not be confirmed.";
 "OpenCode provider credentials and environment" = "OpenCode provider credentials and environment";
 "Antigravity CLI credentials are stored in macOS Keychain." = "Antigravity CLI credentials are stored in macOS Keychain.";
-"No Antigravity CLI credentials were found in macOS Keychain." = "No Antigravity CLI credentials were found in macOS Keychain.";
 "Antigravity CLI Keychain status could not be confirmed." = "Antigravity CLI Keychain status could not be confirmed.";
 "macOS Keychain (Antigravity CLI)" = "macOS Keychain (Antigravity CLI)";
 "Opening Antigravity CLI sign-in…" = "Opening Antigravity CLI sign-in…";

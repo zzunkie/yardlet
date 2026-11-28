@@ -59,9 +59,14 @@ final class AccountCenterModel {
         stopConnectionVerification()
         activeConnection = connection
         activeHarness = descriptor.id
-        loginController.start(command)
-        // Pi returns to its editor after OAuth, and Antigravity to its chat, instead of exiting.
-        if [.pi, .antigravityCLI].contains(descriptor.id) {
+        loginController.start(command) { [weak self] in
+            guard let self, descriptor.id == .antigravityCLI,
+                  runtimeSelections.selectedURL(for: descriptor.id) == executableURL else { return }
+            self.connections.refreshAntigravityAfterLogin(descriptor, verified: self.loginController.connectionVerified
+                ? self.connections.defaultSnapshots[descriptor.id] : nil, runtimeSelections: runtimeSelections)
+        }
+        // Pi and older Antigravity versions stay in their editor after signing in.
+        if descriptor.id == .pi || (descriptor.id == .antigravityCLI && command.initialInput != nil) {
             follow(descriptor: descriptor, executableURL: executableURL, runtimeSelections: runtimeSelections,
                    probes: true, until: { [weak self] in
                        // A Pi login completes for the provider it was opened for.
@@ -136,7 +141,7 @@ final class AccountCenterModel {
                     let readsDefault = self.activeConnection?.homePath == nil
                     let read = readsDefault ? self.connections.beginRead(ofDefault: descriptor.id) : nil
                     let snapshot = await self.connections.readDefault(descriptor, executableURL: executableURL,
-                        connection: self.activeConnection)
+                        connection: self.activeConnection, authOnly: true)
                     guard !Task.isCancelled, self.isFollowing(verificationID, descriptor.id, executableURL,
                         runtimeSelections), self.loginController.isRunning else { return }
                     // A check can supersede this read while the same console is still open. Discard

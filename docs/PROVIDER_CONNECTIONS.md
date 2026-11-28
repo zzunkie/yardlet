@@ -89,9 +89,10 @@ assume ChatGPT as the default provider. The default Pi connection and adding a n
 first. Pi's authentication method choice screen is also recognized as waiting for input.
 Pi's explicit provider sign-in keeps the existing
 `auth check --provider … --json --no-refresh` completion detection and the guard against cancellation and late replies.
-Antigravity CLI has no sign-in command: Yardlet starts `agy` itself, answers its login method picker with the default
-Google OAuth choice, and `agy` opens the browser. `agy` stays in its chat after signing in, so the console finishes when
-the keychain item appears, checked once a second without reading the credential, under the same guard as Pi. The
+Antigravity CLI uses `agy acp --login` when the selected CLI lists that option. Older versions open their login
+method picker, where Yardlet confirms the default Google OAuth choice. The console shows the browser handoff
+while `agy` signs in. For an older CLI that stays in chat, Yardlet checks authentication once a second.
+After sign-in the account list reads quota separately, so returning to the task does not wait for usage. The
 console's terminal keeps its size while the CLI details are hidden, since a full-screen picker such as `agy`'s draws
 nothing in a terminal one row tall.
 
@@ -263,7 +264,7 @@ leaves the quota list empty and completes the check. A failed lookup with no pri
 ## Antigravity account and plan limit lookup
 
 Yardlet reads Antigravity CLI's sign-in with `AGY_CLI_CDE_AUTH_ACTION=check agy`
-(`HarnessAccountBroker.antigravitySnapshot`). Signed in, `agy` checks its stored login without starting a model turn or
+(`HarnessAccountBroker.antigravityAuthSnapshot`). Signed in, `agy` checks its stored login without starting a model turn or
 opening a browser, prints `Already authenticated as <email>.` (or `Already authenticated.`) and exits 0; Yardlet takes
 only the address from that line. Any other answer (signed out, offline, no answer in time, an `agy` without the action)
 leaves the sign-in to whether the `gemini`/`antigravity` keychain item exists, which Yardlet checks without reading its

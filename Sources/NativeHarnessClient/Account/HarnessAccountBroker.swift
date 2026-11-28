@@ -29,7 +29,9 @@ actor HarnessAccountBroker {
                 return try await piCodexSnapshot(executableURL: executableURL)
             }
             if descriptor.id == .antigravityCLI {
-                return await antigravitySnapshot(descriptor: descriptor, executableURL: executableURL)
+                let auth = await antigravityAuthSnapshot(descriptor: descriptor, executableURL: executableURL)
+                guard auth.state == .signedIn else { return auth }
+                return auth.replacingUsage(await antigravityUsage(executableURL: executableURL))
             }
             if descriptor.id == .museCode {
                 return await museCodeSnapshot(descriptor: descriptor, executableURL: executableURL)
@@ -137,13 +139,13 @@ actor HarnessAccountBroker {
             initialInput = nil
             startupMessage = nil
         case .antigravityCLI:
-            guard executableURL.lastPathComponent == "agy" else { return nil }
-            arguments = []
-            // Current agy releases first present a TUI-owned login-method picker.
-            // The Account Center's primary sign-in action means the default Google
-            // OAuth choice, so confirm that highlighted choice and let agy open its
-            // own browser flow. Without this input the console waits indefinitely.
-            initialInput = "\r"
+            let help = try? await AccountCommandRunner.run(executableURL: executableURL, arguments: ["help", "acp"],
+                environment: antigravityEnvironment, timeout: .seconds(3))
+            let supportsLogin = help?.exitCode == 0 && help?.output.split(whereSeparator: \.isNewline).contains {
+                $0.split(whereSeparator: \.isWhitespace).first == "--login"
+            } == true
+            arguments = supportsLogin ? ["acp", "--login"] : []
+            initialInput = supportsLogin ? nil : "\r"
             startupMessage = [
                 L10n.string("Opening Antigravity CLI sign-in…"),
                 L10n.string("Antigravity uses its own browser sign-in. Keep this window open until authentication finishes.")
@@ -161,16 +163,17 @@ actor HarnessAccountBroker {
                 .processEnvironment().values else { return nil }
             environment = Self.codexEnvironmentOverrides(from: nativeEnvironment)
         } else {
-            environment = connection?.environment ?? [:]
+            environment = harness == .antigravityCLI ? antigravityEnvironment : connection?.environment ?? [:]
         }
         return AccountInteractiveCommand(
             executableURL: executableURL,
             arguments: arguments,
             initialInput: initialInput,
-            initialInputTrigger: harness == .antigravityCLI ? "Select login method:" : nil,
+            initialInputTrigger: harness == .antigravityCLI && initialInput != nil ? "Select login method:" : nil,
             usesPseudoTerminal: [HarnessKind.antigravityCLI, .hermes].contains(harness),
             environment: environment,
             startupMessage: startupMessage,
+            opensBrowser: harness == .antigravityCLI,
             interaction: ([.hermes, .openCode, .pi].contains(harness)
                 && !(harness == .pi && connection?.providerID != nil))
                 ? .terminalRequired
@@ -201,7 +204,6 @@ actor HarnessAccountBroker {
             arguments = []
             initialInput = "/logout\r"
         case .antigravityCLI:
-            guard executableURL.lastPathComponent == "agy" else { return nil }
             arguments = []
             initialInput = "/logout\r"
         case .pi:
@@ -216,12 +218,13 @@ actor HarnessAccountBroker {
                 .processEnvironment().values else { return nil }
             environment = Self.codexEnvironmentOverrides(from: nativeEnvironment)
         } else {
-            environment = connection?.environment ?? [:]
+            environment = harness == .antigravityCLI ? antigravityEnvironment : connection?.environment ?? [:]
         }
         return AccountInteractiveCommand(
             executableURL: executableURL,
             arguments: arguments,
             initialInput: initialInput,
+            initialInputTrigger: harness == .antigravityCLI ? "? for shortcuts" : nil,
             environment: environment,
             operation: .disconnect,
             interaction: [.kimiCode, .antigravityCLI, .pi].contains(harness)
@@ -604,30 +607,35 @@ actor HarnessAccountBroker {
         )
     }
 
-    private func antigravitySnapshot(descriptor: HarnessDescriptor, executableURL: URL) async -> HarnessAccountSnapshot {
-        // `agy` starts its own updater whenever it runs; these reads leave updating to CLI Updates.
-        let environment = (connection?.environment ?? [:]).merging(["AGY_CLI_DISABLE_AUTO_UPDATE": "true"]) { _, new in new }
+    private var antigravityEnvironment: [String: String] {
+        (connection?.environment ?? [:]).merging(["AGY_CLI_DISABLE_AUTO_UPDATE": "true"]) { _, new in new }
+    }
+
+    func antigravityUsage(executableURL: URL) async -> [AccountUsageMetric] {
+        guard let result = try? await AccountCommandRunner.run(executableURL: executableURL,
+            arguments: AntigravityUsage.arguments, environment: antigravityEnvironment, timeout: .seconds(30))
+        else { return [] }
+        return AntigravityUsage.metrics(fromOutput: result.output) ?? []
+    }
+
+    func antigravityAuthSnapshot(descriptor: HarnessDescriptor, executableURL: URL) async -> HarnessAccountSnapshot {
         let checkResult = try? await AccountCommandRunner.run(
             executableURL: executableURL,
             arguments: [],
-            environment: environment.merging(["AGY_CLI_CDE_AUTH_ACTION": "check"]) { _, new in new }
+            environment: antigravityEnvironment.merging(["AGY_CLI_CDE_AUTH_ACTION": "check"]) { _, new in new }
         )
         let checked = Self.antigravityAccountCheck(checkResult, fallbackState: Self.antigravityCredentialState())
-        let state = checked.state
-        // The plan limits, which the CLI reports without a turn; none while signed out or unread.
-        var usage: [AccountUsageMetric] = []
-        if state == .signedIn,
-           let result = try? await AccountCommandRunner.run(executableURL: executableURL, arguments: AntigravityUsage.arguments,
-                                                            environment: environment,
-                                                            timeout: .seconds(30)) {
-            usage = AntigravityUsage.metrics(fromOutput: result.output) ?? []
-        }
+        return Self.antigravityAuthSnapshot(descriptor: descriptor, state: checked.state, accountLabel: checked.accountLabel)
+    }
+
+    static func antigravityAuthSnapshot(descriptor: HarnessDescriptor, state: AccountAuthState,
+                                        accountLabel: String?) -> HarnessAccountSnapshot {
         let detail: String
         switch state {
         case .signedIn:
             detail = L10n.string("Antigravity CLI credentials are stored in macOS Keychain.")
         case .signedOut:
-            detail = L10n.string("No Antigravity CLI credentials were found in macOS Keychain.")
+            detail = ProviderSignIn.neededHere(.antigravityCLI)
         case .unknown, .actionRequired, .unavailable:
             detail = L10n.string("Antigravity CLI Keychain status could not be confirmed.")
         }
@@ -636,11 +644,11 @@ actor HarnessAccountBroker {
             harness: descriptor.id,
             providerID: nil,
             state: state,
-            accountLabel: checked.accountLabel,
+            accountLabel: accountLabel,
             detail: detail,
             credentialOwner: L10n.string("macOS Keychain (Antigravity CLI)"),
             checkedAt: Date(),
-            usage: usage,
+            usage: [],
             canLogin: state != .signedIn,
             canLogout: state == .signedIn
         )
