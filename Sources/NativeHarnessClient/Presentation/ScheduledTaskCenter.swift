@@ -38,10 +38,25 @@ final class ScheduledTaskCenter {
     @ObservationIgnored var start: ((ScheduledTask, ScheduledTaskRun.Trigger, Date?) async -> ScheduleStartResult)?
     /// Why a run may not start now (the previous run's task, or the continued task, is busy).
     @ObservationIgnored var busyReason: ((ScheduledTask) -> ScheduledTaskRun.SkipReason?)?
+    /// Told when a run starts a turn or its turn ends, which Token usage counts by (`turns(inTasks:)`).
+    @ObservationIgnored var turnsChanged: (() -> Void)?
     /// The longest the loop sleeps between looks.
     @ObservationIgnored var checkInterval: Duration = .seconds(60)
 
     @ObservationIgnored private let repository: any ScheduledTaskRepository
+    /// A turn a schedule's run started and its task runs now. In memory only: a quit ends the turn, and the run
+    /// keeps when only for a turn that ended (`turnEnded(in:at:)`).
+    private struct RunningTurn {
+        let scheduleID: UUID
+        let start: Date
+        /// Its run, once recorded; until then `start` still waits on something, such as a missed run's notice.
+        var runID: UUID?
+        /// When it ended before its run was recorded, which the run then keeps.
+        var endedAt: Date?
+    }
+
+    /// The turn each task runs now that a schedule's run started, by task.
+    @ObservationIgnored private var runningTurns: [UUID: RunningTurn] = [:]
     @ObservationIgnored private var loop: Task<Void, Never>?
     /// The loop's current sleep; cancelling it ends the sleep, not the loop.
     @ObservationIgnored private var sleeper: Task<Void, Never>?
@@ -74,6 +89,70 @@ final class ScheduledTaskCenter {
         Set(schedules.flatMap { schedule in
             schedule.state.runs.compactMap { run in schedule.startedNewTask(run) ? run.taskID : nil }
         })
+    }
+
+    /// How long after a run's turn ended a request stamped then still counts for the turn: a CLI may stamp its last
+    /// line a moment after it says the turn ended, and the transcripts are read when the run already keeps its end.
+    static let turnEndGrace: TimeInterval = 2
+
+    /// The turns schedules' runs started in these tasks: those that ended, as their runs keep them, and the
+    /// one each task runs now. Token usage counts a task's requests in them for their schedules; the person's
+    /// own turns in the same task are left out. A turn that ended takes requests stamped up to `turnEndGrace` after
+    /// its end, but never from the task's next turn: another run's, or the latest the task started (`turnStarts`).
+    func turns(inTasks taskIDs: Set<UUID>, turnStarts: [UUID: Date] = [:]) -> [UUID: [ScheduledTurn]] {
+        guard !taskIDs.isEmpty else { return [:] }
+        var turns: [UUID: [ScheduledTurn]] = [:]
+        for schedule in schedules {
+            for run in schedule.state.runs where run.outcome == .started {
+                guard let taskID = run.taskID, taskIDs.contains(taskID),
+                      run.endedAt != nil || runningTurns[taskID]?.runID == run.id else { continue }
+                turns[taskID, default: []].append(ScheduledTurn(scheduleID: schedule.id, start: run.at, end: run.endedAt))
+            }
+        }
+        // A turn whose run is not recorded yet.
+        for (taskID, turn) in runningTurns where turn.runID == nil && taskIDs.contains(taskID) {
+            turns[taskID, default: []].append(ScheduledTurn(scheduleID: turn.scheduleID, start: turn.start, end: turn.endedAt))
+        }
+        for (taskID, list) in turns {
+            turns[taskID] = list.map { turn in
+                guard let end = turn.end else { return turn }
+                var until = end.addingTimeInterval(Self.turnEndGrace)
+                for later in list where later.start >= end { until = min(until, later.start) }
+                if let started = turnStarts[taskID], started > end { until = min(until, started) }
+                var late = turn
+                late.lateness = max(0, until.timeIntervalSince(end))
+                return late
+            }
+        }
+        return turns
+    }
+
+    /// A run's message went and its task works on it. `start` says so at once, before anything else it waits on, so
+    /// the turn is the run's from then on, even if it ends before the run is recorded. A message held until a limit
+    /// resets or an account moves, or a turn already over, is not said: no turn of the run's runs then.
+    func runTurnStarted(for scheduleID: UUID, in taskID: UUID) {
+        runningTurns[taskID] = RunningTurn(scheduleID: scheduleID, start: now())
+        turnsChanged?()
+    }
+
+    /// A task's turn ended: the run whose turn it was keeps when, or will once it is recorded. Every way a turn ends
+    /// comes here (`AppModel.turnEnded`); false when it was not a run's turn.
+    @discardableResult
+    func turnEnded(in taskID: UUID, at date: Date) -> Bool {
+        guard var turn = runningTurns[taskID], turn.endedAt == nil else { return false }
+        guard let runID = turn.runID else {
+            turn.endedAt = date
+            runningTurns[taskID] = turn
+            turnsChanged?()
+            return true
+        }
+        runningTurns[taskID] = nil
+        guard let index = schedules.firstIndex(where: { $0.state.runs.contains { $0.id == runID } }),
+              let run = schedules[index].state.runs.firstIndex(where: { $0.id == runID }) else { return false }
+        schedules[index].state.runs[run].endedAt = date
+        persist()
+        turnsChanged?()
+        return true
     }
 
     var enabledCount: Int { schedules.filter(\.isEnabled).count }
@@ -210,8 +289,19 @@ final class ScheduledTaskCenter {
         startingIDs.remove(schedule.id)
         switch result {
         case let .started(taskID, account):
-            record(ScheduledTaskRun(slot: slot, at: at, trigger: trigger, outcome: .started, taskID: taskID,
-                                    mode: schedule.destination.mode, account: account), for: schedule.id)
+            var run = ScheduledTaskRun(slot: slot, at: at, trigger: trigger, outcome: .started, taskID: taskID,
+                                       mode: schedule.destination.mode, account: account)
+            // The turn `start` said this run started: over already, or the run's until it ends.
+            if let turn = runningTurns[taskID], turn.scheduleID == schedule.id, turn.runID == nil {
+                if let ended = turn.endedAt {
+                    run.endedAt = ended
+                    runningTurns[taskID] = nil
+                } else {
+                    runningTurns[taskID]?.runID = run.id
+                }
+            }
+            // Token usage heard of the turn when it started (`runTurnStarted`) and hears of its end.
+            record(run, for: schedule.id)
         case let .failed(message, taskID):
             record(ScheduledTaskRun(slot: slot, at: at, trigger: trigger, outcome: .failed, failure: message,
                                     taskID: taskID), for: schedule.id)

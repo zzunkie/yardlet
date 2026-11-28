@@ -2,7 +2,8 @@
 
 Yardlet counts the tokens Claude Code and Codex record in their own transcripts on this Mac and shows them
 with each account's plan limits: on Home's Projects view over the projects, in Settings › Usage, and on one line under Usage in
-the menu bar menu and the sidebar's account menu. Nothing is sent anywhere and no model is asked anything.
+the menu bar menu and the sidebar's account menu. Scheduled tasks says what each schedule's runs used. Nothing is sent
+anywhere and no model is asked anything.
 
 ## Where it shows
 
@@ -25,6 +26,11 @@ the menu bar menu and the sidebar's account menu. Nothing is sent anywhere and n
   - The prices' source and date, and the switch.
 - **Menus:** "5.48B tokens today · $2,124 API equivalent" first under Usage. In the sidebar's account menu it opens
   Settings › Usage.
+- **Scheduled tasks:** a schedule's details say, under Usage, what the turns its runs started used in the last 7 days:
+  "42.1M tokens in the last 7 days · $14.44 API equivalent" (see Schedules under How it counts). The line is not there
+  while counting is off, nor in another Mac's window. Nor is it while nothing is counted for a schedule whose runs go to
+  a harness other than Claude Code and Codex (by the continued task's harness, for a schedule that continues one): its
+  transcripts are not read, so "0 tokens" would not be true.
 
 ## Turning it on and off
 
@@ -63,6 +69,15 @@ the menu bar menu and the sidebar's account menu. Nothing is sent anywhere and n
   counts against the account each task is on at that time.
 - **Projects** are the sidebar's (a worktree counts with its project); a session Yardlet did not start goes to the
   project whose folder holds its folder, else to the folder's name.
+- **Schedules:** a request in a turn a schedule's run started counts for that schedule as well, in the task the run
+  started or continued, from the run's start to the end of that turn (`ScheduledTaskRun.endedAt`). The person's own
+  turns in the same task count for none. A run's turn starts as its message goes, if the task is then working on it,
+  so a turn that ends before the run is recorded is still the run's. A run whose message waits for a usage limit to
+  reset or an account to move starts no turn. A request stamped up to two seconds after a run's turn ended still counts
+  for it, as a CLI may stamp its last line a moment after it says the turn ended, but never one from the task's next
+  turn, which may start sooner. A session's turns are asked about with its account, and again as soon as a run starts
+  or ends a turn. History read when counting is turned on counts for a schedule only the turns of the runs
+  it still keeps (its last 50) that ended: not a turn a quit cut off, nor a run from before Yardlet kept its end.
 
 ## Prices
 
@@ -89,15 +104,16 @@ make, kept in memory only.
 ## What is kept
 
 `~/.yardlet/usage/usage.sqlite3`, one file: counts by day, harness, model, provider session, folder and account (tokens
-of each kind, requests and their cost); how far each transcript was read; and the response ids of the last 14 days.
-About 13 MB for two months of heavy use. Nothing else is written, and the folder goes when counting is turned off.
+of each kind, requests and their cost); the counts of schedules' turns by day and schedule; how far each transcript was
+read; and the response ids of the last 14 days. About 13 MB for two months of heavy use. Nothing else is written, and
+the folder goes when counting is turned off.
 
 ## Work on the main thread
 
 The reading, counting and summing run off the main thread. The app gets a summary of the last 30 days after a read that
-counted something, and publishes it only when it differs; only the Home band and the usage page read it, so a new count
-redraws them and nothing else (`TokenUsageLedgerTests`: 60,000 responses read once, then each new response one read of its
-own bytes and one publication).
+counted something, and publishes it only when it differs; only the Home band, the usage page and a schedule's details
+read it, so a new count redraws them and nothing else (`TokenUsageLedgerTests`: 60,000 responses read once, then each new
+response one read of its own bytes and one publication).
 
 A window on another Mac carries every range grouped every way, and its Settings page is built again for any change of a
 setting or the vault while it watches. The Mac keeps those rows until the counts, the projects or what a row shows of a

@@ -214,4 +214,24 @@ struct ScheduledTaskRun: Codable, Equatable, Identifiable, Sendable {
     var mode: ScheduleDestination.Mode?
     /// The account it went to instead of the schedule's or the task's own, which was nearly spent.
     var account: AccountAssignment?
+    /// When the turn it started in its task ended (`ScheduledTaskCenter.turns(inTasks:)`). Nil while that turn runs,
+    /// when a quit cut it off, when it started no turn (its message was held until a limit resets or an account
+    /// moves, or the turn was over before its message's send returned), and in a run kept before this was.
+    var endedAt: Date?
+}
+
+/// A turn a schedule's run started in a task, from the run's start to the turn's end: Token usage counts
+/// the task's requests in it for the schedule.
+struct ScheduledTurn: Equatable, Sendable {
+    let scheduleID: UUID
+    let start: Date
+    /// Nil while the turn runs.
+    let end: Date?
+    /// How long after `end` a request stamped then still counts: a CLI may stamp its last line a moment after it says
+    /// the turn ended. Never into the task's next turn (`ScheduledTaskCenter.turns(inTasks:turnStarts:)`).
+    var lateness: TimeInterval = 0
+
+    func contains(_ date: Date) -> Bool {
+        date >= start && end.map { date <= $0.addingTimeInterval(lateness) } ?? true
+    }
 }

@@ -12,13 +12,15 @@ import Foundation
 /// to an account with room on their own and its cache still lives (`AccountRouting.move`), or it
 /// could not move now as any account move (`moveToAccountWithRoom`).
 extension AppModel {
-    /// Gives the center its start and busy checks. The loop itself starts with the app.
+    /// Gives the center its start and busy checks, and has Token usage follow its runs' turns. The loop itself
+    /// starts with the app.
     func wireScheduledTasks() {
         scheduledTasks.start = { [weak self] schedule, trigger, slot in
             guard let self else { return .failed(L10n.string("Yardlet is closing.")) }
             return await self.startScheduledRun(schedule, trigger: trigger, slot: slot)
         }
         scheduledTasks.busyReason = { [weak self] schedule in self?.scheduledRunBusyReason(schedule) }
+        scheduledTasks.turnsChanged = { [weak self] in self?.tokenUsage.scheduledTurnsChanged() }
     }
 
     /// Starts running schedules, after the index is restored.
@@ -91,6 +93,12 @@ extension AppModel {
             } catch {
                 return .failed(error.localizedDescription)
             }
+        }
+        // The run's turn is the run's once its message went and the task works on it, said before anything below is
+        // awaited. A message held until a limit resets or an account moves, or a turn already over, starts none.
+        if case let .started(taskID, _) = result, let task = store.sessions.first(where: { $0.id == taskID }),
+           Self.isWorking(task) {
+            scheduledTasks.runTurnStarted(for: schedule.id, in: taskID)
         }
         if trigger == .missed, let slot, case let .started(taskID, _) = result {
             await announceMissedRun(of: schedule, slot: slot, taskID: taskID)

@@ -174,6 +174,13 @@ enum TokenUsageFormat {
         return parts.joined(separator: " · ")
     }
 
+    /// "42.1M tokens in the last 7 days · $14.44 API equivalent", as a schedule's details put what its runs used.
+    static func lastWeek(_ amount: TokenUsageAmount) -> String {
+        var parts = [L10n.format("%@ tokens in the last 7 days", tokens(amount.total))]
+        if let cost = amount.cost { parts.append(L10n.format("%@ API equivalent", self.cost(cost))) }
+        return parts.joined(separator: " · ")
+    }
+
     static func percent(_ share: Double) -> String {
         let percent = share * 100
         if percent > 0, percent < 1 { return "<1%" }

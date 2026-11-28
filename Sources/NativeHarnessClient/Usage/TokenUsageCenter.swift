@@ -74,9 +74,17 @@ final class TokenUsageCenter {
     }
 
     func receive(_ summary: TokenUsageSummary) {
-        guard isEnabled, summary.days != self.summary?.days || summary.groups != self.summary?.groups else { return }
+        guard isEnabled, summary.days != self.summary?.days || summary.groups != self.summary?.groups
+                || summary.schedules != self.summary?.schedules else { return }
         publications += 1
         self.summary = summary
+    }
+
+    /// A schedule's run started a turn or its turn ended (`ScheduledTaskCenter.turnsChanged`): the ledger asks
+    /// again about the sessions it reads next, so the turn counts for the schedule from its start to its end.
+    func scheduledTurnsChanged() {
+        guard let ledger else { return }
+        Task { await ledger.scheduledTurnsChanged() }
     }
 
     private func start(roots: TokenUsageLedger.Roots, resolve: @escaping TokenUsageLedger.Resolve) {
