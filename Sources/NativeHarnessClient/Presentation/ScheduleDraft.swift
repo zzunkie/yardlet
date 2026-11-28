@@ -23,10 +23,20 @@ struct ScheduleDraft: Equatable {
         case chat
     }
 
+    /// One of the editor's times of day. Its id stays with it while times are added and removed, so each
+    /// picker stays with its time, and no later row takes it.
+    struct TimeRow: Identifiable, Equatable {
+        let id: Int
+        var time: ScheduleTime
+    }
+
     var name = ""
     var prompt = ""
     var kind = Kind.daily
-    var time = ScheduleTime(hour: 9, minute: 0)
+    /// The daily and weekly trigger's times of day, at least one, as the editor lists them; the trigger
+    /// keeps them earliest first.
+    private(set) var timeRows = [TimeRow(id: 0, time: ScheduleTime(hour: 9, minute: 0))]
+    private var nextTimeRowID = 1
     /// The weekly trigger's days, and the days an interval runs on (all when it is every day).
     var days = ScheduleWeekday.weekdays
     var intervalDays = ScheduleWeekday.everyDay
@@ -62,13 +72,13 @@ struct ScheduleDraft: Equatable {
         name = schedule.name
         prompt = schedule.prompt
         switch schedule.trigger {
-        case let .daily(time):
+        case let .daily(times):
             kind = .daily
-            self.time = time
-        case let .weekly(days, time):
+            self.times = times
+        case let .weekly(days, times):
             kind = .weekly
             self.days = days
-            self.time = time
+            self.times = times
         case let .interval(hours, anchor, days):
             kind = .interval
             intervalHours = hours
@@ -95,12 +105,49 @@ struct ScheduleDraft: Equatable {
         parentTaskID = destination.parentTaskID
     }
 
+    /// The times in the editor's order. Setting them starts the rows afresh.
+    var times: [ScheduleTime] {
+        get { timeRows.map(\.time) }
+        set {
+            timeRows = newValue.enumerated().map { TimeRow(id: $0.offset, time: $0.element) }
+            nextTimeRowID = newValue.count
+        }
+    }
+
+    /// The time Add time adds: an hour after the latest time, at its minute, or the next hour after it that is
+    /// an hour or more from every time. Nil once there are `ScheduleTrigger.maxTimes` or no hour is left, which
+    /// also turns Add time off.
+    var nextTime: ScheduleTime? {
+        guard times.count < ScheduleTrigger.maxTimes else { return nil }
+        guard let latest = times.max() else { return ScheduleTime(hour: 9, minute: 0) }
+        return (1...23).lazy.map { ScheduleTime(hour: (latest.hour + $0) % 24, minute: latest.minute) }
+            .first { next in times.allSatisfy { $0.minutes(from: next) >= ScheduleTrigger.minutesBetweenTimes } }
+    }
+
+    mutating func addTime() {
+        guard let next = nextTime else { return }
+        timeRows.append(TimeRow(id: nextTimeRowID, time: next))
+        nextTimeRowID += 1
+    }
+
+    /// Removes a time, but never the last one.
+    mutating func removeTime(_ id: TimeRow.ID) {
+        guard timeRows.count > 1 else { return }
+        timeRows.removeAll { $0.id == id }
+    }
+
+    mutating func setTime(_ time: ScheduleTime, of id: TimeRow.ID) {
+        guard let index = timeRows.firstIndex(where: { $0.id == id }) else { return }
+        timeRows[index].time = time
+    }
+
     func trigger(now: Date, calendar: Calendar = .autoupdatingCurrent) -> ScheduleTrigger {
         switch kind {
         case .daily:
-            return .daily(time)
+            return .daily(ScheduleTime.ordered(times))
         case .weekly:
-            return days == ScheduleWeekday.everyDay ? .daily(time) : .weekly(days: days, time: time)
+            let times = ScheduleTime.ordered(times)
+            return days == ScheduleWeekday.everyDay ? .daily(times) : .weekly(days: days, times: times)
         case .interval:
             let anchor = intervalAnchor ?? calendar.startOfDay(for: now)
             return .interval(hours: intervalHours, anchor: anchor,
@@ -122,7 +169,10 @@ struct ScheduleDraft: Equatable {
         switch kind {
         case .weekly where days.isEmpty, .interval where intervalDays.isEmpty:
             return L10n.string("Choose at least one day.")
-        case .interval where !ScheduleTrigger.intervalHours.contains(intervalHours):
+        case .daily where times.isEmpty, .weekly where times.isEmpty:
+            return L10n.string("Choose a time.")
+        case .daily where !ScheduleTrigger.timesAreValid(times), .weekly where !ScheduleTrigger.timesAreValid(times),
+             .interval where !ScheduleTrigger.intervalHours.contains(intervalHours):
             return L10n.string("Schedules run at most once an hour.")
         case .once where onceAt <= now:
             return L10n.string("Choose a time that has not passed.")
@@ -161,8 +211,8 @@ struct ScheduleDraft: Equatable {
             }
             destination.startsInNewWorktree = destination.workspacePath != nil && startsInNewWorktree
         }
-        var schedule = existing ?? ScheduledTask(name: "", prompt: "", trigger: .daily(time), destination: destination,
-                                                 createdAt: now)
+        var schedule = existing ?? ScheduledTask(name: "", prompt: "", trigger: trigger(now: now, calendar: calendar),
+                                                 destination: destination, createdAt: now)
         schedule.name = trimmedName.isEmpty ? SessionTitleProjection.provisionalTitle(from: prompt) : trimmedName
         // A prompt the person rewrote is theirs, whoever wrote the one before.
         if schedule.prompt != prompt { schedule.agentTaskID = nil }

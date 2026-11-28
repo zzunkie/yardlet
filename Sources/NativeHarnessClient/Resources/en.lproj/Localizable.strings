@@ -2538,6 +2538,8 @@
 "Every %lld hours" = "Every %lld hours";
 "At" = "At";
 "Time" = "Time";
+"Add time" = "Add time";
+"Remove time" = "Remove time";
 "Weekdays" = "Weekdays";
 "Every day" = "Every day";
 "New task each time" = "New task each time";
@@ -2562,6 +2564,7 @@
 "Choose a harness." = "Choose a harness.";
 "Choose the task to continue." = "Choose the task to continue.";
 "Choose at least one day." = "Choose at least one day.";
+"Choose a time." = "Choose a time.";
 "Schedules run at most once an hour." = "Schedules run at most once an hour.";
 "Choose a time that has not passed." = "Choose a time that has not passed.";
 "Every day at %@" = "Every day at %@";

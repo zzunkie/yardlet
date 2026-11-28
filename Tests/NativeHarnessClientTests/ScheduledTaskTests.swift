@@ -830,6 +830,66 @@ final class ScheduledTaskTests: XCTestCase {
         XCTAssertEqual(reopened.mode, .continueTask)
         XCTAssertEqual(reopened.targetTaskID, target)
         XCTAssertEqual(reopened.kind, .daily)
+
+        let checks = ScheduledTask(name: "Checks", prompt: "Check the queue.", trigger: .weekly(
+            days: ScheduleWeekday.weekdays, times: [ScheduleTime(hour: 9, minute: 55), ScheduleTime(hour: 13, minute: 55)]),
+                                   destination: ScheduleDestination(harness: .claudeCode))
+        let editing = ScheduleDraft(editing: checks, now: now, calendar: seoul)
+        XCTAssertEqual(editing.kind, .weekly)
+        XCTAssertEqual(editing.times, [ScheduleTime(hour: 9, minute: 55), ScheduleTime(hour: 13, minute: 55)])
+        XCTAssertEqual(editing.schedule(projects: [], existing: checks, now: now, calendar: seoul).trigger, checks.trigger,
+                       "Saving keeps every time")
+        XCTAssertEqual(editing.nextRun(now: now, calendar: seoul), date(19, 9, 55), "Saturday night: Monday's first time")
+
+        var adding = ScheduleDraft(now: now, calendar: seoul)
+        adding.addTime()
+        XCTAssertEqual(adding.times, [ScheduleTime(hour: 9, minute: 0), ScheduleTime(hour: 10, minute: 0)],
+                       "Add time adds an hour after the latest")
+        adding.times = [ScheduleTime(hour: 23, minute: 30), ScheduleTime(hour: 0, minute: 30)]
+        adding.addTime()
+        XCTAssertEqual(adding.times.last, ScheduleTime(hour: 1, minute: 30), "Past midnight, the first hour not taken")
+        XCTAssertEqual(adding.trigger(now: now, calendar: seoul), .daily([
+            ScheduleTime(hour: 0, minute: 30), ScheduleTime(hour: 1, minute: 30), ScheduleTime(hour: 23, minute: 30),
+        ]), "Saved earliest first")
+        for _ in 0..<3 { adding.removeTime(adding.timeRows[0].id) }
+        XCTAssertEqual(adding.times, [ScheduleTime(hour: 1, minute: 30)], "The last time stays")
+
+        // Each time keeps its row, so a picker stays with its time: removing an earlier time leaves the other
+        // rows' ids as they were, and a new row never takes an old row's id.
+        var rows = ScheduleDraft(now: now, calendar: seoul)
+        rows.addTime()
+        rows.addTime()
+        let ids = rows.timeRows.map(\.id)
+        XCTAssertEqual(Set(ids).count, 3)
+        rows.removeTime(ids[0])
+        XCTAssertEqual(rows.timeRows.map(\.id), Array(ids[1...]))
+        XCTAssertEqual(rows.times, [ScheduleTime(hour: 10, minute: 0), ScheduleTime(hour: 11, minute: 0)])
+        rows.removeTime(ids[2])
+        rows.addTime()
+        XCTAssertFalse(ids.contains(rows.timeRows[1].id))
+        rows.setTime(ScheduleTime(hour: 8, minute: 15), of: ids[1])
+        XCTAssertEqual(rows.times, [ScheduleTime(hour: 8, minute: 15), ScheduleTime(hour: 11, minute: 0)])
+
+        // A schedule holds at most 24 times; Add time stops there, and none or more is a problem to fix.
+        var full = ScheduleDraft(now: now, calendar: seoul, harness: .claudeCode)
+        full.prompt = "Check the queue."
+        for _ in 0..<30 { full.addTime() }
+        XCTAssertEqual(full.times.count, 24, "Add time stops at 24 times")
+        XCTAssertEqual(Set(full.times).count, 24, "Each of them once")
+        XCTAssertNil(full.problem(now: now, calendar: seoul))
+        full.times += [ScheduleTime(hour: 9, minute: 30)]
+        XCTAssertEqual(full.problem(now: now, calendar: seoul), L10n.string("Schedules run at most once an hour."))
+        full.times = []
+        XCTAssertEqual(full.problem(now: now, calendar: seoul), L10n.string("Choose a time."))
+
+        // Times less than an hour apart are a problem, and Add time passes over the hours that would be.
+        full.times = [ScheduleTime(hour: 9, minute: 0), ScheduleTime(hour: 9, minute: 30)]
+        XCTAssertEqual(full.problem(now: now, calendar: seoul), L10n.string("Schedules run at most once an hour."))
+        full.times = [ScheduleTime(hour: 0, minute: 15), ScheduleTime(hour: 23, minute: 0)]
+        XCTAssertNil(full.problem(now: now, calendar: seoul))
+        full.addTime()
+        XCTAssertEqual(full.times.last, ScheduleTime(hour: 2, minute: 0), "0:00 and 1:00 are less than an hour from 0:15")
+        XCTAssertNil(full.problem(now: now, calendar: seoul))
     }
 
     func testTheQuitConfirmationSaysSchedulesWaitForYardlet() {

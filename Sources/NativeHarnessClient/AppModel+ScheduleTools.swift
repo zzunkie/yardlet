@@ -828,12 +828,15 @@ enum ScheduleToolText {
         func days(_ set: Set<ScheduleWeekday>) -> String {
             set.sorted().map { names[$0.rawValue - 1] }.joined(separator: ", ")
         }
+        func times(_ list: [ScheduleTime]) -> String {
+            ScheduleTime.ordered(list).map(\.text).joined(separator: ", ")
+        }
         switch trigger {
-        case let .daily(time):
-            return "every day at \(time.text)"
-        case let .weekly(set, time):
-            if set == ScheduleWeekday.weekdays { return "weekdays at \(time.text)" }
-            return "every \(days(set)) at \(time.text)"
+        case let .daily(list):
+            return "every day at \(times(list))"
+        case let .weekly(set, list):
+            if set == ScheduleWeekday.weekdays { return "weekdays at \(times(list))" }
+            return "every \(days(set)) at \(times(list))"
         case let .interval(hours, _, set):
             let every = hours == 1 ? "every hour" : "every \(hours) hours"
             return set.isEmpty || set == ScheduleWeekday.everyDay ? every : "\(every) on \(days(set))"
@@ -842,18 +845,24 @@ enum ScheduleToolText {
         }
     }
 
-    /// The five-field cron expression a repeating trigger is, in local time; nil for a one-off and for
-    /// an interval that does not keep to cron's hours.
+    /// The five-field cron expression a repeating trigger is, in local time; nil for a one-off, for times
+    /// that are not all at one minute, and for an interval that does not keep to cron's hours.
     static func cronExpression(_ trigger: ScheduleTrigger, calendar: Calendar) -> String? {
         func dayField(_ set: Set<ScheduleWeekday>) -> String {
             set.isEmpty || set == ScheduleWeekday.everyDay
                 ? "*" : set.sorted().map { String($0.rawValue - 1) }.joined(separator: ",")
         }
+        // The minute and hour fields of times at one minute: "55 9,11,13".
+        func timeFields(_ list: [ScheduleTime]) -> String? {
+            let times = ScheduleTime.ordered(list)
+            guard let minute = times.first?.minute, times.allSatisfy({ $0.minute == minute }) else { return nil }
+            return "\(minute) \(times.map { String($0.hour) }.joined(separator: ","))"
+        }
         switch trigger {
-        case let .daily(time):
-            return "\(time.minute) \(time.hour) * * *"
-        case let .weekly(set, time):
-            return "\(time.minute) \(time.hour) * * \(dayField(set))"
+        case let .daily(list):
+            return timeFields(list).map { "\($0) * * *" }
+        case let .weekly(set, list):
+            return timeFields(list).map { "\($0) * * \(dayField(set))" }
         case let .interval(hours, anchor, set):
             let parts = calendar.dateComponents([.hour, .minute], from: anchor)
             guard 24 % hours == 0, let hour = parts.hour, let minute = parts.minute, hour % hours == 0 else { return nil }

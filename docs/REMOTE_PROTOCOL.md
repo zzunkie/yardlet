@@ -2665,7 +2665,9 @@ writes a schedule to its own repository.
 
 - `scheduledTasks` additionally returns each schedule's optional `definition` and `accountName`, and optional
   `sessionSchedules`. `definition` is base64-encoded JSON using the host's `ScheduledTask` Codable shape, with
-  instructions, trigger, destination choices and retained run history. It is a presentation copy: connection
+  instructions, trigger, destination choices and retained run history. A daily or weekly trigger at several times
+  of day lists them in `times`, earliest first, and keeps the earliest in `time` too, the one time a client that
+  does not read `times` shows and saves. It is a presentation copy: connection
   data, account identifiers and import source identifiers are removed; secrets and paths outside a listed
   project are masked in text. A host folder never travels: a listed project is named by `projectID`, and every
   folder appears as the presentation marker `yardlet-host-folder`. A project the host hides, or one since removed,

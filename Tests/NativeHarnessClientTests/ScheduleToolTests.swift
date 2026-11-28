@@ -239,6 +239,14 @@ final class ScheduleToolTests: XCTestCase {
         XCTAssertEqual(changed.prompt, "Summarize yesterday's merges.")
         XCTAssertEqual(changed.name, "Nightly digest", "A field left out stays")
         XCTAssertEqual(changed.destination, schedule.destination, "Where it runs stays")
+        // An hour range with a step is one schedule at each of its hours, listed back as a list.
+        let hours = try await call("update_scheduled_task", [
+            "scheduleId": schedule.id.uuidString, "cronExpression": "55 9-17/2 * * 1-5"
+        ])
+        XCTAssertTrue(hours.text.contains("schedule (weekdays at 09:55, 11:55, 13:55, 15:55, 17:55)"), hours.text)
+        let relisted = try JSONDecoder().decode(Listing.self, from: Data(try await call("list_scheduled_tasks", [:]).text.utf8))
+        XCTAssertEqual(relisted.scheduledTasks.first?.cronExpression, "55 9,11,13,15,17 * * 1,2,3,4,5")
+        XCTAssertEqual(relisted.scheduledTasks.first?.nextRunAt, "2026-10-19T09:55:00+09:00")
         let paused = try await call("update_scheduled_task", ["scheduleId": schedule.id.uuidString, "enabled": false])
         XCTAssertTrue(paused.text.contains("updated: paused"), paused.text)
         XCTAssertEqual(model.scheduledTasks.schedule(id: schedule.id)?.isEnabled, false)

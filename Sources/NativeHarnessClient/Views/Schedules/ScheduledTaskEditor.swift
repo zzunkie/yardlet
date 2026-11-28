@@ -145,17 +145,52 @@ struct ScheduledTaskEditor: View {
         }
     }
 
+    /// Each time of day, with Add time after them; the times wrap under one another when they do not fit.
     private var timeRow: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(L10n.string("Time"))
+            SentAttachmentFlow(spacing: 8, alignsTrailing: false) {
+                ForEach(draft.timeRows) { row in
+                    HStack(spacing: 4) {
+                        timePicker(row)
+                        if draft.timeRows.count > 1 {
+                            Button {
+                                draft.removeTime(row.id)
+                            } label: {
+                                Image(systemName: "minus.circle")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.borderless)
+                            .parityPointer()
+                            .help(L10n.string("Remove time"))
+                            .accessibilityLabel(L10n.string("Remove time"))
+                        }
+                    }
+                }
+                Button {
+                    draft.addTime()
+                } label: {
+                    Label(L10n.string("Add time"), systemImage: "plus")
+                }
+                .buttonStyle(.borderless)
+                .parityPointer()
+                .disabled(draft.nextTime == nil)
+            }
+        }
+    }
+
+    private func timePicker(_ row: ScheduleDraft.TimeRow) -> some View {
         DatePicker(L10n.string("Time"), selection: Binding(
             get: {
-                calendar.date(bySettingHour: draft.time.hour, minute: draft.time.minute, second: 0,
+                calendar.date(bySettingHour: row.time.hour, minute: row.time.minute, second: 0,
                               of: calendar.startOfDay(for: now())) ?? now()
             },
             set: { date in
                 let parts = calendar.dateComponents([.hour, .minute], from: date)
-                draft.time = ScheduleTime(hour: parts.hour ?? 0, minute: parts.minute ?? 0)
+                draft.setTime(ScheduleTime(hour: parts.hour ?? 0, minute: parts.minute ?? 0), of: row.id)
             }), displayedComponents: .hourAndMinute)
             .datePickerStyle(.compact)
+            .labelsHidden()
             .fixedSize()
     }
 
