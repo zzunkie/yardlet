@@ -4355,3 +4355,16 @@
 "Create an app password for Yardlet in Google App Passwords." = "在 Google 应用专用密码页面为 Yardlet 创建密码。";
 "Paste the 16-character app password below. Spaces are ignored." = "在下方粘贴 16 位应用专用密码。空格会自动移除。";
 "An app password connects Mailbox and basic mail_* tools without Google Cloud setup. For full Gmail tools, use the Google connector. Some Workspace organizations disable app passwords." = "使用应用专用密码即可连接邮箱和基本的 mail_* 工具，无需设置 Google Cloud。如需完整的 Gmail 工具，请使用 Google 连接器。部分 Workspace 组织停用了应用专用密码。";
+"Agent tools" = "智能体工具";
+"Change OAuth client for this account…" = "更改此账号的 OAuth 客户端…";
+"Connect Gmail with an app password in Mail (IMAP)" = "在邮件 (IMAP) 中使用应用专用密码连接 Gmail";
+"Create a Personal Mode client" = "创建 Personal Mode 客户端";
+"Create a Personal Mode client for each Google account you use with agent tools." = "请为每个使用智能体工具的 Google 账号创建一个 Personal Mode 客户端。";
+"Enter the client ID and secret" = "输入客户端 ID 和密钥";
+"Only the Google Account that created this Personal Mode client can sign in. Open Personal Mode with the account you want to connect and create a client for it." = "只有创建此 Personal Mode 客户端的 Google 账号才能登录。请使用要连接的账号打开 Personal Mode，并为其创建客户端。";
+"Open Google Cloud with the account you want to connect, then paste its client ID and secret." = "使用要连接的账号打开 Google Cloud，然后在此粘贴获取的客户端 ID 和密钥。";
+"Shared app for Workspace, Analytics, or Ads" = "适用于 Workspace、Google Analytics 或 Google Ads 的共用应用";
+"Sign in to Google for Yardlet Calendar" = "登录 Google 以使用 Yardlet 日历";
+"Yardlet Calendar and Mailbox" = "Yardlet 日历和邮箱";
+"Yardlet Calendar connected" = "已连接 Yardlet 日历";
+"For Workspace agent tools, select AI-powered agent when creating the desktop client. Use an Internal app for accounts in your organization." = "如需使用 Workspace 智能体工具，请在创建桌面客户端时选择“AI-powered agent”。组织内的账号请使用内部 (Internal) 应用。";

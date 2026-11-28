@@ -121,7 +121,7 @@ struct OutlookMailToolRunner {
         }
     }
 
-    /// What a draft holds, for the request card before it is sent (`GmailToolApproval`).
+    /// What a draft holds, for the request card before it is sent (`MailDraftApproval`).
     func draftPreview(_ arguments: [String: ToolJSON]) async throws -> MailDraftPreview? {
         let id = try GraphAPI.segment(try Arguments.required(arguments, "draftId"))
         let json = try await api.get(

@@ -36,6 +36,7 @@ struct ConnectorRecord: Codable, Equatable, Identifiable, Sendable {
     /// The server's tools as its `tools/list` gave them, kept so a new session lists them without
     /// waiting for the network.
     var tools: [ToolJSON]
+    var workspaceToolEndpoints: [String: GoogleWorkspaceEndpoint]?
     var toolsUpdatedAt: Date?
     /// The directory entry it was added from (`ConnectorPreset.id`), for its icon and help.
     var presetID: String?
@@ -60,6 +61,17 @@ struct ConnectorRecord: Codable, Equatable, Identifiable, Sendable {
     /// ID: the first service of an account, and every Gmail account added before Calendar and Drive.
     /// Saved as `googleAccountID`, its name from when only Google accounts had one.
     var accountSignInID: UUID?
+    var googleOAuthClientID: String? = nil
+    /// Nil in records written before separate Calendar sign-in.
+    var googleUISignIn: Bool?
+    /// Mailbox access migrated from a custom Standard OAuth client.
+    var googleMailboxSignIn: Bool?
+    var hasGoogleUISignIn: Bool {
+        get { googleUISignIn == true }
+        set { googleUISignIn = newValue }
+    }
+    /// A retained Google account row whose service chip is off.
+    var googleAgentDisabled: Bool?
     /// The icons the server gave for itself when Yardlet last connected (`serverInfo.icons`), for
     /// its picture. Absent in files from before and for a server that gives none.
     var serverIcons: [MCPServerIcon]?
@@ -131,6 +143,9 @@ struct ConnectorRecord: Codable, Equatable, Identifiable, Sendable {
     enum CodingKeys: String, CodingKey {
         case id, name, slug, serverURL, authorization, status, tools, toolsUpdatedAt, presetID, oauthClientID, scope
         case authorizationParameters, tokenQueryParameter, localService, account, serverIcons, tokenHeader, program, mailServer
+        case googleOAuthClientID, googleAgentDisabled, googleMailboxSignIn
+        case googleUISignIn = "hasGoogleUISignIn"
+        case workspaceToolEndpoints
         case approvedSignIn
         case accountSignInID = "googleAccountID"
     }
@@ -163,6 +178,10 @@ struct ConnectorRecord: Codable, Equatable, Identifiable, Sendable {
     /// A service whose sign-in is its account's, shared with the account's other services:
     /// Google's and Microsoft's.
     var signsInPerAccount: Bool { localService?.accountProvider != nil }
+
+    var needsWorkspaceToolDiscovery: Bool {
+        localService?.usesWorkspaceMCP == true && workspaceToolEndpoints?.isEmpty != false
+    }
 
     /// The tools it offers: a local service's own catalog, which comes with the app, or the
     /// server's list as it last gave it (a remote server's, or Xcode's).
@@ -336,9 +355,9 @@ enum LocalConnectorService: String, Codable, Sendable, CaseIterable, Identifiabl
     /// which tests replace.
     var address: URL {
         switch self {
-        case .gmail: GoogleOAuth.Endpoints.live.gmailAPI
-        case .googleCalendar: GoogleOAuth.Endpoints.live.calendarAPI
-        case .googleDrive: GoogleOAuth.Endpoints.live.driveAPI
+        case .gmail: GoogleWorkspaceEndpoint.gmail.url
+        case .googleCalendar: GoogleWorkspaceEndpoint.calendar.url
+        case .googleDrive: GoogleWorkspaceEndpoint.drive.url
         case .googleAnalytics: GoogleOAuth.Endpoints.live.analyticsAdminAPI
         case .googleAds: GoogleOAuth.Endpoints.live.adsAPI
         case .outlookMail, .outlookCalendar, .oneDrive, .teams: MicrosoftOAuth.Endpoints.live.address(for: self)
@@ -356,9 +375,7 @@ enum LocalConnectorService: String, Codable, Sendable, CaseIterable, Identifiabl
     /// Microsoft Graph's permissions; none for a service not signed in per account.
     var scopes: [String] {
         switch self {
-        case .gmail: [GmailToolCatalog.scope]
-        case .googleCalendar: GoogleCalendarToolCatalog.scopes
-        case .googleDrive: GoogleDriveToolCatalog.scopes
+        case .gmail, .googleCalendar, .googleDrive: GoogleOAuth.workspaceScopes(for: self)
         case .googleAnalytics: GoogleAnalyticsToolCatalog.scopes
         case .googleAds: GoogleAdsToolCatalog.scopes
         case .outlookMail: OutlookMailToolCatalog.scopes
@@ -369,12 +386,10 @@ enum LocalConnectorService: String, Codable, Sendable, CaseIterable, Identifiabl
         }
     }
 
-    /// The tools that come with the app; nil for Xcode, whose tools are those its server lists.
+    /// The tools shipped in the app. Xcode and Workspace services discover theirs at connection time.
     var tools: [ToolJSON]? {
         switch self {
-        case .gmail: GmailToolCatalog.tools
-        case .googleCalendar: GoogleCalendarToolCatalog.tools
-        case .googleDrive: GoogleDriveToolCatalog.tools
+        case .gmail, .googleCalendar, .googleDrive: nil
         case .googleAnalytics: GoogleAnalyticsToolCatalog.tools
         case .googleAds: GoogleAdsToolCatalog.tools
         case .outlookMail: OutlookMailToolCatalog.tools
@@ -396,9 +411,7 @@ enum LocalConnectorService: String, Codable, Sendable, CaseIterable, Identifiabl
     /// calendars and reminders. Xcode's tools are asked about as the harness asks about any server's.
     var approvalRequiredTools: Set<String> {
         switch self {
-        case .gmail: GmailToolCatalog.approvalRequired
-        case .googleCalendar: GoogleCalendarToolCatalog.approvalRequired
-        case .googleDrive: GoogleDriveToolCatalog.approvalRequired
+        case .gmail, .googleCalendar, .googleDrive: []
         case .outlookMail: OutlookMailToolCatalog.approvalRequired
         case .outlookCalendar: OutlookCalendarToolCatalog.approvalRequired
         case .oneDrive: OneDriveToolCatalog.approvalRequired
@@ -460,6 +473,14 @@ struct ConnectorCredential: Codable, Equatable, Sendable {
     /// The scope a refresh names again, for an identity provider that issues a refreshed token for
     /// what the refresh asks (Microsoft's); nil leaves it out, as most servers expect.
     var refreshScope: String?
+    var uiAccessToken: String?
+    var uiRefreshToken: String?
+    var uiExpiresAt: Date?
+    var uiClientID: String?
+    var uiClientSecret: String?
+    var uiGrantedScopes: String?
+    /// Kept when a Calendar-only sign-in replaces a Standard grant that also served Mailbox.
+    var uiMailboxGrant: GoogleMailboxGrant?
     /// A signing key's ID, its issuer (a team key's; nil for an individual key), and the private
     /// key itself in PEM. Absent in items from before.
     var keyID: String?

@@ -12,7 +12,7 @@ final class GmailSetupRenderingTests: XCTestCase {
 
     private static func record(_ account: String?, slug: String, status: ConnectorRecord.Status) -> ConnectorRecord {
         ConnectorRecord(name: "Gmail", slug: slug, serverURL: GoogleOAuth.Endpoints.live.gmailAPI, authorization: .oauth,
-                        status: status, presetID: "gmail", scope: GmailToolCatalog.scope, localService: .gmail,
+                        status: status, presetID: "gmail", scope: LocalConnectorService.gmail.scopes.joined(separator: " "), localService: .gmail,
                         account: account)
     }
 
@@ -25,10 +25,11 @@ final class GmailSetupRenderingTests: XCTestCase {
     private func center(_ records: [ConnectorRecord], app: Bool, builtIn: Bool = false,
                         credentials: InMemoryConnectorCredentialStore = InMemoryConnectorCredentialStore()) -> ConnectorCenter {
         var environment = ConnectorCenter.Environment(
-            repository: InMemoryConnectorRepository(records: records,
+            repository: InMemoryConnectorRepository(records: records.map(FakeGoogle.withCachedTools),
                                                     googleAppClientID: app ? FakeGoogle.clientID : nil),
             credentials: credentials, http: FakeGoogle(), userAgent: FakeUserAgent(),
             sha256: MacOAuthUserAgent.sha256, clientVersion: "9.9")
+        environment.googleWorkspaceTransport = environment.http
         environment.google = FakeGoogle.endpoints
         if builtIn {
             environment.googleBuiltInApp = .init(clientID: FakeGoogle.clientID, clientSecret: FakeGoogle.clientSecret)
@@ -51,114 +52,42 @@ final class GmailSetupRenderingTests: XCTestCase {
             .background(ParityTheme.canvas)
     }
 
-    func testTheGmailPageDrawsBeforeAndAfterTheAppIsSaved() throws {
+    func testGoogleSetupShowsPersonalModeAndNativeUIAtTheSettingsSheetWidth() throws {
         let directory = try WindowlessRender.directory(Self.folder)
         let gmail = try XCTUnwrap(ConnectorPreset.preset(id: "gmail"))
-
-        // As the sheet opens on Gmail with nothing saved.
-        let empty = center([], app: false)
         let sheetSize = NSSize(width: 580, height: 660)
-        let sheets = try WindowlessRender.hostedInBothAppearances("add-gmail-sheet", in: directory, size: sheetSize,
-                                                                  passes: 10) { appearance in
+        let empty = center([], app: false, builtIn: true)
+        let captures = try WindowlessRender.hostedInBothAppearances("google-personal-mode", in: directory, size: sheetSize,
+                                                                     passes: 10) { appearance in
             ConnectorAddSheet(center: empty, start: .preset(gmail), onClose: {})
                 .environment(\.colorScheme, appearance.colorScheme)
         }
-        for capture in sheets { XCTAssertTrue(WindowlessRender.drawsContent(capture.bitmap, step: 6)) }
-
-        // The whole page: what Google asks for, step by step, with its links.
-        let size = NSSize(width: 580, height: 1180)
-        try WindowlessRender.hostedInBothAppearances("gmail-page-empty", in: directory, size: size, passes: 10) { appearance in
-            page(GoogleSetupPage(center: empty), size: size, appearance: appearance)
-        }
-        let emptyText = spoken(page(GoogleSetupPage(center: empty), size: size, appearance: .light), size: size)
-        for text in [L10n.string("Set up Google"), L10n.string("Create a Google Cloud project"),
-                     L10n.string("Turn on the Gmail, Calendar, and Drive APIs"), L10n.string("New project"),
-                     L10n.string("Enable APIs"), L10n.string("Audience"), L10n.string("Data Access"),
-                     L10n.string("Create client"), L10n.format("Copy %@", L10n.string("Scopes")),
-                     L10n.format("Copy %@", L10n.string("Redirect URL")), L10n.string("OAuth client ID"),
-                     L10n.string("Client secret"), L10n.string("Save the Google OAuth app first."),
-                     L10n.string("Sign in with Google")] {
-            XCTAssertTrue(emptyText.contains { $0.contains(text) }, "No \(text): \(emptyText)")
-        }
-        XCTAssertTrue(emptyText.contains { $0.contains("hasn't verified this app") || $0.contains("확인하지 않은 앱") },
-                      "The unverified-app note")
-
-        // Saved, with accounts: the app in a line, each account with its state.
-        let saved = center(Self.accounts, app: true)
-        let savedSize = NSSize(width: 580, height: 640)
-        try WindowlessRender.hostedInBothAppearances("gmail-page-accounts", in: directory, size: savedSize,
-                                                     passes: 10) { appearance in
-            page(GoogleSetupPage(center: saved), size: savedSize, appearance: appearance)
-        }
-        let savedText = spoken(page(GoogleSetupPage(center: saved), size: savedSize, appearance: .light), size: savedSize)
-        for text in [L10n.string("Google OAuth app saved in your keychain"), FakeGoogle.clientID, L10n.string("Change…"),
-                     "person@example.test", "developer@company.test", "old.address@example.test", L10n.string("Connected"),
-                     L10n.string("Needs sign-in"), L10n.string("Reconnect"), L10n.string("Add another Google account")] {
-            XCTAssertTrue(savedText.contains { $0.contains(text) }, "No \(text): \(savedText)")
-        }
-        XCTAssertFalse(savedText.contains { $0.contains(L10n.string("Turn on the Gmail, Calendar, and Drive APIs")) },
-                       "The steps fold away once the app is saved")
-
-        let stepsSize = NSSize(width: 580, height: 900)
-        try WindowlessRender.hostedInBothAppearances("gmail-page-steps", in: directory, size: stepsSize, passes: 10) { appearance in
-            page(GoogleSetupPage(center: saved, showsSteps: true), size: stepsSize, appearance: appearance)
-        }
-    }
-
-    /// A build with Yardlet's own Google app: the page is the sign-in alone, with the way to an app
-    /// of the person's own below it, and no console steps.
-    func testWithTheBuiltInAppThePageIsOnlyTheSignIn() throws {
-        let directory = try WindowlessRender.directory(Self.folder)
-        let size = NSSize(width: 580, height: 560)
-        for (name, records) in [("gmail-page-builtin-empty", [ConnectorRecord]()), ("gmail-page-builtin-accounts", Self.accounts)] {
-            let builtIn = center(records, app: false, builtIn: true)
-            let captures = try WindowlessRender.hostedInBothAppearances(name, in: directory, size: size, passes: 10) { appearance in
-                page(GoogleSetupPage(center: builtIn), size: size, appearance: appearance)
-            }
-            for capture in captures { XCTAssertTrue(WindowlessRender.drawsContent(capture.bitmap, step: 6)) }
-            let text = spoken(page(GoogleSetupPage(center: builtIn), size: size, appearance: .light), size: size)
-            let signIn = records.isEmpty ? L10n.string("Sign in with Google") : L10n.string("Add another Google account")
-            for expected in [L10n.string("Sign in with each Google account"), signIn,
-                             L10n.string("Use a Google OAuth app of your own…")] {
-                XCTAssertTrue(text.contains { $0.contains(expected) }, "No \(expected): \(text)")
-            }
-            for absent in [L10n.string("Create a Google Cloud project"), L10n.string("OAuth client ID"),
-                           L10n.string("Save the Google OAuth app first.")] {
-                XCTAssertFalse(text.contains { $0.contains(absent) }, "Unexpected \(absent): \(text)")
-            }
-        }
-        let tiles = spoken(ConnectorSetupTiles(center: center([], app: false, builtIn: true), onOpen: { _ in }),
-                           size: NSSize(width: 580, height: 160))
-        XCTAssertTrue(tiles.contains { $0.contains(L10n.string("Sign in to start")) }, "\(tiles)")
-    }
-
-    /// With Yardlet's own app, Analytics and Ads cannot be turned on, and an account that turned
-    /// Analytics on with it before keeps Gmail and says what Analytics now needs, with Reconnect.
-    func testWithTheBuiltInAppAnalyticsAndAdsAskForAnAppOfYourOwn() async throws {
-        let directory = try WindowlessRender.directory(Self.folder)
-        let gmail = Self.accounts[0]
-        let analytics = ConnectorRecord(name: "Google Analytics", slug: "analytics",
-                                        serverURL: GoogleOAuth.Endpoints.live.analyticsAdminAPI, authorization: .oauth,
-                                        status: .connected, toolsUpdatedAt: Date(), presetID: "google-analytics",
-                                        localService: .googleAnalytics, account: gmail.account, accountSignInID: gmail.id)
-        let credentials = InMemoryConnectorCredentialStore()
-        try credentials.save(ConnectorCredential(kind: .oauth, accessToken: "access", refreshToken: "1//refresh",
-                                                 clientID: FakeGoogle.clientID), for: gmail.id)
-        let builtIn = center([gmail, analytics], app: false, builtIn: true, credentials: credentials)
-        try await waitUntil { builtIn.failures[analytics.id] != nil }
-
-        let size = NSSize(width: 580, height: 620)
-        let captures = try WindowlessRender.hostedInBothAppearances("gmail-page-builtin-analytics", in: directory, size: size,
-                                                                    passes: 10) { appearance in
-            page(GoogleSetupPage(center: builtIn), size: size, appearance: appearance)
-        }
         for capture in captures { XCTAssertTrue(WindowlessRender.drawsContent(capture.bitmap, step: 6)) }
-        let text = spoken(page(GoogleSetupPage(center: builtIn), size: size, appearance: .light), size: size)
-        for expected in [try XCTUnwrap(GoogleSignInError.needsOwnApp([.googleAnalytics]).errorDescription),
-                         L10n.string("Google Analytics and Google Ads connect only with a Google OAuth app of your own."),
-                         L10n.string("Reconnect"), L10n.string("Use a Google OAuth app of your own…"),
-                         L10n.string("your own app only")] {
-            XCTAssertTrue(text.contains { $0.contains(expected) }, "No \(expected): \(text)")
+        let text = spoken(page(GoogleSetupPage(center: empty), size: sheetSize, appearance: .light), size: sheetSize)
+        for title in [L10n.string("Agent tools"), L10n.string("Create a Personal Mode client"), L10n.string("OAuth client ID"),
+                      L10n.string("Client secret"), L10n.string("Sign in with Google"),
+                      L10n.string("Sign in to Google for Yardlet Calendar"),
+                      L10n.string("Connect Gmail with an app password in Mail (IMAP)")] {
+            XCTAssertTrue(text.contains { $0.contains(title) }, "Missing \(title)")
+        }
+    }
+
+    func testGoogleAccountRowsRenderWithIndependentCalendarStatus() throws {
+        var accounts = Self.accounts
+        accounts[0].hasGoogleUISignIn = true
+        let saved = center(accounts, app: true)
+        let size = NSSize(width: 540, height: 470)
+        let directory = try WindowlessRender.directory(Self.folder)
+        func rows() -> some View {
+            ServiceAccountList(center: saved, provider: .google, newAccountServices: .constant([.gmail]))
+        }
+        try WindowlessRender.hostedInBothAppearances("google-account-rows", in: directory, size: size, passes: 10) {
+            page(rows(), size: size, appearance: $0)
+        }
+        let text = spoken(page(rows(), size: size, appearance: .light), size: size)
+        for title in ["person@example.test", "developer@company.test", "old.address@example.test",
+                      L10n.string("Reconnect"), L10n.string("Yardlet Calendar connected")] {
+            XCTAssertTrue(text.contains { $0.contains(title) }, "Missing \(title)")
         }
     }
 
@@ -187,62 +116,10 @@ final class GmailSetupRenderingTests: XCTestCase {
                                   size: settingsSize)
         // A connected account's row counts the tools Yardlet's Gmail server lists.
         for text in ["Gmail · person@example.test", "Gmail · developer@company.test", "Gmail · old.address@example.test",
-                     L10n.format("%lld tools", Int64(GmailToolCatalog.tools.count)), L10n.string("Reconnect")] {
+                     L10n.string("Reconnect")] {
             XCTAssertTrue(settingsText.contains { $0.contains(text) }, "No \(text): \(settingsText)")
         }
         XCTAssertEqual(ConnectorSettingsState.ordered(saved).filter { $0.localService == .gmail }.map(\.account),
                        ["person@example.test", "developer@company.test", "old.address@example.test"], "Connected first")
-    }
-
-    func testClaudeAsksBeforeASendInYardletsWords() throws {
-        _ = center(Self.accounts, app: true)  // the tool names' labels, with each account
-        // The accounts share Gmail's tools; the call names the one it sends from.
-        let input: JSONValue = .object([
-            "account": .string("developer@company.test"),
-            "to": .array([.string("bob@example.com")]), "cc": .array([.string("carol@example.com")]),
-            "subject": .string("Q3 numbers"), "body": .string("Hi Bob,\nThe numbers are attached to the thread.\nThanks")
-        ])
-        let text = try XCTUnwrap(GmailToolApproval.request(toolName: "mcp__yardlet__gmail_send_message", input: input))
-        XCTAssertEqual(text.title, L10n.format("Allow Claude to send an email from %@?", "developer@company.test"))
-        let request = PermissionRequest(id: "perm-gmail", title: text.title, detail: text.detail, command: nil,
-                                        toolCallID: "toolu_send")
-        let start = Date(timeIntervalSince1970: 1_792_220_400)
-        let entries = [
-            TranscriptEntry(createdAt: start, content: .user(text: "Email Bob the Q3 numbers")),
-            TranscriptEntry(createdAt: start.addingTimeInterval(4),
-                            content: .assistant(text: "I'll send it from your work account.", isStreaming: false)),
-            TranscriptEntry(createdAt: start.addingTimeInterval(6), content: .activity(HarnessActivity(
-                id: "toolu_send", kind: "mcp__yardlet__gmail_send_message",
-                title: "mcp__yardlet__gmail_send_message", input: input.readableText), state: .running)),
-            TranscriptEntry(createdAt: start.addingTimeInterval(7), content: .permission(request, state: .pending))
-        ]
-        let directory = try WindowlessRender.directory(Self.folder)
-        for appearance in WindowlessRender.Appearance.allCases {
-            let drawing = try ConversationDrawing.draw(
-                ConversationTimeline(source: .transcript(entries: entries, harness: .claudeCode, status: .waitingForApproval,
-                                                         latestTurnIsComplete: false)),
-                size: NSSize(width: 760, height: 460), appearance: appearance)
-            try WindowlessRender.writePNG(drawing.capture.bitmap,
-                                          to: directory.appending(path: "claude-request-send-\(appearance.suffix).png"))
-            let texts = drawing.elements.map(\.description).joined(separator: "\n")
-            XCTAssertTrue(texts.contains(text.title), texts)
-            XCTAssertTrue(texts.contains("bob@example.com"), texts)
-        }
-
-        // The call's row, once it ran, names the account it sent from.
-        let activity = HarnessActivity(id: "toolu_send", kind: "mcp__yardlet__gmail_send_message",
-                                       title: "mcp__yardlet__gmail_send_message", input: input.readableText)
-        guard case .tool(let tool) = ConversationActivityProjection.kind(activity, harness: .claudeCode, phase: .completed,
-                                                                         isApproved: true) else {
-            return XCTFail("A connector call is a tool row")
-        }
-        let item = ConversationItem(id: "toolu_send", kind: .tool(tool), phase: .completed,
-                                    source: .transcript(TranscriptEntry(content: .activity(activity, state: .completed))))
-        try WindowlessRender.hostedInBothAppearances("claude-row-send", in: directory, size: NSSize(width: 560, height: 44)) {
-            page(ConversationWorkLine(item: item, harness: .claudeCode, workspaceURL: nil),
-                 size: NSSize(width: 560, height: 44), appearance: $0)
-        }
-        let row = spoken(ConversationWorkLine(item: item, harness: .claudeCode, workspaceURL: nil), size: NSSize(width: 560, height: 44))
-        XCTAssertTrue(row.contains { $0.contains("Gmail · developer@company.test: send message") }, "\(row)")
     }
 }

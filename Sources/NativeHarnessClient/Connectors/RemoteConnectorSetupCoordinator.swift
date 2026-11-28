@@ -231,7 +231,12 @@ final class RemoteConnectorSetupCoordinator {
         if let service = preset?.localService, let provider = service.accountProvider {
             if let clientID = Self.trimmed(draft.clientID) {
                 switch provider {
-                case .google: try await center.saveGoogleApp(clientID: clientID, secret: draft.clientSecret)
+                case .google:
+                    guard let account = try await center.addGoogleAccount(services: [service], clientID: clientID,
+                                                                          secret: draft.clientSecret) else {
+                        throw SetupFailure.accountApp
+                    }
+                    return account.id
                 case .microsoft: center.saveMicrosoftApp(clientID: clientID, tenant: draft.tenant)
                 }
             }
@@ -255,7 +260,8 @@ final class RemoteConnectorSetupCoordinator {
             guard Self.trimmed(draft.token) == nil, draft.tokenHeader == nil else { throw SetupFailure.accountApp }
             if let clientID = Self.trimmed(draft.clientID) {
                 switch provider {
-                case .google: try await center.saveGoogleApp(clientID: clientID, secret: draft.clientSecret)
+                case .google:
+                    try await center.saveGoogleClient(account: record.credentialID, clientID: clientID, secret: draft.clientSecret)
                 case .microsoft: center.saveMicrosoftApp(clientID: clientID, tenant: draft.tenant)
                 }
             }

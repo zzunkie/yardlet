@@ -329,9 +329,9 @@ final class IMAPMailTransportTests: XCTestCase {
         XCTAssertEqual(state.appended.count, appended, "A file from elsewhere saves nothing")
 
         let draftID = try XCTUnwrap(answer["draftId"]?.stringValue)
-        XCTAssertTrue(GmailToolApproval.readsDraft(toolName: "mcp__yardlet__mail_send_draft"))
+        XCTAssertTrue(MailDraftApproval.readsDraft(toolName: "mcp__yardlet__mail_send_draft"))
         let preview = await center.mailDraftPreview(tool: "mail_send_draft", arguments: ["account": .string("dana@example.com"), "draftId": .string(draftID)])
-        let card = try XCTUnwrap(GoogleToolApproval.request(toolName: "mcp__yardlet__mail_send_draft",
+        let card = try XCTUnwrap(LocalConnectorApproval.request(toolName: "mcp__yardlet__mail_send_draft",
                                                             input: .object(["account": .string("dana@example.com"), "draftId": .string(draftID)]), mailDraft: preview))
         XCTAssertEqual(card.title, L10n.format("Allow Claude to send a draft from %@?", "dana@example.com"))
         XCTAssertTrue(card.detail.contains(L10n.format("To: %@", "haneul@example.com")), card.detail)

@@ -371,6 +371,9 @@ enum ConnectorOAuth {
         let items = URLComponents(url: callback, resolvingAgainstBaseURL: false)?.queryItems ?? []
         func value(_ name: String) -> String? { items.first { $0.name == name }?.value }
         if let error = value("error") {
+            if error == "client_user_mismatch" || value("error_description")?.contains("client_user_mismatch") == true {
+                throw ConnectorOAuthError.authorizationDenied(L10n.string("Only the Google Account that created this Personal Mode client can sign in. Open Personal Mode with the account you want to connect and create a client for it."))
+            }
             if error == "access_denied" { throw ConnectorOAuthError.declined }
             throw ConnectorOAuthError.authorizationDenied(value("error_description") ?? error)
         }

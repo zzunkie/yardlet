@@ -109,24 +109,17 @@ final class ConnectorDirectoryTests: XCTestCase {
             XCTAssertTrue(zoom.scope?.split(separator: " ").allSatisfy { $0.contains(":read") || $0 == "canvas:write:file_search" } == true, id)
         }
         XCTAssertEqual(try preset("slack").serverURL.absoluteString, "https://mcp.slack.com/mcp")
-        // Gmail is Yardlet's own server on the public Gmail API (2026-10-17), with one scope.
-        let gmail = try preset("gmail")
-        XCTAssertEqual(gmail.signIn, .googleAccount)
-        XCTAssertEqual(gmail.serverURL.absoluteString, "https://gmail.googleapis.com/gmail/v1/")
-        XCTAssertEqual(gmail.scope, "https://www.googleapis.com/auth/gmail.modify")
-        // Calendar and Drive are Yardlet's own too since 2026-10-19, on the same Google OAuth app,
-        // not Google's MCP servers that need the developer preview.
-        for (id, base) in [("google-calendar", "https://www.googleapis.com/calendar/v3/"),
-                           ("google-drive", "https://www.googleapis.com/drive/v3/")] {
+        let endpoints = [
+            ("gmail", "gmail", ["gmail.modify", "gmail.settings.basic"]),
+            ("google-calendar", "calendar", ["calendar.calendarlist.readonly", "calendar.events", "calendar.events.freebusy"]),
+            ("google-drive", "drive", ["drive", "documents", "spreadsheets", "presentations"])
+        ]
+        for (id, host, scopes) in endpoints {
             let google = try preset(id)
             XCTAssertEqual(google.signIn, .googleAccount, id)
-            XCTAssertEqual(google.serverURL.absoluteString, base, id)
+            XCTAssertEqual(google.serverURL.absoluteString, "https://\(host)mcp.googleapis.com/mcp/v1", id)
+            XCTAssertEqual(google.scope, scopes.map { "https://www.googleapis.com/auth/" + $0 }.joined(separator: " "), id)
             XCTAssertEqual(google.localService?.presetID, id)
-            XCTAssertFalse(google.serverURL.host()?.hasSuffix("mcp.googleapis.com") == true, "No preview MCP server: \(id)")
-            XCTAssertTrue(google.scope?.contains("https://www.googleapis.com/auth/") == true, id)
-            XCTAssertFalse(google.scope?.contains("https://mail.google.com/") == true, "No full mail access: \(id)")
-            XCTAssertFalse(google.scope?.split(separator: " ").contains("https://www.googleapis.com/auth/drive") == true,
-                           "No full Drive access: \(id)")
         }
         // Mercury reads only: the server lists payment, transfer, category, and note scopes too, and
         // the sign-in asks for none of them (docs.mercury.com/docs/connecting-mercury-mcp).

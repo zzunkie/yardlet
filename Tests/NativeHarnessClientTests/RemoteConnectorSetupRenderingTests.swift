@@ -29,14 +29,17 @@ final class RemoteConnectorSetupRenderingTests: XCTestCase {
                         .environment(\.colorScheme, appearance.colorScheme)
                 }
             for capture in captures { XCTAssertTrue(WindowlessRender.drawsContent(capture.bitmap, step: 6)) }
-            if name == "slack" || name == "github-client" || name == "custom-token" {
+            if ["slack", "github-client", "custom-token", "google"].contains(name) {
                 let host = WindowlessRender.Host(RemoteConnectorAddSheet(hostName: "Mac Studio", client: client,
                     initialPresetID: preset, initialAuthentication: authentication, onClose: {}),
                     size: NSSize(width: 580, height: 660))
                 defer { host.close() }
                 host.settle()
                 let text = host.accessibilityElements().map { "\($0.label) \($0.value)" }.joined(separator: "\n")
-                if name == "custom-token" {
+                if name == "google" {
+                    XCTAssertTrue(text.contains(L10n.string("Create a Personal Mode client")), text)
+                    XCTAssertTrue(text.contains(L10n.string("Client ID")), text)
+                } else if name == "custom-token" {
                     XCTAssertFalse(text.contains("Sign-in opens in this computer's browser"))
                 } else {
                     XCTAssertTrue(text.contains("http://127.0.0.1:47823/callback"), text)

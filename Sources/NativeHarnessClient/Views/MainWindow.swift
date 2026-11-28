@@ -1819,14 +1819,14 @@ struct MainWindow: View {
         let center = model.connectorCenter
         let scope = model.connectorScopeBySessionID[session.id] ?? ConnectorTaskScope(harness: session.harness)
         return ComposerConnectorEnvironment(
-            records: center?.connectors ?? [],
+            records: center?.agentConnectors ?? [],
             taskState: { record in center?.state(of: record, inTask: session.id, scope: scope) ?? .on },
             standInServerNames: Set(scope.leftOutNativeServers.map(\.name)),
             setOn: center.map { center in { id, on in center.setConnector(id, on: on, inTask: session.id) } },
             // A service that needs the user's client or a new token is set up in Settings.
             reconnect: center.map { center in { id in
                 if let record = center.record(id),
-                   record.needsSetupBeforeConnecting || (record.authorization == .token && record.status == .signInRequired) {
+                   center.needsAccountApp(for: record) || record.needsSetupBeforeConnecting || (record.authorization == .token && record.status == .signInRequired) {
                     presentSettings(.connectors)
                 } else {
                     center.reconnect(id)

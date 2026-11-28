@@ -338,29 +338,29 @@ final class AppleConnectorTests: XCTestCase {
             ConnectorRecord(name: "Apple Reminders", slug: "apple_reminders", serverURL: LocalConnectorService.appleReminders.address,
                             presetID: "apple-reminders", localService: .appleReminders)
         ])
-        let submit = try XCTUnwrap(GoogleToolApproval.request(toolName: "mcp__yardlet__app_store_connect_submit_for_review",
+        let submit = try XCTUnwrap(LocalConnectorApproval.request(toolName: "mcp__yardlet__app_store_connect_submit_for_review",
                                                               input: .object(["versionId": .string("v7")]), labels: labels))
         XCTAssertEqual(submit.title, L10n.string("Allow Claude to submit an App Store version for App Review?"))
         XCTAssertTrue(submit.detail.contains("v7") && submit.detail.contains("2X9R4HXF34"), submit.detail)
-        let reply = try XCTUnwrap(GoogleToolApproval.request(toolName: "mcp__yardlet__app_store_connect_reply_to_review",
+        let reply = try XCTUnwrap(LocalConnectorApproval.request(toolName: "mcp__yardlet__app_store_connect_reply_to_review",
                                                              input: .object(["reviewId": .string("r1"),
                                                                              "responseBody": .string("Fixed")]), labels: labels))
         XCTAssertTrue(reply.detail.contains("Fixed"))
-        let invite = try XCTUnwrap(GoogleToolApproval.request(toolName: "mcp__yardlet__app_store_connect_add_beta_tester",
+        let invite = try XCTUnwrap(LocalConnectorApproval.request(toolName: "mcp__yardlet__app_store_connect_add_beta_tester",
                                                               input: .object(["groupId": .string("g1"),
                                                                               "email": .string("tester@example.test")]), labels: labels))
         XCTAssertTrue(invite.detail.contains("tester@example.test"))
-        let event = try XCTUnwrap(GoogleToolApproval.request(toolName: "mcp__yardlet__apple_calendar_create_event",
+        let event = try XCTUnwrap(LocalConnectorApproval.request(toolName: "mcp__yardlet__apple_calendar_create_event",
                                                              input: .object(["summary": .string("Team meeting"),
                                                                              "startTime": .string("2026-10-27T10:00:00")]),
                                                              labels: labels))
         XCTAssertEqual(event.title, L10n.string("Allow Claude to create an event in this Mac's calendars?"))
         XCTAssertTrue(event.detail.contains("Team meeting"))
-        let done = try XCTUnwrap(GoogleToolApproval.request(toolName: "mcp__yardlet__apple_reminders_complete_reminder",
+        let done = try XCTUnwrap(LocalConnectorApproval.request(toolName: "mcp__yardlet__apple_reminders_complete_reminder",
                                                             input: .object(["reminderId": .string("x")]), labels: labels))
         XCTAssertEqual(done.title, L10n.string("Allow Claude to mark a reminder done?"))
-        XCTAssertNil(GoogleToolApproval.request(toolName: "mcp__yardlet__app_store_connect_list_apps", input: .object([:]), labels: labels))
-        XCTAssertNil(GoogleToolApproval.request(toolName: "mcp__yardlet__apple_calendar_list_events", input: .object([:]), labels: labels))
+        XCTAssertNil(LocalConnectorApproval.request(toolName: "mcp__yardlet__app_store_connect_list_apps", input: .object([:]), labels: labels))
+        XCTAssertNil(LocalConnectorApproval.request(toolName: "mcp__yardlet__apple_calendar_list_events", input: .object([:]), labels: labels))
     }
 
     // MARK: - The Mac's calendars, reminders, and contacts

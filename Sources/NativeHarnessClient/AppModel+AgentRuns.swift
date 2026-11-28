@@ -217,7 +217,7 @@ extension AppModel {
         if !run.isEvaluationJudge, let configurable = adapter as? any HarnessAgentToolConfiguring,
            AgentToolInjectionRoute.route(for: run.harness) != nil {
             // Its connectors are scoped as a task of that harness and account in that folder would be.
-            let scope = connectorScope(for: SessionRecord(
+            let scope = await connectorScope(for: SessionRecord(
                 id: run.id, harness: run.harness, workspaceURL: run.workspaceURL, runtimeExecutableURL: runtime,
                 title: run.label, connection: connection))
             let server = agentTools?.agentToolServer(for: run.id, workspaceRoots: [run.workspaceURL],

@@ -3,9 +3,7 @@ import YardletAgentTools
 
 /// What Claude Code's request card says for a Microsoft tool that writes: an Outlook send or a
 /// message changed, an Outlook event created, changed, deleted, or answered, a OneDrive file or
-/// folder created, or a Teams message sent. It names the account and what the call would do, as
-/// the Gmail and Google cards do (`GmailToolApproval`, `GoogleToolApproval`); a draft to send shows
-/// what it holds, read from Outlook first. Claude Code asks before each such call; the card offers
+/// folder created, or a Teams message sent. A draft to send shows what it holds, read from Outlook first. Claude Code asks before each such call; the card offers
 /// no "always allow".
 enum MicrosoftToolApproval {
     static func request(_ service: LocalConnectorService, tool: String, account: String?,
@@ -59,12 +57,12 @@ enum MicrosoftToolApproval {
                 lines.append(input["replyAll"] == .bool(true) ? L10n.string("Replies to everyone on the message.")
                              : L10n.string("Replies in the message's thread."))
             }
-            lines += GmailToolApproval.attachmentLines(GmailAttachmentFiles.describe(list(input, "attachments")))
+            lines += MailDraftApproval.attachmentLines(GmailAttachmentFiles.describe(list(input, "attachments")))
             let body = text(input, "body") ?? text(input, "htmlBody").map(GmailText.plainText(fromHTML:))
             return (L10n.format("Allow Claude to send an email from %@?", account), joined(lines, body: body))
         case OutlookMailToolCatalog.sendDraft:
             return (L10n.format("Allow Claude to send a draft from %@?", account),
-                    draft.map(GmailToolApproval.draftDetail) ?? text(input, "draftId").map { L10n.format("Draft %@", $0) } ?? "")
+                    draft.map(MailDraftApproval.draftDetail) ?? text(input, "draftId").map { L10n.format("Draft %@", $0) } ?? "")
         case OutlookMailToolCatalog.updateMessage:
             if let message = text(input, "messageId") { lines.append(L10n.format("Message %@", message)) }
             switch input["isRead"] {

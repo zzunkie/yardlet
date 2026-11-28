@@ -63,61 +63,23 @@ struct ConnectorSetupAssistant: Equatable {
 
     // MARK: Google
 
-    static let googleProject = URL(string: "https://console.cloud.google.com/projectcreate")!
-    /// Turns on the three services' APIs, and the Docs, Sheets, and Slides APIs Drive's editing
-    /// tools call, in one confirmation.
+    /// Enables the Workspace APIs and their MCP endpoints for a shared organization app.
     static var googleAPIs: URL {
-        URL(string: "https://console.cloud.google.com/flows/enableapi?apiid="
-            + (LocalConnectorService.google.flatMap(\.apiIDs) + GoogleEditorsToolCatalog.apiIDs).joined(separator: ","))!
+        let editors = ["docs.googleapis.com", "sheets.googleapis.com", "slides.googleapis.com"]
+        let mcp = ["gmail", "calendar", "drive", "docs", "sheets", "slides"].map { "\($0)mcp.googleapis.com" }
+        let ids = LocalConnectorService.google.flatMap(\.apiIDs) + editors + mcp
+        return URL(string: "https://console.cloud.google.com/flows/enableapi?apiid=" + ids.joined(separator: ","))!
     }
-    static let googleOverview = URL(string: "https://console.cloud.google.com/auth/overview")!
-    static let googleAudience = URL(string: "https://console.cloud.google.com/auth/audience")!
-    static let googleDataAccess = URL(string: "https://console.cloud.google.com/auth/scopes")!
     static let googleClients = URL(string: "https://console.cloud.google.com/auth/clients")!
-
-    /// The app name the person types in Google's and Slack's consoles.
     static let appName = "Yardlet"
 
-    /// Every Google scope, one per line, as Data Access → "Manually add scopes" takes them.
-    static var googleScopeList: String {
-        GoogleOAuth.scopes.map(\.url).joined(separator: "\n")
-    }
-
-    /// - Parameter builtIn: the build carries Yardlet's own Google app and the person is not setting
-    ///   up one of theirs, so signing in is the only step.
-    static func google(opened: Set<StepID>, appSaved: Bool, connectedAccounts: Int,
-                       builtIn: Bool = false) -> ConnectorSetupAssistant {
-        func done(_ id: StepID) -> Bool { appSaved || opened.contains(id) }
-        let signIn = Step(id: .googleSignIn, title: L10n.string("Sign in with each Google account"),
-                          detail: L10n.string("Pick Gmail, Calendar, and Drive for the account, then sign in once."),
-                          isDone: connectedAccounts > 0)
-        if builtIn { return ConnectorSetupAssistant(service: .google, steps: [signIn]) }
-        let redirect = ConnectorOAuth.registeredClientRedirectURI.absoluteString
-        return ConnectorSetupAssistant(service: .google, steps: [
-            Step(id: .project, title: L10n.string("Create a Google Cloud project"),
-                 detail: L10n.string("Any name. Or pick a project you have."),
-                 link: Link(title: L10n.string("New project"), url: googleProject), isDone: done(.project)),
-            Step(id: .apis, title: L10n.string("Turn on the Gmail, Calendar, and Drive APIs"),
-                 detail: L10n.string("One page turns them on, with the Docs, Sheets, and Slides APIs the Drive tools use and the Analytics and Ads APIs; confirm the project and press Enable."),
-                 link: Link(title: L10n.string("Enable APIs"), url: googleAPIs), isDone: done(.apis)),
-            Step(id: .consent, title: L10n.string("Set up Google Auth Platform"),
-                 detail: L10n.string("App name, your email, then Audience: External for personal Gmail and other accounts, Internal for your Workspace organization's accounts only."),
-                 link: Link(title: L10n.string("Google Auth Platform"), url: googleOverview),
-                 copies: [Copy(label: L10n.string("App name"), value: appName)], isDone: done(.consent)),
-            Step(id: .publish, title: L10n.string("Publish the app (External only)"),
-                 detail: L10n.string("Audience → Publish app, so its status is In production. In Testing, Google ends each sign-in after 7 days. No verification is needed for your own use."),
-                 link: Link(title: L10n.string("Audience"), url: googleAudience), isDone: done(.publish)),
-            Step(id: .scopes, title: L10n.string("Add the scopes"),
-                 detail: L10n.string("Data Access → Add or remove scopes → Manually add scopes: paste them all, then Update and Save. Analytics and Ads ask for theirs only on the accounts that turn them on."),
-                 link: Link(title: L10n.string("Data Access"), url: googleDataAccess),
-                 copies: [Copy(label: L10n.string("Scopes"), value: googleScopeList)], isDone: done(.scopes)),
-            Step(id: .client, title: L10n.string("Create a client and paste it here"),
-                 detail: L10n.string("Application type Desktop app, name Yardlet, then Create. Paste its client ID and secret below. A Web application client works too with the redirect URL added."),
-                 link: Link(title: L10n.string("Create client"), url: googleClients),
-                 copies: [Copy(label: L10n.string("App name"), value: appName),
-                          Copy(label: L10n.string("Redirect URL"), value: redirect)],
-                 isDone: appSaved),
-            signIn
+    static func google(opened: Set<StepID>, appSaved: Bool, connectedAccounts: Int) -> ConnectorSetupAssistant {
+        ConnectorSetupAssistant(service: .google, steps: [
+            Step(id: .project, title: L10n.string("Create a Personal Mode client"),
+                 detail: nil, link: Link(title: L10n.string("Create a Personal Mode client"), url: GoogleOAuth.personalModeURL),
+                 isDone: appSaved || opened.contains(.project)),
+            Step(id: .client, title: L10n.string("Enter the client ID and secret"), detail: nil, isDone: appSaved),
+            Step(id: .googleSignIn, title: L10n.string("Sign in with Google"), detail: nil, isDone: connectedAccounts > 0)
         ])
     }
 

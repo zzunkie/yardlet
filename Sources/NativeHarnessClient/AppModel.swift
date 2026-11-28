@@ -6615,7 +6615,7 @@ final class AppModel {
     private func configureAgentTools(on adapter: any HarnessAdapter, for session: SessionRecord) async {
         guard let configurable = adapter as? any HarnessAgentToolConfiguring else { return }
         let routed = AgentToolInjectionRoute.route(for: session.harness) != nil
-        let scope = routed && agentTools != nil ? connectorScope(for: session) : nil
+        let scope = routed && agentTools != nil ? await connectorScope(for: session) : nil
         let server = routed
             ? agentTools?.agentToolServer(
                 for: session.id,
@@ -6629,9 +6629,11 @@ final class AppModel {
 
     /// The connectors a task gets: its harness's own servers, with Yardlet's connected connectors
     /// standing in for those the harness can leave out of this launch.
-    func connectorScope(for session: SessionRecord) -> ConnectorTaskScope {
-        let scope = ConnectorCenter.scope(for: session)
-        return connectorCenter?.withYardletStandIns(scope) ?? scope
+    func connectorScope(for session: SessionRecord) async -> ConnectorTaskScope {
+        let native = ConnectorCenter.scope(for: session)
+        let scope = connectorCenter?.withYardletStandIns(native) ?? native
+        await connectorCenter?.waitForInitialWorkspaceTools(for: session.id, scope: scope)
+        return scope
     }
 
     /// Starts a task's runtime unless it has one. Starts of one task never overlap: one asked for while

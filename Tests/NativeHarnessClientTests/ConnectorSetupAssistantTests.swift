@@ -65,44 +65,13 @@ final class ConnectorSetupAssistantTests: XCTestCase {
 
     // MARK: - The assistants' steps
 
-    func testGoogleStepsOpenTheConsolePagesAndCheckOffAsTheyAreDone() throws {
+    func testGoogleSetupOpensPersonalModeForAnAgentDesktopClient() throws {
         let fresh = ConnectorSetupAssistant.google(opened: [], appSaved: false, connectedAccounts: 0)
-        XCTAssertEqual(fresh.steps.map(\.id), [.project, .apis, .consent, .publish, .scopes, .client, .googleSignIn])
-        XCTAssertEqual(fresh.current, .project)
-        XCTAssertEqual(fresh.doneCount, 0)
-        XCTAssertFalse(fresh.isComplete)
-        // Each console step opens its exact page; the APIs page turns the three services' APIs on at once,
-        // with the Docs, Sheets, and Slides APIs Drive's editing tools call.
-        let links = Dictionary(uniqueKeysWithValues: fresh.steps.compactMap { step in step.link.map { (step.id, $0.url.absoluteString) } })
-        XCTAssertEqual(links[.project], "https://console.cloud.google.com/projectcreate")
-        XCTAssertEqual(links[.apis], "https://console.cloud.google.com/flows/enableapi?apiid="
-            + "gmail.googleapis.com,calendar-json.googleapis.com,drive.googleapis.com,"
-            + "analyticsadmin.googleapis.com,analyticsdata.googleapis.com,googleads.googleapis.com,"
-            + "docs.googleapis.com,sheets.googleapis.com,slides.googleapis.com")
-        XCTAssertEqual(links[.consent], "https://console.cloud.google.com/auth/overview")
-        XCTAssertEqual(links[.publish], "https://console.cloud.google.com/auth/audience")
-        XCTAssertEqual(links[.scopes], "https://console.cloud.google.com/auth/scopes")
-        XCTAssertEqual(links[.client], "https://console.cloud.google.com/auth/clients")
-        XCTAssertNil(links[.googleSignIn])
-        // Every value to paste has a copy button: the app name, the nine scopes, the redirect URL.
-        let copies = Dictionary(uniqueKeysWithValues: fresh.steps.map { ($0.id, $0.copies.map(\.value)) })
-        XCTAssertEqual(copies[.consent], ["Yardlet"])
-        XCTAssertEqual(copies[.scopes]?.first?.split(separator: "\n").map(String.init),
-                       GoogleOAuth.scopes.map(\.url))
-        XCTAssertEqual(GoogleOAuth.scopes.count, 9)
-        XCTAssertEqual(copies[.client], ["Yardlet", "http://127.0.0.1:47823/callback"])
-
-        // Opened pages check off; the attention moves to the first step not done.
-        let underway = ConnectorSetupAssistant.google(opened: [.project, .apis, .scopes], appSaved: false, connectedAccounts: 0)
-        XCTAssertEqual(underway.steps.filter(\.isDone).map(\.id), [.project, .apis, .scopes])
-        XCTAssertEqual(underway.current, .consent)
-        // A saved client means the console is done; an account signed in finishes it.
-        let saved = ConnectorSetupAssistant.google(opened: [], appSaved: true, connectedAccounts: 0)
-        XCTAssertEqual(saved.current, .googleSignIn)
-        XCTAssertEqual(saved.doneCount, 6)
-        let finished = ConnectorSetupAssistant.google(opened: [], appSaved: true, connectedAccounts: 2)
-        XCTAssertTrue(finished.isComplete)
-        XCTAssertNil(finished.current)
+        XCTAssertEqual(fresh.steps.map(\.id), [.project, .client, .googleSignIn])
+        XCTAssertEqual(fresh.steps.first?.link?.url.absoluteString,
+                       "https://console.cloud.google.com/auth/overview/personal?apis=ws,wsmcp&clientType=desktop&isAgent=true")
+        XCTAssertEqual(ConnectorSetupAssistant.google(opened: [.project], appSaved: false, connectedAccounts: 0).current, .client)
+        XCTAssertTrue(ConnectorSetupAssistant.google(opened: [], appSaved: true, connectedAccounts: 1).isComplete)
 
         // The opened steps keep across launches as one defaults string.
         let kept = ConnectorSetupProgress.encode([.scopes, .project])

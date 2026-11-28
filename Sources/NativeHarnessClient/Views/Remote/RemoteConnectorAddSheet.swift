@@ -220,7 +220,10 @@ struct RemoteConnectorAddSheet: View {
                     detail(L10n.string("Uses the host's GitHub app, if configured. Otherwise, choose an access token or your own OAuth client."))
                 }
                 if showsClient {
-                    if isAccount {
+                    if preset?.localService.map(LocalConnectorService.googleDefaults.contains) == true {
+                        GooglePersonalModeLink()
+                    }
+                    if isAccount && existingID == nil {
                         detail(L10n.string("Leave the app fields blank to use the OAuth app already configured on the host."))
                     }
                     field(L10n.string("Client ID")) { TextField(L10n.string("Client ID"), text: $clientID) }

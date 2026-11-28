@@ -3,18 +3,10 @@ import Foundation
 import FoundationNetworking
 #endif
 
-/// Google's sign-in for the services Yardlet serves itself: Gmail, Calendar, Drive, Analytics, and
-/// Ads, each account signed in once with the scopes of the services turned on for it
-/// (docs/CONNECTORS.md, "Google").
-///
-/// Two apps can sign in. A build may carry Yardlet's own Desktop client (`BuiltInApp`, from the
-/// bundle's Info.plist), so a person only signs in; it signs in for Gmail, Calendar, and Drive
-/// only (`BuiltInApp.services`). The person may instead register an app in their own Google Cloud
-/// project, which signs in for every service: its client ID and secret are one item in the secure
-/// store (`appCredentialID`), kept apart from each account's tokens, and it takes precedence over
-/// the built-in one. Each account's item carries the client it signed in with, so a refresh keeps
-/// working whichever app later signs in new accounts.
+/// OAuth clients for the Calendar screen and for account-scoped agent tools.
 enum GoogleOAuth {
+    static let personalModeURL = URL(string: "https://console.cloud.google.com/auth/overview/personal?apis=ws,wsmcp&clientType=desktop&isAgent=true")!
+
     /// The Desktop OAuth client a build carries, from `YardletGoogleOAuthClientID` and
     /// `YardletGoogleOAuthClientSecret` in Info.plist (scripts/build-app.sh writes them from
     /// Packaging/GoogleOAuthClient.json, which stays out of git). An installed app's secret ships
@@ -29,7 +21,7 @@ enum GoogleOAuth {
 
         /// The services Yardlet's own app signs in for, whose scopes are the ones its Google Cloud
         /// project lists. Analytics and Ads sign in only with an app of the person's own.
-        static let services: [LocalConnectorService] = [.gmail, .googleCalendar, .googleDrive]
+        static let services: [LocalConnectorService] = [.googleCalendar]
 
         /// The app in a bundle's info dictionary; nil when the build carries none.
         static func from(info: [String: Any]?) -> BuiltInApp? {
@@ -50,13 +42,8 @@ enum GoogleOAuth {
         var gmailAPI: URL
         /// The Calendar API's base, `…/calendar/v3/`.
         var calendarAPI: URL = Endpoints.liveCalendar
-        /// The Drive API's base, `…/drive/v3/`, and its upload base, `…/upload/drive/v3/`.
+        /// Used to identify an account signing in for Drive alone.
         var driveAPI: URL = Endpoints.liveDrive
-        var driveUpload: URL = Endpoints.liveDriveUpload
-        /// The Docs, Sheets, and Slides APIs' bases, which the Drive connector's editing tools call.
-        var docsAPI: URL = Endpoints.liveDocs
-        var sheetsAPI: URL = Endpoints.liveSheets
-        var slidesAPI: URL = Endpoints.liveSlides
         /// The Analytics Admin and Data APIs' bases (v1beta), and the Google Ads API's (v26).
         var analyticsAdminAPI: URL = Endpoints.liveAnalyticsAdmin
         var analyticsDataAPI: URL = Endpoints.liveAnalyticsData
@@ -67,10 +54,6 @@ enum GoogleOAuth {
 
         private static let liveCalendar = URL(string: "https://www.googleapis.com/calendar/v3/")!
         private static let liveDrive = URL(string: "https://www.googleapis.com/drive/v3/")!
-        private static let liveDriveUpload = URL(string: "https://www.googleapis.com/upload/drive/v3/")!
-        private static let liveDocs = URL(string: "https://docs.googleapis.com/v1/")!
-        private static let liveSheets = URL(string: "https://sheets.googleapis.com/v4/")!
-        private static let liveSlides = URL(string: "https://slides.googleapis.com/v1/")!
         private static let liveAnalyticsAdmin = URL(string: "https://analyticsadmin.googleapis.com/v1beta/")!
         private static let liveAnalyticsData = URL(string: "https://analyticsdata.googleapis.com/v1beta/")!
         private static let liveAds = URL(string: "https://googleads.googleapis.com/v26/")!
@@ -87,9 +70,9 @@ enum GoogleOAuth {
         /// The API base a service's requests go to; a service not Google's keeps its own address.
         func base(for service: LocalConnectorService) -> URL {
             switch service {
-            case .gmail: gmailAPI
-            case .googleCalendar: calendarAPI
-            case .googleDrive: driveAPI
+            case .gmail: GoogleWorkspaceEndpoint.gmail.url
+            case .googleCalendar: GoogleWorkspaceEndpoint.calendar.url
+            case .googleDrive: GoogleWorkspaceEndpoint.drive.url
             case .googleAnalytics: analyticsAdminAPI
             case .googleAds: adsAPI
             default: service.address
@@ -97,41 +80,23 @@ enum GoogleOAuth {
         }
     }
 
-    /// How Google classes a scope Yardlet asks for, as its documentation and the Cloud console's
-    /// Data Access page show it: a restricted scope is on Google's restricted list
-    /// (support.google.com/cloud/answer/13464325); Calendar's are not, and are sensitive.
-    enum Classification: String, Sendable {
-        case nonSensitive
-        case sensitive
-        case restricted
+    /// OAuth scopes requested by the six Workspace MCP endpoints.
+    static func workspaceScopes(for service: LocalConnectorService) -> [String] {
+        let names: [String] = switch service {
+        case .gmail: ["gmail.modify", "gmail.settings.basic"]
+        case .googleCalendar: ["calendar.calendarlist.readonly", "calendar.events", "calendar.events.freebusy"]
+        case .googleDrive: ["drive", "documents", "spreadsheets", "presentations"]
+        default: []
+        }
+        return names.map { "https://www.googleapis.com/auth/" + $0 }
     }
 
-    struct Scope: Equatable, Sendable {
-        let url: String
-        let service: LocalConnectorService
-        let classification: Classification
-
-        /// `gmail.modify` for `https://www.googleapis.com/auth/gmail.modify`.
-        var shortName: String { url.replacingOccurrences(of: "https://www.googleapis.com/auth/", with: "") }
-    }
-
-    /// Every scope Yardlet asks Google for, by service, with Google's class.
-    static let scopes: [Scope] = [
-        Scope(url: GmailToolCatalog.scope, service: .gmail, classification: .restricted),
-        Scope(url: GoogleCalendarToolCatalog.calendarListScope, service: .googleCalendar, classification: .sensitive),
-        Scope(url: GoogleCalendarToolCatalog.eventsScope, service: .googleCalendar, classification: .sensitive),
-        Scope(url: GoogleCalendarToolCatalog.freeBusyScope, service: .googleCalendar, classification: .sensitive),
-        Scope(url: GoogleDriveToolCatalog.readScope, service: .googleDrive, classification: .restricted),
-        Scope(url: GoogleDriveToolCatalog.fileScope, service: .googleDrive, classification: .nonSensitive),
-        // Google's sensitive list is not public; the Cloud console's Data Access page shows the class.
-        Scope(url: GoogleAnalyticsToolCatalog.readScope, service: .googleAnalytics, classification: .sensitive),
-        // developers.google.com/google-ads/api/docs/productionize/secure-credentials.
-        Scope(url: GoogleAdsToolCatalog.scope, service: .googleAds, classification: .restricted),
-        Scope(url: GoogleOAuth.emailScope, service: .googleAnalytics, classification: .nonSensitive)
-    ]
+    static let mailboxScope = "https://www.googleapis.com/auth/gmail.modify"
 
     /// The account's address, which names an account that has none of Gmail, Calendar, and Drive.
     static let emailScope = "https://www.googleapis.com/auth/userinfo.email"
+
+    static var calendarUIScope: String { (["openid", emailScope] + LocalConnectorService.googleCalendar.scopes).joined(separator: " ") }
 
     /// The scopes for a set of Google services, in the directory's order, space-separated.
     static func scope(for services: some Sequence<LocalConnectorService>) -> String {

@@ -1075,17 +1075,17 @@ actor ClaudeAdapter:
                 .map(ClaudeAnswerableTool.names.contains) ?? false
             // A scheduled-task change, and a Google write (a Gmail send, draft deletion, or label
             // change, a Calendar event, a Drive file), is asked each time, with no "always allow", as
-            // the Claude app asks before its own (`ScheduleToolApproval`, `GoogleToolApproval`). A
+            // the Claude app asks before its own (`ScheduleToolApproval`, `LocalConnectorApproval`). A
             // mail draft to send (or a Gmail draft to delete) is read first, so its card shows what
             // it holds; the session's later frames wait for it.
             let toolName = request["tool_name"]?.stringValue
             var mailDraft: MailDraftPreview?
-            if GmailToolApproval.readsDraft(toolName: toolName) {
-                mailDraft = await GmailToolApproval.draft(toolName: toolName, input: input)
+            if MailDraftApproval.readsDraft(toolName: toolName) {
+                mailDraft = await MailDraftApproval.draft(toolName: toolName, input: input)
             }
             let continued = await ScheduleToolApproval.continuedTask(toolName: toolName, input: input)
             let schedule = ScheduleToolApproval.request(toolName: toolName, input: input, continuing: continued)
-                ?? GoogleToolApproval.request(toolName: toolName, input: input, mailDraft: mailDraft)
+                ?? LocalConnectorApproval.request(toolName: toolName, input: input, mailDraft: mailDraft)
             // Any other Yardlet write (a remote connector's, a draft, a saved sign-in fill) is asked each time
             // too: Yardlet takes this card as the person's answer for the call (`AgentToolBroker+Approvals`).
             // A browser tool that acts in a page may be allowed for the session, never for good.
