@@ -865,7 +865,6 @@
 "OpenCode provider status could not be confirmed." = "无法确认 OpenCode 提供商状态。";
 "OpenCode provider credentials and environment" = "OpenCode 提供商凭据与环境";
 "Antigravity CLI credentials are stored in macOS Keychain." = "Antigravity CLI 凭据存储在 macOS Keychain 中。";
-"No Antigravity CLI credentials were found in macOS Keychain." = "在 macOS Keychain 中未找到 Antigravity CLI 凭据。";
 "Antigravity CLI Keychain status could not be confirmed." = "无法确认 Antigravity CLI 的 Keychain 状态。";
 "macOS Keychain (Antigravity CLI)" = "macOS Keychain (Antigravity CLI)";
 "Opening Antigravity CLI sign-in…" = "正在打开 Antigravity CLI 登录…";

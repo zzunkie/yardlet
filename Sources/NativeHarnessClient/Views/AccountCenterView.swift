@@ -1116,7 +1116,6 @@ struct ConnectionCenterContent: View {
             HStack {
                 Button {
                     model.closeConsole()
-                    Task { await recheckAccounts(of: descriptor.id) }
                 } label: {
                     Label(L10n.string("Back"), systemImage: "chevron.left")
                 }
@@ -1220,7 +1219,6 @@ struct ConnectionCenterContent: View {
                                 onFinish()
                             } else {
                                 model.closeConsole()
-                                Task { await recheckAccounts(of: descriptor.id) }
                             }
                         }
                         .controlSize(.small)
@@ -1289,6 +1287,17 @@ struct ConnectionCenterContent: View {
         }
         .onChange(of: model.loginController.isRunning) { wasRunning, isRunning in
             guard wasRunning, !isRunning else { return }
+            if descriptor.id == .antigravityCLI {
+                if model.loginController.phase == .completed, model.loginController.operation == .connect {
+                    model.useFinishedSignIn()
+                    model.closeConsole()
+                    if returnsSetupToTask { onFinish() }
+                    return
+                }
+                // A verified sign-out or a sign-in verification already published its reading.
+                if model.loginController.connectionVerified
+                    || (model.loginController.operation == .connect && model.loginController.exitCode == 0) { return }
+            }
             Task { await recheckAccounts(of: descriptor.id) }
         }
     }

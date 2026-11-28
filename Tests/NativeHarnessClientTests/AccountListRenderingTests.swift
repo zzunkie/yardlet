@@ -192,6 +192,122 @@ import XCTest
         }
     }
 
+    /// The Home sheet and Settings both return after OAuth while a slow quota read is pending.
+    /// Exercise a CLI that exits and one that stays in its editor, using only fixture processes.
+    func testAntigravityBrowserSignInReturnsBeforeQuota() async throws {
+        let descriptor = try XCTUnwrap(HarnessCatalog.descriptor(for: .antigravityCLI))
+        for fromHome in [true, false] {
+            let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+            roots.append(root)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            let cli = root.appending(path: "custom-agy")
+            try Data("""
+            #!/bin/sh
+            cd "$(dirname "$0")" || exit 1
+            [ "$AGY_CLI_DISABLE_AUTO_UPDATE" = true ] || exit 2
+            if [ "$*" = "help acp" ]; then
+                \(fromHome ? "echo '  --login   Sign in'" : "exit 1")
+            elif [ "$AGY_CLI_CDE_AUTH_ACTION" = check ]; then
+                echo check >> reads
+                while [ ! -f confirm ]; do sleep 0.05; done
+                echo 'Already authenticated.'
+            elif [ "$*" = "--print /usage --output-format json" ]; then
+                echo usage >> reads
+                while [ ! -f release ]; do sleep 0.05; done
+            elif [ "$*" = "acp --login" ]; then
+                echo 'https://antigravity.google/terms'
+                while [ ! -f authorized ]; do sleep 0.05; done
+            else
+                echo 'Select login method:'
+                read -r choice
+                sleep 120
+            fi
+            """.utf8).write(to: cli)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: cli.path)
+            let runtime = RuntimeSelectionStore(defaults: SuggestionVolatileDefaults(), discoversRuntimes: false,
+                                               loadsPersistedSelections: false)
+            runtime.select(cli, for: .antigravityCLI)
+            let store = ProviderConnectionStore()
+            let model = AccountCenterModel(connections: store)
+            let signedOut = HarnessAccountBroker.antigravityAuthSnapshot(descriptor: descriptor, state: .signedOut,
+                                                                         accountLabel: nil)
+            store.publishDefaults([signedOut])
+            var finishes = 0
+            let choice = store.choice(for: .antigravityCLI, connection: nil)
+            let page = ConnectionCenterContent(tab: .accounts, model: model, runtimeSelections: runtime,
+                connections: store, initialHarness: nil, initialChoice: fromHome ? choice : nil,
+                returnsSetupToTask: fromHome, addingAccount: .constant(false), setupExpanded: .constant(false),
+                onFinish: {
+                    XCTAssertEqual(store.defaultSnapshots[.antigravityCLI]?.state, .signedIn)
+                    finishes += 1
+                })
+            let host = WindowlessRender.Host(page, size: NSSize(width: 629, height: 400), appearance: .light)
+            defer { model.closeConsole(); host.close() }
+            if !fromHome { await model.login(descriptor: descriptor, runtimeSelections: runtime) }
+            await host.settle(until: { model.loginController.phase == .browserHandoff })
+            XCTAssertNil(model.loginController.detectedURL)
+            try Data().write(to: root.appending(path: "authorized"))
+            let reads = root.appending(path: "reads")
+            await host.settle(until: { FileManager.default.fileExists(atPath: reads.path) })
+            XCTAssertEqual(finishes, 0)
+            XCTAssertEqual(model.activeHarness, .antigravityCLI)
+            XCTAssertTrue(model.loginController.isRunning)
+            XCTAssertNotEqual(model.loginController.phase, .completed)
+            try Data().write(to: root.appending(path: "confirm"))
+            await host.settle(until: { model.activeHarness == nil })
+            XCTAssertEqual(finishes, fromHome ? 1 : 0)
+            try await waitUntil { (try? String(contentsOf: reads, encoding: .utf8))?.contains("usage") == true }
+            XCTAssertNil(model.activeHarness)
+            XCTAssertEqual(store.defaultSnapshots[.antigravityCLI]?.state, .signedIn)
+            try Data().write(to: root.appending(path: "release"))
+            try await waitUntil { store.checkingKeys.isEmpty }
+            XCTAssertEqual(try String(contentsOf: reads, encoding: .utf8), "check\nusage\n")
+        }
+    }
+
+    func testSuccessfulAntigravityExitWithoutALoginKeepsTheConsoleOpen() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        roots.append(root)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let cli = root.appending(path: "agy")
+        try Data("""
+        #!/bin/sh
+        case "$*" in
+          "help acp") echo '  --login   Sign in' ;;
+          "acp --login") echo 'Browser flow ended.' ;;
+          *) exit 2 ;;
+        esac
+        """.utf8).write(to: cli)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: cli.path)
+        let store = ProviderConnectionStore(defaultLoader: { descriptor, _ in
+            HarnessAccountBroker.antigravityAuthSnapshot(descriptor: descriptor, state: .signedOut, accountLabel: nil)
+        })
+        let runtime = RuntimeSelectionStore(defaults: SuggestionVolatileDefaults(), discoversRuntimes: false,
+                                           loadsPersistedSelections: false)
+        runtime.select(cli, for: .antigravityCLI)
+        let model = AccountCenterModel(connections: store)
+        let page = ConnectionCenterContent(tab: .accounts, model: model, runtimeSelections: runtime,
+            connections: store, initialHarness: nil, initialChoice: store.choice(for: .antigravityCLI, connection: nil),
+            returnsSetupToTask: true, addingAccount: .constant(false), setupExpanded: .constant(false),
+            onFinish: { XCTFail("A signed-out account cannot finish setup") })
+            .frame(width: 629, height: 400)
+            .background(ParityTheme.canvas)
+            .environment(\.colorScheme, .light)
+        let host = WindowlessRender.Host(page, size: NSSize(width: 629, height: 400), appearance: .light)
+        defer { model.closeConsole(); host.close() }
+        await host.settle(until: { model.loginController.phase == .failed })
+        XCTAssertEqual(model.loginController.exitCode, 0)
+        XCTAssertEqual(store.defaultSnapshots[.antigravityCLI]?.state, .signedOut)
+        XCTAssertEqual(model.activeHarness, .antigravityCLI)
+        let failure = L10n.string("Connection could not be completed")
+        await host.settle(until: {
+            host.accessibilityElements().contains { $0.value.contains(failure) || $0.label.contains(failure) }
+        })
+        XCTAssertTrue(host.accessibilityElements().contains { $0.label == L10n.string("Show CLI details") })
+        let directory = try WindowlessRender.directory("account-list-qa")
+        try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "login-verification-failed.png"))
+    }
+
     /// Settings › Harness Accounts' default Antigravity login, which the CLI keeps in one keychain item, so
     /// another account means signing out and in again. Its row's menu offers both, as the Harnesses
     /// page does. The CLI signs out in its own terminal and stays open, so the console finishes when
@@ -208,11 +324,13 @@ import XCTest
         try Data("""
         #!/bin/sh
         root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+        [ "$*" = "help acp" ] && exit 2
         if [ -f "$root/signed-out" ]; then
             printf 'Select login method:\\n'
             IFS= read -r input
             touch "$root/sign-in-started"
         else
+            printf '? for shortcuts\\n'
             IFS= read -r input
             [ "$input" = '/logout' ] || exit 3
             touch "$root/signed-out"
@@ -300,6 +418,7 @@ import XCTest
         XCTAssertEqual(model.activeHarness, .antigravityCLI)
         XCTAssertEqual(model.loginController.operation, .connect)
         XCTAssertTrue(model.loginController.isRunning)
+        XCTAssertEqual(model.loginController.phase, .browserHandoff)
         try WindowlessRender.hostedInBothAppearances("default-login-sign-in", in: directory, size: size, content: page)
 
         // A CLI whose sign-out exits (Claude Code's `auth logout`) opens its sign-in once it has exited.

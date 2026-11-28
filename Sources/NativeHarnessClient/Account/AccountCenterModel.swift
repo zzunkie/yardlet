@@ -55,13 +55,22 @@ final class AccountCenterModel {
               let command = await (connection.map { HarnessAccountBroker(connection: $0) } ?? broker).loginCommand(
                 for: descriptor.id,
                 executableURL: executableURL
-              ) else { return }
+              ), runtimeSelections.selectedURL(for: descriptor.id) == executableURL else { return }
         stopConnectionVerification()
         activeConnection = connection
         activeHarness = descriptor.id
-        loginController.start(command)
-        // Pi returns to its editor after OAuth, and Antigravity to its chat, instead of exiting.
-        if [.pi, .antigravityCLI].contains(descriptor.id) {
+        if descriptor.id == .antigravityCLI {
+            loginController.start(command) { [weak self] in
+                guard let self else { return false }
+                self.stopConnectionVerification()
+                return await self.connections.verifyAntigravityLogin(descriptor, executableURL: executableURL,
+                                                                    runtimeSelections: runtimeSelections)
+            }
+        } else {
+            loginController.start(command)
+        }
+        // Pi and older Antigravity versions stay in their editor after signing in.
+        if descriptor.id == .pi || (descriptor.id == .antigravityCLI && command.initialInput != nil) {
             follow(descriptor: descriptor, executableURL: executableURL, runtimeSelections: runtimeSelections,
                    probes: true, until: { [weak self] in
                        // A Pi login completes for the provider it was opened for.
@@ -136,13 +145,17 @@ final class AccountCenterModel {
                     let readsDefault = self.activeConnection?.homePath == nil
                     let read = readsDefault ? self.connections.beginRead(ofDefault: descriptor.id) : nil
                     let snapshot = await self.connections.readDefault(descriptor, executableURL: executableURL,
-                        connection: self.activeConnection)
+                        connection: self.activeConnection, authOnly: true)
                     guard !Task.isCancelled, self.isFollowing(verificationID, descriptor.id, executableURL,
                         runtimeSelections), self.loginController.isRunning else { return }
                     // A check can supersede this read while the same console is still open. Discard
                     // only this result and keep following.
                     if let read, !self.connections.finishRead(read, with: snapshot) { continue }
                     guard isDone(snapshot) else { continue }
+                    if descriptor.id == .antigravityCLI, snapshot.state == .signedIn {
+                        self.connections.refreshAntigravityUsage(snapshot, executableURL: executableURL,
+                                                               runtimeSelections: runtimeSelections)
+                    }
                     self.loginController.completeVerifiedConnection()
                 }
                 if self.loginController.phase == .completed, let next { await next() }

@@ -359,13 +359,14 @@ final class RuntimeSelectionStore {
     }
 
     /// The legacy `antigravity` executable is an IDE launcher. The supported
-    /// structured headless runtime is the official `agy` CLI (`agy.exe` on Windows).
+    /// runtime is the CLI, which can also be selected through a wrapper or a symlink.
     nonisolated static func isCompatibleRuntime(_ url: URL, for harness: HarnessKind) -> Bool {
         if harness == .antigravityCLI {
             let lookup = ExecutableLookup.current
             let name = lookup.isWindows && lookup.extensions.contains("." + url.pathExtension.lowercased())
                 ? url.deletingPathExtension().lastPathComponent.lowercased() : url.lastPathComponent
-            return name == "agy"
+            let resolved = url.resolvingSymlinksInPath().deletingPathExtension().lastPathComponent
+            return name.lowercased() != "antigravity" && resolved.lowercased() != "antigravity"
         }
         return true
     }

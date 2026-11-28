@@ -198,7 +198,7 @@ final class NativeHarnessClientAppTests: XCTestCase {
                 executableURL: URL(filePath: "/bin/sh"),
                 arguments: [
                     "-c",
-                    "printf 'Open https://auth.example.test/device\\n'; "
+                    "printf 'https://example.test/\\n'; read -r next; " + "printf 'Open https://auth.example.test/device\\n'; "
                         + "printf 'Verification code: ABCD-EFGH\\n'; /bin/sleep 120"
                 ],
                 initialInput: nil
@@ -207,7 +207,9 @@ final class NativeHarnessClientAppTests: XCTestCase {
         let terminal = attachLoginTerminal(to: controller)
         defer { _ = terminal }
 
-        try await waitUntil { controller.detectedURL != nil && controller.detectedCode != nil }
+        try await waitUntil { controller.detectedURL?.absoluteString == "https://example.test/" }
+        controller.pressEnter()
+        try await waitUntil { controller.detectedURL?.host == "auth.example.test" && controller.detectedCode != nil }
 
         XCTAssertEqual(controller.phase, .browserHandoff)
         XCTAssertEqual(controller.detectedURL?.absoluteString, "https://auth.example.test/device")

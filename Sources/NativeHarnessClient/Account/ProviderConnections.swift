@@ -1165,11 +1165,39 @@ final class ProviderConnectionStore {
 
     /// Reads a harness's default login, or the login a sign-in console works with (`connection`).
     func readDefault(_ descriptor: HarnessDescriptor, executableURL: URL?,
-                     connection: ProviderConnection? = nil) async -> HarnessAccountSnapshot {
+                     connection: ProviderConnection? = nil, authOnly: Bool = false) async -> HarnessAccountSnapshot {
         if let defaultLoader { return await defaultLoader(descriptor, executableURL) }
         let broker = connection.map { HarnessAccountBroker(connection: $0) }
             ?? HarnessAccountBroker(codexEnvironmentManager: codexEnvironmentManager)
+        if authOnly, descriptor.id == .antigravityCLI, let executableURL {
+            return await broker.antigravityAuthSnapshot(descriptor: descriptor, executableURL: executableURL)
+        }
         return await broker.snapshot(for: descriptor, executableURL: executableURL)
+    }
+
+    /// Publish the login the CLI actually stored before the console returns to the account list.
+    func verifyAntigravityLogin(_ descriptor: HarnessDescriptor, executableURL: URL,
+                                runtimeSelections: RuntimeSelectionStore) async -> Bool {
+        while !Task.isCancelled, runtimeSelections.selectedURL(for: descriptor.id) == executableURL {
+            let read = beginRead(ofDefault: descriptor.id)
+            let auth = await readDefault(descriptor, executableURL: executableURL, authOnly: true)
+            guard !Task.isCancelled, runtimeSelections.selectedURL(for: descriptor.id) == executableURL else { break }
+            guard finishRead(read, with: auth) else { continue }
+            guard auth.state == .signedIn else { return false }
+            refreshAntigravityUsage(auth, executableURL: executableURL, runtimeSelections: runtimeSelections)
+            return true
+        }
+        return false
+    }
+
+    func refreshAntigravityUsage(_ auth: HarnessAccountSnapshot, executableURL: URL,
+                                 runtimeSelections: RuntimeSelectionStore) {
+        guard defaultLoader == nil else { return }
+        _ = schedule(AccountSnapshotCache.defaultKey(for: auth.harness), policy: .restart) { isLatest in
+            let usage = await HarnessAccountBroker().antigravityUsage(executableURL: executableURL)
+            guard isLatest(), runtimeSelections.selectedURL(for: auth.harness) == executableURL else { return }
+            self.applyDefault(auth.replacingUsage(usage))
+        }
     }
 
     private func read(_ connection: ProviderConnection, executableURL: URL?) async -> HarnessAccountSnapshot {

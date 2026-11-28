@@ -54,18 +54,21 @@ import XCTest
         try Data("#!/bin/sh\n".utf8).write(to: agy)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: agy.path)
         let size = NSSize(width: 820, height: 330)
-        let details: [(HarnessKind, String)] = [
-            (.claudeCode, ProviderSignIn.neededHere(.claudeCode)),
-            (.codex, ProviderSignIn.neededHere(.codex)),
-            (.antigravityCLI, L10n.string("No Antigravity CLI credentials were found in macOS Keychain."))]
-        for (harness, detail) in details {
+        for harness in [HarnessKind.claudeCode, .codex, .antigravityCLI] {
+            let descriptor = try XCTUnwrap(HarnessCatalog.descriptor(for: harness))
+            let detail = ProviderSignIn.neededHere(harness)
             let store = ProviderConnectionStore()
             store.usesFixtureSnapshots = true
             func reading(_ state: AccountAuthState, label: String? = nil) -> HarnessAccountSnapshot {
-                HarnessAccountSnapshot(id: harness.rawValue, harness: harness, providerID: nil, state: state,
+                if harness == .antigravityCLI {
+                    return HarnessAccountBroker.antigravityAuthSnapshot(descriptor: descriptor,
+                                                                       state: state, accountLabel: label)
+                }
+                return HarnessAccountSnapshot(id: harness.rawValue, harness: harness, providerID: nil, state: state,
                     accountLabel: label, detail: detail, credentialOwner: harness.displayName, checkedAt: Date(),
                     usage: [], canLogin: state != .signedIn, canLogout: state == .signedIn)
             }
+            XCTAssertEqual(reading(.signedOut).detail, detail)
             store.publishDefaults([reading(.signedOut)])
             let runtime = RuntimeSelectionStore(defaults: SuggestionVolatileDefaults(), discoversRuntimes: false,
                                                 loadsPersistedSelections: false)

@@ -52,11 +52,11 @@ final class AccountBoundaryTests: XCTestCase {
         XCTAssertNil(command?.initialInput)
     }
 
-    func testAntigravityLoginUsesOfficialAgyAndExplainsQuietBrowserHandoff() async {
+    func testAntigravityLoginUsesOfficialAgyAndExplainsQuietBrowserHandoff() async throws {
         let broker = HarnessAccountBroker()
         let command = await broker.loginCommand(
             for: .antigravityCLI,
-            executableURL: URL(filePath: "/tmp/agy")
+            executableURL: URL(filePath: "/usr/bin/false")
         )
 
         XCTAssertEqual(command?.arguments, [])
@@ -65,11 +65,56 @@ final class AccountBoundaryTests: XCTestCase {
         XCTAssertEqual(command?.usesPseudoTerminal, true)
         XCTAssertEqual(command?.interaction, .guided)
         XCTAssertTrue(command?.startupMessage?.contains("Antigravity") ?? false)
-        let legacyCommand = await broker.loginCommand(
+        XCTAssertEqual(command?.environment["AGY_CLI_DISABLE_AUTO_UPDATE"], "true")
+        let executable = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: executable) }
+        try Data("""
+        #!/bin/sh
+        [ "$*" = "help acp" ] && [ "$AGY_CLI_DISABLE_AUTO_UPDATE" = true ] || exit 1
+        echo '  --login    Sign in'
+        """.utf8).write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        let dedicated = await broker.loginCommand(
             for: .antigravityCLI,
-            executableURL: URL(filePath: "/tmp/antigravity")
+            executableURL: executable
         )
-        XCTAssertNil(legacyCommand)
+        XCTAssertEqual(dedicated?.arguments, ["acp", "--login"])
+        XCTAssertNil(dedicated?.initialInput)
+        XCTAssertNil(dedicated?.initialInputTrigger)
+        let controller = AccountLoginController()
+        controller.start(try XCTUnwrap(dedicated))
+        XCTAssertEqual(controller.phase, .browserHandoff)
+        controller.stop()
+        let logout = await broker.logoutCommand(for: .antigravityCLI, executableURL: executable)
+        XCTAssertEqual(logout?.environment["AGY_CLI_DISABLE_AUTO_UPDATE"], "true")
+        XCTAssertNotNil(logout?.initialInputTrigger)
+    }
+
+    func testChangingRuntimeDuringLoginDiscoveryDoesNotOpenTheOldConsole() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cli = root.appending(path: "agy")
+        try Data("""
+        #!/bin/sh
+        cd "$(dirname "$0")" || exit 1
+        touch checking
+        while [ ! -f release ]; do sleep 0.02; done
+        echo '  --login    Sign in'
+        """.utf8).write(to: cli)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: cli.path)
+        let descriptor = try XCTUnwrap(HarnessCatalog.descriptor(for: .antigravityCLI))
+        let model = AccountCenterModel(connections: ProviderConnectionStore())
+        let runtime = RuntimeSelectionStore(defaults: SuggestionVolatileDefaults(), discoversRuntimes: false,
+                                            loadsPersistedSelections: false)
+        runtime.select(cli, for: descriptor.id)
+        let login = Task { await model.login(descriptor: descriptor, runtimeSelections: runtime) }
+        try await waitUntil { FileManager.default.fileExists(atPath: root.appending(path: "checking").path) }
+        runtime.select(URL(filePath: "/usr/bin/true"), for: descriptor.id)
+        try Data().write(to: root.appending(path: "release"))
+        await login.value
+        XCTAssertNil(model.activeHarness)
+        XCTAssertFalse(model.loginController.isRunning)
     }
 
     func testOpenCodeProviderStateRequiresStoredConnectionInsteadOfInheritedEnvironmentKey() {
@@ -532,6 +577,14 @@ final class AccountBoundaryTests: XCTestCase {
             AccountLoginController.firstHTTPSURL(in: value)?.absoluteString,
             "https://auth.example.test/device"
         )
+        let policies = "https://antigravity.google/terms https://cloud.google.com/terms/ https://example.test/privacy"
+        XCTAssertNil(AccountLoginController.firstHTTPSURL(in: policies))
+        XCTAssertEqual(AccountLoginController.firstHTTPSURL(in: policies + " https://accounts.google.com/login")?.host,
+                       "accounts.google.com")
+        XCTAssertFalse(AccountLoginController.outputRequiresInput("Select login method:\n● Google\n○ Enter API key",
+                                                                  automaticPrompt: "Select login method:"))
+        XCTAssertTrue(AccountLoginController.outputRequiresInput("Select login method:\n● Google\n○ Key\nNext\n● A\n○ B",
+                                                                 automaticPrompt: "Select login method:"))
         XCTAssertTrue(AccountLoginController.outputRequiresInput(
             "Login method\n● ChatGPT Pro/Plus (browser)\n○ Manually enter API Key"
         ))

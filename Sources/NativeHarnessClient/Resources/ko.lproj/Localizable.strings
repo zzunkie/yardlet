@@ -865,7 +865,6 @@
 "OpenCode provider status could not be confirmed." = "OpenCode 제공자 상태를 확인할 수 없습니다.";
 "OpenCode provider credentials and environment" = "OpenCode 제공자 인증 저장소 및 환경";
 "Antigravity CLI credentials are stored in macOS Keychain." = "Antigravity CLI 인증 정보가 macOS 키체인에 저장되어 있습니다.";
-"No Antigravity CLI credentials were found in macOS Keychain." = "macOS 키체인에서 Antigravity CLI 인증 정보를 찾지 못했습니다.";
 "Antigravity CLI Keychain status could not be confirmed." = "Antigravity CLI 키체인 상태를 확인할 수 없습니다.";
 "macOS Keychain (Antigravity CLI)" = "macOS 키체인(Antigravity CLI)";
 "Opening Antigravity CLI sign-in…" = "Antigravity CLI 로그인 화면을 여는 중…";
