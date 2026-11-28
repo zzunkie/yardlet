@@ -85,6 +85,7 @@ final class ConversationTurnHosting {
     /// The text of the turn's streaming message since the turn was last drawn whole.
     private let streamedText = ConversationStreamedText()
     private var shown: ConversationTurnHost?
+    private let controls = ConversationTurnControls()
     private var shownLook: ConversationTurnLook?
     private var heights: [CGFloat: CGFloat] = [:]
     private var reportedHeight: CGFloat?
@@ -117,13 +118,17 @@ final class ConversationTurnHosting {
     /// rest of the turn, which drawing it whole compared, laid out and gave the conversation's
     /// environment again, is what it was.
     func show(_ host: ConversationTurnHost, environment: EnvironmentValues) {
+#if DEBUG
+        ViewBodyCensus.note(.conversationTurnShow)
+#endif
+        controls.update(environment)
         let look = ConversationTurnLook(environment)
         if let shown, shown == host, look == shownLook { return }
         if let shown, look == shownLook, shown.offers == host.offers, shown.renderState === host.renderState,
            shown.part == host.part, let change = host.turn.streamedTextChange(from: shown.turn) {
             self.shown = host
             streamedText.set(change.message, for: change.itemID)
-            heights = [:]
+            clearHeights()
             return
         }
         shown = host
@@ -131,7 +136,7 @@ final class ConversationTurnHosting {
 #if DEBUG
         ViewBodyCensus.note(.conversationTurn)
 #endif
-        heights = [:]
+        clearHeights()
         streamedText.clear()
         controller.rootView = AnyView(
             ConversationTurnView(turn: host.turn, part: host.part, context: host.context, handlers: host.handlers)
@@ -143,6 +148,7 @@ final class ConversationTurnHosting {
                     self?.contentHeightChanged(height)
                 }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
+                .modifier(ConversationControlEnvironment(controls: controls))
                 .environment(\.self, environment)
         )
     }
@@ -150,8 +156,15 @@ final class ConversationTurnHosting {
     private func contentHeightChanged(_ height: CGFloat) {
         guard height != reportedHeight else { return }
         reportedHeight = height
-        heights = [:]
+        clearHeights()
         onResize()
+    }
+
+    private func clearHeights() {
+#if DEBUG
+        ViewBodyCensus.note(.conversationHeightInvalidation)
+#endif
+        heights.removeAll(keepingCapacity: true)
     }
 
     func size(forWidth width: CGFloat) -> CGSize {
@@ -308,16 +321,41 @@ extension ConversationTurn {
     }
 }
 
+/// SwiftUI propagates each value to its readers without replacing the hosted turn or its size cache.
+@MainActor
+@Observable
+final class ConversationTurnControls {
+    var focus = ControlActiveState.key
+    var revealsActions = false
+    var shell: ClaudeShellCommandActions?
+
+    func update(_ environment: EnvironmentValues) {
+        if focus != environment.controlActiveState { focus = environment.controlActiveState }
+        if revealsActions != environment.revealsSentMessageActions { revealsActions = environment.revealsSentMessageActions }
+        if shell != environment.claudeShellCommands { shell = environment.claudeShellCommands }
+    }
+}
+
+private struct ConversationControlEnvironment: ViewModifier {
+    let controls: ConversationTurnControls
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.controlActiveState, controls.focus)
+            .environment(\.revealsSentMessageActions, controls.revealsActions)
+            .environment(\.claudeShellCommands, controls.shell)
+    }
+}
+
 /// The environment a turn's views read that changes how they draw. A turn whose content did not
 /// change is drawn again only when one of these did; the rest of the environment (actions, closures)
 /// is what the turn was last drawn with, as an unchanged `.equatable()` turn kept it before. The
 /// system's values are here too, since the turn's hosting view takes the conversation's environment
-/// whole: an assistive app starting, the window going inactive, another display.
+/// whole: an assistive app starting or a different display.
 struct ConversationTurnLook: @MainActor Equatable {
     // The system's.
     let colorScheme: ColorScheme
     let contrast: ColorSchemeContrast
-    let controlActiveState: ControlActiveState
     let displayScale: CGFloat
     let layoutDirection: LayoutDirection
     let locale: Locale
@@ -334,12 +372,9 @@ struct ConversationTurnLook: @MainActor Equatable {
     let theme: MacColorTheme
     let codeFont: YardletCodeFont
     let workspaceURL: URL?
-    let revealsActions: Bool
     let opensDetailsForReview: Bool
     let find: ObjectIdentifier?
-    /// A bash row's actions: whether a command runs, and the task they are bound to (they read the
-    /// task's record afresh when used).
-    let shellCommandRunning: Bool?
+    /// The task a bash row’s actions are bound to.
     let shellCommandTask: UUID?
     let modelNames: HarnessModelNames?
 
@@ -347,7 +382,6 @@ struct ConversationTurnLook: @MainActor Equatable {
     init(_ environment: EnvironmentValues) {
         colorScheme = environment.colorScheme
         contrast = environment.colorSchemeContrast
-        controlActiveState = environment.controlActiveState
         displayScale = environment.displayScale
         layoutDirection = environment.layoutDirection
         locale = environment.locale
@@ -363,10 +397,8 @@ struct ConversationTurnLook: @MainActor Equatable {
         theme = environment.yardletColorTheme
         codeFont = environment.yardletCodeFont
         workspaceURL = environment.transcriptWorkspaceURL
-        revealsActions = environment.revealsSentMessageActions
         opensDetailsForReview = environment.opensDetailsForReview
         find = environment.conversationFind.map(ObjectIdentifier.init)
-        shellCommandRunning = environment.claudeShellCommands?.isRunning
         shellCommandTask = environment.claudeShellCommands?.task?.id
         modelNames = environment.harnessModelNames
     }
@@ -404,16 +436,28 @@ final class ConversationRenderState {
         return hosting
     }
 
+    /// Reuse the row order’s array storage while it stays equal so list updates can compare it in constant time.
+    private var keptIDs: [String] = []
+
     /// Lets go of the hostings of turns the conversation no longer draws.
-    func keep(turnIDs: some Sequence<String>) {
+    @discardableResult
+    func keep(turnIDs: [String]) -> [String] {
+        if keptIDs == turnIDs, !turnIDs.isEmpty { return keptIDs }
+        keptIDs = turnIDs
         let kept = Set(turnIDs)
-        if hostings.keys.contains(where: { !kept.contains($0) }) {
-            hostings = hostings.filter { kept.contains($0.key) }
-        }
+        evict { id, _ in !kept.contains(id) }
+        return keptIDs
     }
 
     private func releaseHostings() {
-        hostings = hostings.filter { $0.value.holder != nil }
+        evict { _, hosting in hosting.holder == nil }
+    }
+
+    private func evict(where shouldRemove: (String, ConversationTurnHosting) -> Bool) {
+        for (id, hosting) in hostings where shouldRemove(id, hosting) {
+            DeferredHostingRelease.enqueue(hosting)
+            hostings[id] = nil
+        }
     }
 
     private static func touch(_ state: ConversationRenderState) {
@@ -422,6 +466,7 @@ final class ConversationRenderState {
         guard recent.count > recentLimit else { return }
         let stale = recent.values.sorted { $0.shown < $1.shown }.prefix(recent.count - recentLimit)
         for entry in stale {
+            DeferredHostingRelease.enqueue(entry.state)
             entry.state.releaseHostings()
             recent[ObjectIdentifier(entry.state)] = nil
         }

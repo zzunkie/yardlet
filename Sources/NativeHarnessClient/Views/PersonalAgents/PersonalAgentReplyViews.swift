@@ -331,6 +331,7 @@ private struct PersonalAgentReplyPanel: View {
 /// assistive app, motion, contrast) are the row's window's own.
 private struct PersonalAgentReplyRowEnvironment: ViewModifier {
     let environment: EnvironmentValues
+    let controls: ConversationTurnControls
 
     func body(content: Content) -> some View {
         content
@@ -347,7 +348,7 @@ private struct PersonalAgentReplyRowEnvironment: ViewModifier {
             .environment(\.pauseTranscriptFollowing, environment.pauseTranscriptFollowing)
             .environment(\.personalAgentConfirmationPrompt, environment.personalAgentConfirmationPrompt)
             .environment(\.personalAgentOriginalOpener, environment.personalAgentOriginalOpener)
-            .environment(\.revealsSentMessageActions, environment.revealsSentMessageActions)
+            .environment(\.revealsSentMessageActions, controls.revealsActions)
             .environment(\.transcriptCopyDetails, environment.transcriptCopyDetails)
             .environment(\.transcriptWorkspaceURL, environment.transcriptWorkspaceURL)
     }
@@ -368,6 +369,7 @@ final class PersonalAgentReplyRowHosting {
     }
 
     let controller = NSHostingController(rootView: AnyView(EmptyView()))
+    private let controls = ConversationTurnControls()
     private var shown: (shown: Shown, environment: ConversationTurnLook)?
     private var heights: [CGFloat: CGFloat] = [:]
     private var reportedHeight: CGFloat?
@@ -395,6 +397,7 @@ final class PersonalAgentReplyRowHosting {
     /// Returns whether it drew.
     @discardableResult
     func show(_ shown: Shown, identity: String, environment: EnvironmentValues, content: () -> AnyView) -> Bool {
+        controls.update(environment)
         let look = ConversationTurnLook(environment)
         if let current = self.shown, current.shown == shown, current.environment == look { return false }
         self.shown = (shown, look)
@@ -413,7 +416,7 @@ final class PersonalAgentReplyRowHosting {
                     self?.contentHeightChanged(height)
                 }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
-                .modifier(PersonalAgentReplyRowEnvironment(environment: environment))
+                .modifier(PersonalAgentReplyRowEnvironment(environment: environment, controls: controls))
         )
         return true
     }

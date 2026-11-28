@@ -72,7 +72,7 @@ final class TaskSurfaceHostings {
         kept.removeAll { $0.taskID == taskID }
         kept.append((taskID, hosting, presence))
         if kept.count > ConversationRenderState.recentLimit {
-            kept.removeFirst(kept.count - ConversationRenderState.recentLimit)
+            DeferredHostingRelease.enqueue(kept.removeFirst().hosting)
         }
         return (hosting, presence)
     }
@@ -124,5 +124,22 @@ extension EnvironmentValues {
     var taskSurfacePresence: TaskSurfacePresence? {
         get { self[TaskSurfacePresenceKey.self] }
         set { self[TaskSurfacePresenceKey.self] = newValue }
+    }
+}
+
+/// Keep evictions alive until AppKit finishes the current view update and display transaction.
+@MainActor
+enum DeferredHostingRelease {
+    private static var pending: [AnyObject] = []
+
+    static func enqueue(_ hosting: AnyObject) {
+        if pending.isEmpty {
+            DispatchQueue.main.async {
+                let releasing = pending
+                pending = []
+                withExtendedLifetime(releasing) {}
+            }
+        }
+        pending.append(hosting)
     }
 }

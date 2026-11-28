@@ -4,9 +4,8 @@ import Foundation
 /// and the place being read among them, as numbers. A row is a turn or a part of one
 /// (`ConversationTurnRows`), with the space above it (its lead), and below it for the last.
 ///
-/// Every height is one its row was measured at, at the list's width: a row is put in once it is
-/// measured, never at an estimate. A lazy stack's estimates of the rows it had not laid out moved by
-/// thousands of points as a working conversation's rows changed, and lost the rows in view.
+/// Unvisited rows use an estimate. Refining it preserves the same reading anchor as any other
+/// height change.
 ///
 /// The place being read is an anchor (`Anchor`): the end, while following the latest output, or a row
 /// and how far into it the viewport's top is. A change to the rows (rows arriving or leaving, a row
@@ -32,8 +31,8 @@ struct ConversationRowGeometry: Equatable, Sendable {
     private(set) var heights: [CGFloat] = []
     /// The space above each row's content, inside its height.
     private(set) var leads: [CGFloat] = []
-    /// Each row's top, and after them the end of the last row.
-    private(set) var tops: [CGFloat] = [0]
+    /// A Fenwick tree of row heights. Refining one estimate updates logarithmically many sums.
+    private var sums: [CGFloat] = [0]
     private var indexByID: [String: Int] = [:]
 
     init() {}
@@ -45,13 +44,21 @@ struct ConversationRowGeometry: Equatable, Sendable {
     var count: Int { ids.count }
     var isEmpty: Bool { ids.isEmpty }
     /// The rows' height together: the list's.
-    var contentHeight: CGFloat { tops[ids.count] }
+    var contentHeight: CGFloat { top(ofRow: count) }
 
     func index(of id: String) -> Int? { indexByID[id] }
 
-    func top(ofRow index: Int) -> CGFloat { tops[index] }
+    func top(ofRow index: Int) -> CGFloat {
+        var cursor = index
+        var sum: CGFloat = 0
+        while cursor > 0 {
+            sum += sums[cursor]
+            cursor -= cursor & -cursor
+        }
+        return sum
+    }
 
-    func bottom(ofRow index: Int) -> CGFloat { tops[index + 1] }
+    func bottom(ofRow index: Int) -> CGFloat { top(ofRow: index + 1) }
 
     /// The list's rows are now `ids`, `heights` tall with `leads` of space above their content (none when
     /// nil). Rows that keep their place and height do not move.
@@ -62,44 +69,51 @@ struct ConversationRowGeometry: Equatable, Sendable {
         if ids != self.ids {
             self.ids = ids
             indexByID = Dictionary(ids.enumerated().map { ($1, $0) }) { first, _ in first }
-            self.heights = heights
-            restack(from: 0)
-            return
         }
-        guard let first = heights.indices.first(where: { heights[$0] != self.heights[$0] }) else { return }
         self.heights = heights
-        restack(from: first)
+        sums = [0] + heights
+        for index in heights.indices {
+            let node = index + 1
+            let parent = node + (node & -node)
+            if parent < sums.count { sums[parent] += sums[node] }
+        }
     }
 
-    /// Row `index` is now `height` tall: it and the rows below it move, the ones above stay.
     mutating func setHeight(_ height: CGFloat, ofRow index: Int) {
-        guard heights[index] != height else { return }
+        let delta = height - heights[index]
+        guard delta != 0 else { return }
         heights[index] = height
-        restack(from: index)
-    }
-
-    private mutating func restack(from first: Int) {
-        if tops.count != ids.count + 1 { tops = [CGFloat](repeating: 0, count: ids.count + 1) }
-        for index in first..<ids.count { tops[index + 1] = tops[index] + heights[index] }
+        var node = index + 1
+        while node < sums.count {
+            sums[node] += delta
+            node += node & -node
+        }
     }
 
     /// The rows that cross the stretch of the list from `minY` to `maxY`.
     func rows(from minY: CGFloat, to maxY: CGFloat) -> Range<Int> {
         guard !ids.isEmpty, maxY > minY else { return 0..<0 }
         // The first row whose end is below the stretch's top, and the first whose top is at its bottom.
-        let first = firstIndex { tops[$0 + 1] > minY }
-        let end = firstIndex { tops[$0] >= maxY }
+        let first = countEnding { $0 <= minY }
+        let end = min(count, countEnding { $0 < maxY } + (maxY > 0 ? 1 : 0))
         return first..<max(first, end)
     }
 
-    /// The first row for which `isPast`, which turns from false to true down the rows, holds.
-    private func firstIndex(where isPast: (Int) -> Bool) -> Int {
-        var low = 0, high = ids.count
-        while low < high {
-            let middle = (low + high) / 2
-            if isPast(middle) { high = middle } else { low = middle + 1 }
+    /// Descend through the prefix sums to count rows whose bottom satisfies the bound.
+    private func countEnding(where includes: (CGFloat) -> Bool) -> Int {
+        guard count > 0 else { return 0 }
+        var step = 1 << (Int.bitWidth - 1 - count.leadingZeroBitCount)
+        var row = 0
+        var height: CGFloat = 0
+        while step > 0 {
+            let next = row + step
+            if next <= count, includes(height + sums[next]) {
+                row = next
+                height += sums[next]
+            }
+            step >>= 1
         }
-        return low
+        return row
     }
 
     // MARK: - The place being read
@@ -118,8 +132,8 @@ struct ConversationRowGeometry: Equatable, Sendable {
     /// viewport's top.
     func anchor(offset: CGFloat, following: Bool) -> Anchor {
         guard !following, !ids.isEmpty else { return .end }
-        let row = min(firstIndex { tops[$0 + 1] > offset }, ids.count - 1)
-        return .row(id: ids[row], into: offset - tops[row] - leads[row], height: heights[row] - leads[row])
+        let row = min(countEnding { $0 <= offset }, ids.count - 1)
+        return .row(id: ids[row], into: offset - top(ofRow: row) - leads[row], height: heights[row] - leads[row])
     }
 
     /// Where the viewport's top goes to show `anchor`, in a viewport `viewportHeight` tall. A row that
@@ -134,8 +148,8 @@ struct ConversationRowGeometry: Equatable, Sendable {
         case let .row(id, into, height):
             guard let row = indexByID[id] else { return min(max(0, fallback), maximum) }
             let now = heights[row] - leads[row]
-            let point = scales && height > 0 && now != height && into > 0 ? into * now / height : into
-            return min(max(0, tops[row] + leads[row] + point), maximum)
+            let point = scales && height > 0 && now != height && into > 0 ? into * now / height : min(into, now)
+            return min(max(0, top(ofRow: row) + leads[row] + point), maximum)
         }
     }
 }

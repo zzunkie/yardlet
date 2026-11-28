@@ -167,7 +167,10 @@ final class ConversationMediaRenderingTests: XCTestCase {
         }
         let size = NSSize(width: 900, height: 900)
         let host = WindowlessRender.Host(
-            conversation(.claudeCode, entries: entries).frame(width: size.width, height: size.height).background(ParityTheme.canvas),
+            ConversationTimeline(source: .transcript(entries: entries, harness: .claudeCode, status: .ready,
+                                                      latestTurnIsComplete: true), turnWindowCount: 120)
+                .environment(\.transcriptWorkspaceURL, workspace)
+                .frame(width: size.width, height: size.height).background(ParityTheme.canvas),
             size: size, appearance: .light)
         defer { host.close() }
         let diagrams = MermaidDiagrams.shared
@@ -187,6 +190,12 @@ final class ConversationMediaRenderingTests: XCTestCase {
         func read(to y: (NSView) -> CGFloat) throws {
             let document = try XCTUnwrap(scroll.documentView)
             let towardTop = (y(document) < scroll.contentView.bounds.minY) == document.isFlipped
+            // Jump in one step. A wheel notch can expose another diagram before the destination,
+            // which would count two different viewports against the one below.
+            if let list = scroll as? ConversationRowListScrollView {
+                if towardTop { list.scrollToBeginningOfDocument(nil) } else { list.scrollToEndOfDocument(nil) }
+                return
+            }
             let event = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1,
                                               wheel1: towardTop ? 3 : -3, wheel2: 0, wheel3: 0))
             scroll.scrollWheel(with: try XCTUnwrap(NSEvent(cgEvent: event)))
@@ -197,13 +206,27 @@ final class ConversationMediaRenderingTests: XCTestCase {
 
         // Up through what is mounted: the diagrams now in view are drawn, those left behind let their bitmaps go.
         try read { $0.isFlipped ? 0 : $0.bounds.height - scroll.contentView.bounds.height }
-        host.settle(until: { Self.diagrams(in: host.hosting).contains { $0.isDrawn && !drawnAtEnd.contains($0) } })
-        host.settle(passes: 10)
+        // The code placeholder and the finished diagram can have different heights. Count blocks
+        // that actually intersect the viewport while it settles, including the initial placeholders.
+        func visibleBlocks() -> Set<ObjectIdentifier> {
+            Set(Self.mermaidBlocks(in: host.hosting).filter {
+                $0.window != nil && !$0.visibleRect.intersection($0.bounds).isEmpty
+            }.map(ObjectIdentifier.init))
+        }
+        var seenAtTop = visibleBlocks()
+        host.settle {
+            seenAtTop.formUnion(visibleBlocks())
+            return Self.diagrams(in: host.hosting).contains { $0.isDrawn && !drawnAtEnd.contains($0) }
+        }
+        for _ in 0..<10 {
+            host.settle(passes: 1)
+            seenAtTop.formUnion(visibleBlocks())
+        }
         let drawnAtTop = Self.diagrams(in: host.hosting).filter(\.isDrawn)
         let onScreenAtTop = Self.mermaidBlocks(in: host.hosting).filter(\.isOnScreen).count
         let rendersAtTop = diagrams.renderCount - before
         XCTAssertGreaterThan(rendersAtTop, rendersAtEnd)
-        XCTAssertLessThanOrEqual(rendersAtTop - rendersAtEnd, onScreenAtTop, "only the diagrams on screen are drawn")
+        XCTAssertLessThanOrEqual(rendersAtTop - rendersAtEnd, seenAtTop.count, "only the diagrams on screen are drawn")
         XCTAssertTrue(drawnAtEnd.allSatisfy { !$0.isDrawn }, "the diagrams scrolled away keep no bitmap")
 
         // Back down: the diagrams there show again from what was kept.

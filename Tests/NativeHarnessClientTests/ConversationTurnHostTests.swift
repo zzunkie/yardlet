@@ -17,6 +17,9 @@ final class ConversationTurnHostTests: XCTestCase {
         var isShown = true
         var scheme: ColorScheme = .light
         var notices: TaskProviderNotices?
+        var focus = ControlActiveState.key
+        var shell: ClaudeShellCommandActions?
+        var revealsActions = false
         init(_ entries: [TranscriptEntry]) { self.entries = entries }
     }
 
@@ -34,6 +37,9 @@ final class ConversationTurnHostTests: XCTestCase {
                 }
             }
             .environment(\.colorScheme, feed.scheme)
+            .environment(\.controlActiveState, feed.focus)
+            .environment(\.claudeShellCommands, feed.shell)
+            .environment(\.revealsSentMessageActions, feed.revealsActions)
             .frame(width: 900, height: 700)
         }
     }
@@ -265,6 +271,7 @@ final class ConversationTurnHostTests: XCTestCase {
         func texts() -> Int { TranscriptProseRenderingTests.proseTextViews(in: host.hosting).count }
         let drawn = texts()
         XCTAssertGreaterThan(drawn, 0)
+        let original = Set(TranscriptProseRenderingTests.proseTextViews(in: host.hosting).map(ObjectIdentifier.init))
 
         ViewBodyCensus.isEnabled = true
         ViewBodyCensus.reset()
@@ -275,7 +282,9 @@ final class ConversationTurnHostTests: XCTestCase {
         shown.taskID = UUID()
         shown.showsElsewhere = true
         host.settle(passes: 10)
-        XCTAssertEqual(ViewBodyCensus[.conversationTurnHosting], 9, "The second view built its own nine turns")
+        let second = Set(TranscriptProseRenderingTests.proseTextViews(in: host.hosting).map(ObjectIdentifier.init))
+        XCTAssertFalse(second.isEmpty)
+        XCTAssertTrue(second.isDisjoint(with: original), "The second view built its own turns")
 
         shown.showsElsewhere = false
         shown.taskID = taskID
@@ -304,11 +313,37 @@ final class ConversationTurnHostTests: XCTestCase {
         XCTAssertEqual(ViewBodyCensus[.conversationTurn], 1, "Whether the task can continue is its limit card's to read")
     }
 
+    func testControlChangesReachTheMountedShellRowWithoutRebuildingTheTurn() throws {
+        let entry = TranscriptEntry(content: .user(text: ClaudeBashMessage.text(command: "git status", stdout: "")))
+        let feed = Feed([entry])
+        feed.shell = .init(isRunning: false, run: { _ in }, stop: {}, runForEntry: { _ in nil })
+        let host = mount(feed)
+        let directory = try WindowlessRender.directory("conversation-rows")
+        try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "controls-key.png"))
+        host.settle { host.accessibilityElements().contains { $0.description.contains("git status") } }
+        host.settle(passes: 2)
+        ViewBodyCensus.reset()
+        let run = ClaudeShellCommandRun(id: entry.id, sessionID: UUID(), command: "git status --short")
+        feed.focus = .inactive
+        feed.revealsActions = true
+        feed.shell = .init(isRunning: true, run: { _ in }, stop: {}, runForEntry: { _ in run })
+        host.settle {
+            host.accessibilityElements().contains { $0.description.contains("git status --short") }
+        }
+        try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "controls-inactive.png"))
+        XCTAssertEqual(ViewBodyCensus[.conversationTurn], 0)
+        XCTAssertEqual(ViewBodyCensus[.conversationRowLaidOut], 0)
+    }
+
     func testAChangeInLookReachesEveryTurn() {
         let (feed, host, _) = makeHost(finishedTurns: 9)
+        let scroll = BlankFrameProbe.conversationScrollView(in: host.hosting)
+        let cells = scroll?.documentView?.subviews.compactMap { $0 as? ConversationRowCell }.count ?? 0
+        let expected = ConversationRowListSwitch.isOn ? cells : 10
+        XCTAssertGreaterThan(expected, 0)
         feed.scheme = .dark
         host.settle(passes: 6)
-        XCTAssertEqual(ViewBodyCensus[.conversationTurn], 10, "The ten turns the window draws, drawn dark")
+        XCTAssertEqual(ViewBodyCensus[.conversationTurn], expected, "The turns in the window are drawn dark")
         let text = TranscriptProseRenderingTests.proseTextViews(in: host.hosting).first
         XCTAssertEqual(text?.superview?.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]), .darkAqua)
     }
