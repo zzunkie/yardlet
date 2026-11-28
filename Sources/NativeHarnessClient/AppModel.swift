@@ -605,6 +605,15 @@ final class AppModel {
         self.initialCodexHistoryQuery = initialCodexHistoryQuery
         self.initialSettingsSection = initialSettingsSection
         self.bootstrapError = bootstrapError
+        self.modelCatalogs.codexModelsChanged = { [weak self] scope, models in
+            guard let self, !models.isEmpty else { return }
+            for session in self.store.sessions where session.harness == .codex
+                && HarnessModelCatalogStore.scope(for: session.connection) == scope
+                && self.codexCapabilitiesBySessionID[session.id] != nil
+                && self.codexCapabilitiesBySessionID[session.id]?.modelCatalog.models != models {
+                self.codexCapabilitiesBySessionID[session.id]?.modelCatalog.models = models
+            }
+        }
         continuations.model = self
         transcripts.didSet = { [weak self] id in
             guard let self else { return }
@@ -2682,15 +2691,16 @@ final class AppModel {
               handlesBySessionID[session.id] != nil || session.providerSessionID != nil,
               !isHeld(session, by: TaskBlocker.holdingOffRuntimeUse) else { return }
         let state = codexCapabilitiesBySessionID[session.id] ?? .empty
-        guard state.modelCatalog.models.isEmpty || state.modes.isEmpty || state.skills.isEmpty,
+        modelCatalogs.reloadIfChangedOnDisk()
+        let needsModels = state.modelCatalog.models.isEmpty || modelCatalogs.isStale(for: .codex, connection: session.connection)
+        guard needsModels || state.modes.isEmpty || state.skills.isEmpty,
               preparingCodexCommands.insert(session.id).inserted else { return }
         defer { preparingCodexCommands.remove(session.id) }
         guard let attached = try? await codexProvider(for: session),
               matchingSession(session, allowingInitialAttachment: true) != nil else { return }
         let provider = attached.1, handle = attached.2
-        if state.modelCatalog.models.isEmpty, let catalog = try? await provider.modelCatalog(for: handle),
-           matchingSession(session, allowingInitialAttachment: true) != nil,
-           codexCapabilitiesBySessionID[session.id]?.modelCatalog.models.isEmpty != false {
+        if needsModels, let catalog = try? await provider.modelCatalog(for: handle),
+           matchingSession(session, allowingInitialAttachment: true) != nil {
             codexCapabilitiesBySessionID[session.id, default: .empty].modelCatalog = catalog
             modelCatalogs.recordCodex(catalog, for: session)
         }
@@ -5705,9 +5715,18 @@ final class AppModel {
             guard !isAttached(session.id),
                   live?.selectors.contains(where: { $0.id == StructuredHeadlessOptionID.model }) != true else { return live }
             // Before Antigravity lists its models (the task has not attached in this run), the menu
-            // names the task's own choice; opening it attaches, which starts nothing, and reads the list.
+            // names the task's own choice. Opening the menu reads the account catalog.
             var state = live ?? .empty
-            state.selectors = AntigravityDetachedSelectors.model(options: session.providerOptions) + state.selectors
+            var catalog = modelCatalogs.antigravity
+            let choice = TaskSuggestionStartOptions.modelChoice(from: session.providerOptions, harness: .antigravityCLI)
+            if !catalog.isEmpty, let saved = choice?.model, saved != "default", !catalog.contains(where: { $0.value == saved }) {
+                let effort = choice?.effort.flatMap { $0 == "default" ? nil : $0 }
+                catalog.append(HarnessModelOption(value: saved, name: saved, effortLevels: effort.map { [$0] } ?? []))
+            }
+            let selectors = catalog.isEmpty ? AntigravityDetachedSelectors.model(options: session.providerOptions)
+                : NewTaskModelProjection.antigravitySelectors(choice: choice, catalog: catalog)
+            state.selectors = selectors + state.selectors
+            state.offersModelsBeforeAttach = !catalog.isEmpty
             return state
         }
         guard session.harness == .claudeCode,
@@ -5747,7 +5766,8 @@ final class AppModel {
             stored: CodexModelSelection.restored(from: session.providerOptions) ?? modelCatalogs.codexThreads[session.id],
             defaults: modelCatalogs.defaults(for: .codex, connection: session.connection,
                                              scope: session.environmentScope, workspaceURL: nil),
-            cached: modelCatalogs.codexModels(for: session.connection)
+            cached: state.modelCatalog.models.isEmpty ? modelCatalogs.codexModels(for: session.connection)
+                : modelCatalogs.codex[HarnessModelCatalogStore.scope(for: session.connection)] ?? []
         )
         return state
     }
@@ -5795,12 +5815,32 @@ final class AppModel {
         catch { updateCodexActionError(error, for: current.id) }
     }
 
-    /// Reads a harness's model list for the new-task screen when Yardlet has none for the account
-    /// yet. Claude Code answers its handshake in a session that is sent nothing and then closed, as
-    /// the home command list is read; Codex answers `model/list` from an App Server of its own.
-    /// No turn, thread or task starts.
+    func prepareModelPicker(for session: SessionRecord, hasChoices: Bool) async {
+        switch session.harness {
+        case .codex, .claudeCode, .antigravityCLI: await refreshModelsIfStale(for: session)
+        default:
+            if !hasChoices { await loadProviderCapabilities(for: session) }
+        }
+    }
+
+    func refreshModelsIfStale(for session: SessionRecord) async {
+        await refreshModelsIfStale(harness: session.harness, runtimeURL: runtime(of: session),
+                                   connection: session.connection, workspaceURL: session.workspaceURL,
+                                   environmentScope: session.environmentScope)
+    }
+
+    /// Concurrent menus and account listings await the same turn-free read.
+    func refreshModelsIfStale(harness: HarnessKind, runtimeURL: URL, connection: ProviderConnection?,
+                              workspaceURL: URL?, environmentScope: SessionEnvironmentScope = .native) async {
+        guard harness == .codex || harness == .claudeCode || harness == .antigravityCLI else { return }
+        await modelCatalogs.refreshIfStale(for: harness, connection: connection) {
+            await self.loadNewTaskModels(harness: harness, runtimeURL: runtimeURL, connection: connection,
+                                         workspaceURL: workspaceURL, environmentScope: environmentScope)
+        }
+    }
+
     func loadNewTaskModels(harness: HarnessKind, runtimeURL: URL, connection: ProviderConnection?,
-                           workspaceURL: URL?) async {
+                           workspaceURL: URL?, environmentScope: SessionEnvironmentScope = .native) async {
         guard !isVisualFixture else { return }
         do { try connection?.validate(for: harness) } catch { return }
         switch harness {
@@ -5816,8 +5856,18 @@ final class AppModel {
             await adapter.close(handle)
             if let models { modelCatalogs.recordClaude(models, for: connection) }
         case .codex:
-            let transport = CodexProcessTransport(executableURL: runtimeURL,
-                environmentManager: connection?.codexEnvironmentManager() ?? codexEnvironmentManager)
+            let key = HarnessRegistry.Key(harness: harness, executableURL: runtimeURL,
+                                          environmentScope: environmentScope, connection: connection)
+            do {
+                if let models = try await registry.runningCodexModels(for: key) {
+                    modelCatalogs.recordCodex(models, for: connection)
+                    return
+                }
+            } catch { return }
+            let executable = await registry.startedExecutable(for: harness, requested: runtimeURL)
+            let transport = CodexProcessTransport(executableURL: executable,
+                environmentManager: connection?.codexEnvironmentManager() ?? codexEnvironmentManager,
+                environmentScope: environmentScope)
             if let models = try? await CodexModelList.read(using: transport) {
                 modelCatalogs.recordCodex(models, for: connection)
             }
@@ -5830,7 +5880,7 @@ final class AppModel {
                       executable, ["models"], workspaceURL: folder, environment: ["AGY_CLI_DISABLE_AUTO_UPDATE": "true"]),
                   let models = AntigravityACPOptions.catalog(from: StructuredHeadlessAdapter.catalogChoices(in: output.stdout))
             else { return }
-            modelCatalogs.recordAntigravity(models)
+            modelCatalogs.recordAntigravity(models, for: connection)
         default:
             return
         }
@@ -5841,7 +5891,7 @@ final class AppModel {
               let reporting = adapter as? any HarnessModelCatalogReporting,
               let models = await reporting.advertisedModels(for: session.id) else { return }
         if session.harness == .antigravityCLI {
-            modelCatalogs.recordAntigravity(models)
+            modelCatalogs.recordAntigravity(models, for: session.connection)
         } else {
             modelCatalogs.recordClaude(models, for: session.connection)
         }

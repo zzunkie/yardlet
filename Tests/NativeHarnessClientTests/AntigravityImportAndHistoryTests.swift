@@ -412,7 +412,15 @@ final class AntigravityImportAndHistoryTests: XCTestCase {
             providerCapabilities: detached, providerUsage: nil, isAttached: false)
         XCTAssertEqual(options.permission?.title, L10n.string("Bypass permissions"))
         XCTAssertEqual(options.permission?.isElevated, true)
-        XCTAssertEqual(options.model?.menu.canChoose, false)
+        XCTAssertEqual(options.model?.menu.canChoose, true)
+        XCTAssertEqual(options.model?.menu.model?.choices.map(\.value), ["default", "fixture-flash", "fixture-pro"])
+        XCTAssertFalse(model.isAttached(task.id))
+        var unlisted = task
+        unlisted.providerOptions["model"] = "saved-preview"
+        let selectors = try XCTUnwrap(model.composerProviderCapabilities(for: unlisted)).selectors
+        let modelSelector = try XCTUnwrap(selectors.first { $0.id == "model" })
+        XCTAssertEqual(modelSelector.currentValue, "saved-preview")
+        XCTAssertEqual(modelSelector.choices.map(\.value), ["default", "fixture-flash", "fixture-pro", "saved-preview"])
     }
 
     // MARK: - Fixtures

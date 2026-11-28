@@ -22,6 +22,7 @@ actor YHPCodexCompatibilityAdapter:
     nonisolated let kind = HarnessKind.codex
     nonisolated let protocolManifest: HarnessAdapterManifest
 
+    nonisolated let codexAdapter: CodexAdapter?
     private let core: YHPCompatibilityAdapter
     /// The wrapped adapter still owns the process and the `thread/start` request it sends, so a
     /// project's extra roots, the Yardlet MCP server, and the provider's instruction-source answer
@@ -61,6 +62,7 @@ actor YHPCodexCompatibilityAdapter:
 
     init(adapter: any HarnessAdapter, manifest: HarnessAdapterManifest) {
         precondition(adapter.kind == .codex && manifest.harness == .codex)
+        codexAdapter = adapter as? CodexAdapter
         protocolManifest = manifest
         acceptsPresentationPatches = manifest.supports(.codexPresentationPatches)
         launchFacets = WrappedAdapterLaunchFacets(wrapping: adapter)

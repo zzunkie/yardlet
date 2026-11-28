@@ -531,7 +531,7 @@ struct PromptComposer: View {
         HStack(spacing: 7) {
             ComposerSessionControls(
                 options: options, placement: .trailing, modelOpenRequest: modelPickerRequest,
-                onChoose: { actions.apply($0) }, onPrepare: actions.prepareProviderSettings,
+                onChoose: { actions.apply($0) }, prepareModels: actions.prepareModels, onPrepare: actions.prepareProviderSettings,
                 compact: compactAction, shortensModelToFit: true
             )
             if isRunning || isShellCommandRunning {

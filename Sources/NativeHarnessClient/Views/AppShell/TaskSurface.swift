@@ -504,6 +504,7 @@ struct TaskDetail: View {
         let isRunning = session.status == .running || session.status == .waitingForApproval
         return SessionRailActions(
             onChoose: { composerActions.apply($0) },
+            prepareModels: composerActions.prepareModels,
             onPrepareSettings: composerActions.prepareProviderSettings,
             chooseAccount: railServices?.chooseAccount,
             compact: .make(options: options, actions: promptActions, isRunning: isRunning,

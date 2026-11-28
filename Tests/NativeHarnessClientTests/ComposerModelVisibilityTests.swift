@@ -76,7 +76,7 @@ final class ComposerModelVisibilityTests: XCTestCase {
         }
     }
 
-    func testModelListsSurviveRelaunchAndStandInForAnAccountThatHasNone() throws {
+    func testModelListsSurviveRelaunchAndStandInForAnAccountThatHasNone() async throws {
         let root = try temporaryFolder()
         let file = root.appending(path: "model-catalogs.json")
         let account = ProviderConnection(id: "work", name: "work@example.test", harness: .claudeCode,
@@ -90,6 +90,7 @@ final class ComposerModelVisibilityTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path),
                        "A task's runtime reports its models without the main thread waiting for the disk")
         disk.signal()
+        await StateFileWriter.shared.flushed()
         let reopened = HarnessModelCatalogStore(fileURL: file, locations: locations(root))
         XCTAssertEqual(reopened.claudeModels(for: nil), ModelVisibilityFixtures.claudeModels)
         XCTAssertEqual(reopened.claudeModels(for: account), ModelVisibilityFixtures.claudeModels, "Another account's list stands in")
@@ -99,6 +100,16 @@ final class ComposerModelVisibilityTests: XCTestCase {
         // goes by each account's own list, and leaves alone a model no list names.
         XCTAssertNil(reopened.offers("opus", harness: .claudeCode, connection: account), "No list of its own yet")
         XCTAssertEqual(reopened.offers("opus", harness: .claudeCode, connection: nil), true)
+        XCTAssertTrue(reopened.isStale(for: .claudeCode, connection: nil))
+        reopened.recordClaude(ModelVisibilityFixtures.claudeModels, for: nil)
+        XCTAssertFalse(reopened.isStale(for: .claudeCode, connection: nil))
+        XCTAssertTrue(reopened.isStale(for: .claudeCode, connection: nil, now: Date().addingTimeInterval(901)))
+        XCTAssertTrue(reopened.isStale(for: .claudeCode, connection: account))
+        reopened.recordClaude([.init(value: "sonnet", name: "Sonnet")], for: account)
+        XCTAssertFalse(reopened.isStale(for: .claudeCode, connection: account))
+        await StateFileWriter.shared.flushed()
+        store.reloadIfChangedOnDisk()
+        XCTAssertEqual(store.claudeModels(for: account).map(\.value), ["sonnet"])
         let team = ProviderConnection(id: "team", name: "team@example.test", harness: .claudeCode,
                                       providerID: nil, homePath: root.path, credentialSelector: nil)
         reopened.recordClaude([.init(value: "opus", name: "Opus", resolvedModel: "claude-opus-5-5"),
@@ -110,6 +121,20 @@ final class ComposerModelVisibilityTests: XCTestCase {
     }
 
     // MARK: Claude Code before it connects
+
+    func testAnAccountWithFallbackChoicesReadsItsOwnCatalogWithoutAttaching() async throws {
+        let fixture = try await ClaudeFixture.make(settings: "{}", in: self)
+        let model = fixture.model, catalogs = model.modelCatalogs
+        let fallback = [HarnessModelOption(value: "previous", name: "Previous")]
+        catalogs.recordClaude(fallback, for: nil)
+        XCTAssertEqual(catalogs.claudeModels(for: fixture.connection), fallback)
+        await model.prepareModelPicker(for: fixture.session, hasChoices: true)
+        await model.prepareModelPicker(for: fixture.session, hasChoices: true)
+        XCTAssertEqual(catalogs.claudeModels(for: fixture.connection), ModelVisibilityFixtures.claudeModels)
+        XCTAssertEqual(catalogs.claudeModels(for: nil), fallback)
+        XCTAssertEqual(fixture.transports.all.count, 1)
+        XCTAssertFalse(model.isAttached(fixture.session.id))
+    }
 
     func testAClaudeTaskShowsTheModelItWillUseBeforeItConnects() async throws {
         let fixture = try await ClaudeFixture.make(settings: #"{"model":"fable","effortLevel":"xhigh"}"#, in: self)
@@ -308,6 +333,91 @@ final class ComposerModelVisibilityTests: XCTestCase {
         let turns = await fixture.transport.requests.filter { $0.method == "turn/start" }
         XCTAssertEqual(turns.first?.params["model"]?.stringValue, "fast")
         XCTAssertEqual(turns.first?.params["effort"]?.stringValue, "low")
+    }
+
+    func testOpeningCachedCodexMenusSharesTheLiveCatalogWithAccountsAndExistingTasks() async throws {
+        let root = try temporaryFolder()
+        let file = root.appending(path: "models.json")
+        let writer = HarnessModelCatalogStore(fileURL: file)
+        writer.recordCodex([ModelVisibilityFixtures.codexModel("old", efforts: ["low"])], for: nil)
+        await StateFileWriter.shared.flushed()
+        let catalogs = HarnessModelCatalogStore(fileURL: file, locations: locations(root), environment: [:])
+        let fixture = try CodexFixture(config: "", catalogs: catalogs, in: self)
+        let model = fixture.model, session = fixture.session
+        model.runtimeSelections.select(fixture.executable, for: .codex)
+        await model.refreshConversationStatus(for: session)
+        XCTAssertTrue(catalogs.isStale(for: .codex, connection: nil))
+        async let first: Void = model.refreshModelsIfStale(for: session)
+        async let second: Void = model.refreshModelsIfStale(for: session)
+        _ = await (first, second)
+        let expected = ["gpt-test", "fast"]
+        let menu = NewTaskModelProjection.menu(harness: .codex, choice: nil, catalogs: catalogs, connection: nil, workspaceURL: nil)
+        XCTAssertEqual(menu?.model?.choices.map(\.value), expected)
+        XCTAssertEqual(model.codexCapabilitiesBySessionID[session.id]?.modelCatalog.models.map(\.model), expected)
+        XCTAssertEqual(model.composerCodexCapabilities(for: session).modelCatalog.models.map(\.model), expected)
+        let caller = try XCTUnwrap(model.sessionToolCaller(session.id))
+        let result = await model.listAccounts(.object(["model": .string("fast")]), caller: caller)
+        XCTAssertTrue(result.text.contains(#""offersModel":true"#), result.text)
+        let requests = await fixture.transport.requestMethods
+        XCTAssertEqual(requests.filter { $0 == "model/list" }.count, 1)
+        XCTAssertFalse(requests.contains("thread/resume"))
+        XCTAssertFalse(requests.contains("turn/start"))
+    }
+
+    func testPartialDiskCatalogMergesScopesAndPreservesTheOpenTasksNewerList() async throws {
+        let root = try temporaryFolder()
+        let file = root.appending(path: "models.json")
+        let catalogs = HarnessModelCatalogStore(fileURL: file, locations: locations(root))
+        let fixture = try CodexFixture(config: "", catalogs: catalogs, in: self)
+        let live = [ModelVisibilityFixtures.codexModel("current", efforts: ["low"])]
+        let old = [ModelVisibilityFixtures.codexModel("previous", efforts: ["low"])]
+        catalogs.recordCodex(live, for: nil)
+        await StateFileWriter.shared.flushed()
+
+        func replace(_ scopes: [String: [CodexModelOption]], at date: Date) throws {
+            let rows = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scopes))
+            let data = try JSONSerialization.data(withJSONObject: ["version": 1, "claude": [:], "codex": rows])
+            try data.write(to: file, options: .atomic)
+            try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: file.path)
+            catalogs.reloadIfChangedOnDisk()
+        }
+        try replace(["default": old, "other": old], at: Date().addingTimeInterval(-60))
+        XCTAssertEqual(catalogs.codex["other"], old)
+        XCTAssertEqual(catalogs.codexModels(for: nil), live)
+        try replace(["other": live], at: Date())
+        XCTAssertEqual(catalogs.codex["other"], live)
+        try replace(["other": old], at: Date().addingTimeInterval(-30))
+        XCTAssertEqual(catalogs.codex["other"], live)
+        try replace(["default": []], at: Date().addingTimeInterval(1))
+        XCTAssertEqual(catalogs.codex["default"], live)
+        XCTAssertFalse(catalogs.isStale(for: .codex, connection: nil))
+        XCTAssertEqual(fixture.model.codexCapabilitiesBySessionID[fixture.session.id]?.modelCatalog.models, live)
+    }
+
+    func testAccountCatalogReadsSkipSignedOutAccountsAndReturnWhileEligibleReadsArePending() async throws {
+        func choice(_ id: String, state: AccountAuthState?) -> AccountChoice {
+            let connection = ProviderConnection(id: id, name: id, harness: .codex, providerID: nil, homePath: nil, credentialSelector: nil)
+            let snapshot = state.map { HarnessAccountSnapshot(id: id, harness: .codex, providerID: nil, state: $0,
+                accountLabel: id, detail: "", credentialOwner: "", checkedAt: Date(), usage: [], canLogin: true, canLogout: false) }
+            return AccountChoice(harness: .codex, connection: connection, snapshot: snapshot)
+        }
+        let choices = [choice("active", state: .signedIn), choice("unchecked", state: nil),
+                       choice("out", state: .signedOut), choice("unknown", state: .unknown)]
+        var started: Set<String> = []
+        var gates: [CheckedContinuation<Void, Never>] = []
+        var release = false
+        var returned = false
+        Task {
+            await AppModel.refreshAccountModels(choices, until: .now + .milliseconds(50)) { connection in
+                started.insert(connection?.id ?? "default")
+                if !release { await withCheckedContinuation { gates.append($0) } }
+            }
+            returned = true
+        }
+        defer { release = true; for gate in gates { gate.resume() } }
+        try await waitUntil { returned && started.count >= 2 }
+        XCTAssertEqual(started, ["active", "unchecked"])
+        XCTAssertEqual(gates.count, 2)
     }
 
     // MARK: New task

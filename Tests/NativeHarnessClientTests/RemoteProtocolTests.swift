@@ -116,6 +116,8 @@ final class RemoteProtocolTests: XCTestCase {
             .readFile(taskID: "T1", path: "reports/crash-notes.txt", offset: 4_194_304),
             .taskSettings(taskID: "T1"),
             .taskSettings(taskID: "T1", prepare: true),
+            .taskSettings(taskID: "T1", modelsOnly: true),
+            .taskSettings(taskID: "T1", prepare: true, modelsOnly: true),
             .setTaskSetting(taskID: "T1", setting: "model", value: "opus"),
             .setTaskSetting(taskID: "T1", setting: "permissionMode", value: "bypassPermissions", confirmed: true),
             .composerState(taskID: "T1"),
@@ -536,6 +538,7 @@ final class RemoteProtocolTests: XCTestCase {
         let requests: [(String, RemoteRequest)] = [
             (#"{"id": "40", "type": "taskSettings", "taskId": "4C1F…"}"#, .taskSettings(taskID: "4C1F…")),
             (#"{"id": "40", "type": "taskSettings", "taskId": "4C1F…", "prepare": true}"#, .taskSettings(taskID: "4C1F…", prepare: true)),
+            (#"{"id": "40", "type": "taskSettings", "taskId": "4C1F…", "prepare": true, "modelsOnly": true}"#, .taskSettings(taskID: "4C1F…", prepare: true, modelsOnly: true)),
             (#"{"id": "41", "type": "setTaskSetting", "taskId": "4C1F…", "setting": "permissionMode", "value": "bypassPermissions", "confirmed": true}"#,
              .setTaskSetting(taskID: "4C1F…", setting: "permissionMode", value: "bypassPermissions", confirmed: true)),
             (#"{"id": "42", "type": "composerCommands", "taskId": "4C1F…"}"#, .composerCommands(taskID: "4C1F…")),

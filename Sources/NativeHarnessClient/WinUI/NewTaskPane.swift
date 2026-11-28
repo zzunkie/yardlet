@@ -702,7 +702,7 @@ final class NewTaskPane {
     /// and no turn runs.
     private func readModels() async {
         guard let harness = chosenHarness, let runtime = runtimeURL else { return }
-        await model.loadNewTaskModels(harness: harness, runtimeURL: runtime,
+        await model.refreshModelsIfStale(harness: harness, runtimeURL: runtime,
                                       connection: model.connections.selected(for: harness),
                                       workspaceURL: draft.workspaceURL)
     }

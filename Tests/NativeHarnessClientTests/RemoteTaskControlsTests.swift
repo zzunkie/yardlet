@@ -68,6 +68,25 @@ final class RemoteTaskControlsTests: XCTestCase {
         await host.shutdown()
     }
 
+    func testRemoteRailOpensTheModelCatalogWithoutAttachingTheTask() async throws {
+        let fixture = try CodexFixture(config: "", in: self)
+        let host = fixture.model, session = fixture.session
+        let taskID = session.id.uuidString
+        let (client, _, close) = try await Self.connect(to: host)
+        defer { close() }
+        try await waitUntil { client.task(taskID) != nil && client.taskControls }
+        client.select(.task(taskID))
+        try await waitUntil { client.conversations[taskID]?.isLoaded == true }
+        host.modelCatalogs.recordCodex([ModelVisibilityFixtures.codexModel("rail-model", efforts: ["low"])], for: nil)
+        let rail = client.railActions(taskID, openChanges: {}, draftFix: { _ in })
+        let prepareModels = try XCTUnwrap(rail.prepareModels)
+        await prepareModels(false)
+        await prepareModels(true)
+        let models = client.taskSettings[taskID]?.first { $0.role == "model" }
+        XCTAssertTrue(models?.choices.contains { $0.value == "rail-model" } == true)
+        XCTAssertFalse(host.isAttached(session.id))
+    }
+
     func testACodexTasksSettingsCommandsEditAndForkGoThroughTheHostsOwnPaths() async throws {
         let adapter = FakeHarnessAdapter(kind: .codex)
         var state = CodexTaskState.empty

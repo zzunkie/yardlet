@@ -161,7 +161,9 @@ struct RemoteComposer: View {
         HStack(spacing: 7) {
             if let options {
                 ComposerSessionControls(options: options, placement: .trailing, isDisabled: !model.isConnected,
-                                        registersTaskFocus: false, onChoose: choose, onPrepare: prepareSettings,
+                                        registersTaskFocus: false, onChoose: choose,
+                                        prepareModels: { await model.readTaskSettings(taskID, prepare: !$0, modelsOnly: true) },
+                                        onPrepare: prepareSettings,
                                         compact: model.railCompact(taskID), shortensModelToFit: true)
             }
             if isSending { ProgressView().controlSize(.small) }

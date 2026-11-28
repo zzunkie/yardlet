@@ -8,6 +8,7 @@ struct SessionRailActions {
     /// A Settings card choice, applied as the composer applies it.
     var onChoose: (ComposerSessionChoice) -> Void = { _ in }
     /// Reads choices a control does not have yet (a detached task's settings, a model list).
+    var prepareModels: ((_ hasChoices: Bool) async -> Void)?
     var onPrepareSettings: () async -> Void = {}
     /// Opens the task's account choice, where the harness can switch accounts.
     var chooseAccount: (() -> Void)? = nil

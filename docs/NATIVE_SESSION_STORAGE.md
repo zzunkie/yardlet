@@ -74,6 +74,10 @@ Of those, only an account that offers the task's model is picked: one whose own 
 it, leaves out a model another account's list names is passed over however much room it has (see
 [AGENT_BROWSER_TOOLS.md](AGENT_BROWSER_TOOLS.md), "Models one plan offers"); a schedule's run and a task moving off a
 spent account then keep their account rather than go to one that would refuse the model.
+Model menus open with the last saved choices and refresh the account's list on first use after launch and after
+15 minutes. Concurrent reads for an account share one request, including reads from `list_accounts`. A menu showing
+another account's saved choices still reads its own account. Codex reuses a running App Server for the same runtime,
+storage and account when one is available.
 No authentication or history files are copied and no account folder changes. The reason for each
 assignment is kept in the Yardlet file `~/.yardlet/account-assignments.json` (task ID → account ID, window and time).
 An account with a limit window at or under 10% left is nearly spent, and is picked only when every account is. Of
@@ -1081,7 +1085,7 @@ Yardlet removes there is the CLI's extra copies of Yardlet's tool schemas, descr
   before a print-mode task's first turn (local placeholder ID).
 - **Model list:** the collapsed model list a task read is kept in `antigravity` of `model-catalogs.json` (an optional
   field that earlier builds ignore), and the new task view uses it. Over ACP a task reports the session's
-  `models.availableModels`, collapsed the same way. Before any task has, opening the new task view's model menu reads
+  `models.availableModels`, collapsed the same way. The new task and detached task model menus refresh the saved list with
   `agy models`, which names the same models and starts no session, since every ACP session is a conversation the CLI
   keeps. The permission menu a task's session last listed is kept beside it in `antigravityModes`, also optional, for
   the new task view's permission menu; nothing reads the modes without a session.

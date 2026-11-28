@@ -119,7 +119,7 @@ struct CodexFixture {
     let session: SessionRecord
     let model: AppModel
 
-    init(config: String, stored: Bool = true, in test: XCTestCase) throws {
+    init(config: String, stored: Bool = true, catalogs: HarnessModelCatalogStore? = nil, in test: XCTestCase) throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "model-visibility-codex-\(UUID().uuidString)")
         self.root = root
         test.addTeardownBlock { try? FileManager.default.removeItem(at: root) }
@@ -135,6 +135,7 @@ struct CodexFixture {
             manifest: HarnessProtocolCompatibilityManifest.codex())
         session = SessionRecord(harness: .codex, workspaceURL: root, runtimeExecutableURL: executable,
             title: "Saved", status: .completed, providerSessionID: "original")
+        let sessionID = session.id
         let sessions = stored ? [session] : []
         let suite = testDefaultsSuite("ModelVisibility")
         let defaults = UserDefaults(suiteName: suite)!
@@ -142,9 +143,10 @@ struct CodexFixture {
             store: SessionStore(sessions: sessions, repository: InMemorySessionRepository(sessions: sessions)),
             runtimeSelections: RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false),
             registry: HarnessRegistry { _, _ in adapter },
-            modelCatalogs: HarnessModelCatalogStore(locations: HarnessModelSettingsLocations(
+            modelCatalogs: catalogs ?? HarnessModelCatalogStore(locations: HarnessModelSettingsLocations(
                 claudeConfigDirectory: root.appending(path: "claude"), codexHome: home,
                 codexYardletHome: root.appending(path: "codex-yardlet")), environment: [:]),
+            initialCodexCapabilities: catalogs.map { [sessionID: CodexCapabilityState(modelCatalog: .init(models: $0.codexModels(for: nil)))] } ?? [:],
             codexQueueRepository: UserDefaultsCodexQueueRepository(defaults: defaults),
             codexPendingRequestRepository: UserDefaultsCodexPendingServerRequestRepository(defaults: defaults),
             codexTimelineItemRepository: UserDefaultsCodexTimelineItemRepository(defaults: defaults),

@@ -6,6 +6,7 @@ struct ComposerModelControl: View {
     @Environment(\.yardletInterfaceScale) private var interfaceScale
     let menu: ComposerModelMenu
     let onPrepare: () async -> Void
+    var prepareModels: ((_ hasChoices: Bool) async -> Void)?
     let onSetOption: (String, String) -> Void
     /// The Model and Reasoning slash commands open this same menu at their own list.
     var openRequest: CodexModelPickerRequest? = nil
@@ -76,13 +77,21 @@ struct ComposerModelControl: View {
     private func open(atModels: Bool) {
         opensModelList = atModels
         isPresented = true
-        if !menu.canChoose || menu.isEmpty { Task { await load() } }
+        if !menu.canChoose || menu.isEmpty {
+            Task { await load() }
+        } else {
+            Task { await prepare(hasChoices: true) }
+        }
+    }
+
+    private func prepare(hasChoices: Bool) async {
+        if let prepareModels { await prepareModels(hasChoices) } else { await onPrepare() }
     }
 
     private func load() async {
         guard !isLoading else { return }
         isLoading = true
-        await onPrepare()
+        await prepare(hasChoices: false)
         isLoading = false
     }
 }

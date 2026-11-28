@@ -1185,7 +1185,7 @@ public enum RemoteRequest: Equatable, Sendable {
     /// the choices first, as opening the Mac's menu does.
     case taskRail(taskID: String, watching: Bool = true)
     case railAction(taskID: String, action: String, targetID: String? = nil, confirmed: Bool = false)
-    case taskSettings(taskID: String, prepare: Bool = false)
+    case taskSettings(taskID: String, prepare: Bool = false, modelsOnly: Bool = false)
     case setTaskSetting(taskID: String, setting: String, value: String, confirmed: Bool = false)
     case composerState(taskID: String)
     case composerAction(taskID: String, action: String, itemID: String?, value: String?)
@@ -1392,7 +1392,7 @@ public enum RemoteRequest: Equatable, Sendable {
              let .archiveTask(id), let .limitAccounts(id), let .continueWithAccount(id, _), let .setAutoContinue(id, _),
              let .actOnQueued(id, _, _), let .answerHandoff(id, _, _), let .chooseAnswer(id, _, _, _, _),
              let .readReview(id, _), let .writeReview(id, _, _), let .workspaceFiles(id), let .taskOutputs(id), let .readFile(id, _, _),
-             let .writeFile(id, _, _, _), let .taskSettings(id, _), let .setTaskSetting(id, _, _, _),
+             let .writeFile(id, _, _, _), let .taskSettings(id, _, _), let .setTaskSetting(id, _, _, _),
              let .composerState(id), let .composerAction(id, _, _, _), let .composerCommands(id), let .runComposerCommand(id, _, _), let .editMessage(id, _, _), let .forkTask(id, _),
              let .watchTab(id, _, _, _, _, _, _), let .unwatchTab(id),
              let .tabFrameAck(id, _, _), let .tabInput(id, _, _), let .openTab(id, _, _), let .closeTab(id, _),
@@ -1561,6 +1561,7 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         var path: String?
         var refresh: Bool?
         var prepare: Bool?
+        var modelsOnly: Bool?
         var setting: String?
         var value: String?
         var confirmed: Bool?
@@ -1936,7 +1937,7 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         case "taskSettings", "composerCommands", "forkTask":
             guard let taskID = required(wire.taskId) else { return fail(.badRequest, "Missing taskId") }
             switch type {
-            case "taskSettings": request = .taskSettings(taskID: taskID, prepare: wire.prepare == true)
+            case "taskSettings": request = .taskSettings(taskID: taskID, prepare: wire.prepare == true, modelsOnly: wire.modelsOnly == true)
             case "composerCommands": request = .composerCommands(taskID: taskID)
             default: request = .forkTask(taskID: taskID, turnID: required(wire.turnId))
             }
@@ -2322,9 +2323,10 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             wire.taskId = taskID; wire.watching = watching ? nil : false
         case let .railAction(taskID, action, targetID, confirmed):
             wire.taskId = taskID; wire.action = action; wire.targetId = targetID; wire.confirmed = confirmed
-        case let .taskSettings(taskID, prepare):
+        case let .taskSettings(taskID, prepare, modelsOnly):
             wire.taskId = taskID
             wire.prepare = prepare ? true : nil
+            wire.modelsOnly = modelsOnly ? true : nil
         case let .setTaskSetting(taskID, setting, value, confirmed):
             wire.taskId = taskID
             wire.setting = setting

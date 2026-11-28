@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import Synchronization
 
 /// Where each harness keeps the settings that name its default model, by account.
 struct HarnessModelSettingsLocations: Equatable, Sendable {
@@ -74,26 +75,102 @@ final class HarnessModelCatalogStore {
     @ObservationIgnored private let fileURL: URL?
     @ObservationIgnored private let environment: [String: String]
 
+    @ObservationIgnored private var modelRefreshes: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var refreshedAt: [String: Date] = [:]
+    /// Import order and provider freshness are independent: a newer disk list still needs a provider read.
+    @ObservationIgnored private var importedAt: [String: Date] = [:]
+    /// Shared with the serial writer so a local save is never mistaken for an external edit.
+    private final class FileStamp: Sendable {
+        let date = Mutex<Date?>(nil)
+    }
+    @ObservationIgnored private let modificationStamp = FileStamp()
+    @ObservationIgnored var codexModelsChanged: ((String, [CodexModelOption]) -> Void)?
+
     init(fileURL: URL? = nil, locations: HarnessModelSettingsLocations = .live(),
          environment: [String: String] = ProcessInfo.processInfo.environment) {
         self.fileURL = fileURL
         self.locations = locations
         self.environment = environment
+        reloadIfChangedOnDisk()
+    }
+
+    private nonisolated static func modificationDate(_ file: URL) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: file.path(percentEncoded: false)))?[.modificationDate] as? Date
+    }
+
+    func reloadIfChangedOnDisk() {
         guard let fileURL else { return }
-        StateFileWriter.shared.flush()
-        guard let data = try? Data(contentsOf: fileURL),
-              let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data), snapshot.version == 1 else { return }
-        claude = snapshot.claude
-        codex = snapshot.codex
-        codexThreads = snapshot.codexThreads ?? [:]
-        antigravity = snapshot.antigravity ?? []
-        antigravityModes = snapshot.antigravityModes ?? []
-        claudeContextWindows = snapshot.claudeContextWindows ?? [:]
+        // During our own atomic write the in-memory snapshot already includes its contents.
+        // A menu or provider event never has to wait for the writer.
+        let changed = modificationStamp.date.withLockIfAvailable { stamp -> (Snapshot, Date)? in
+            guard let date = Self.modificationDate(fileURL), date != stamp,
+                  let data = try? Data(contentsOf: fileURL),
+                  let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data), snapshot.version == 1,
+                  Self.modificationDate(fileURL) == date else { return nil }
+            stamp = date
+            return (snapshot, date)
+        }
+        guard let (snapshot, date) = changed ?? nil else { return }
+        for (scope, models) in snapshot.claude where !models.isEmpty {
+            let key = Self.catalogKey(.claudeCode, scope)
+            guard acceptDiskDate(date, for: key), claude[scope] != models else { continue }
+            claude[scope] = models
+            refreshedAt[key] = nil
+        }
+        for (scope, models) in snapshot.codex where !models.isEmpty {
+            let key = Self.catalogKey(.codex, scope)
+            guard acceptDiskDate(date, for: key), codex[scope] != models else { continue }
+            codex[scope] = models
+            refreshedAt[key] = nil
+            codexModelsChanged?(scope, models)
+        }
+        let prefix = Self.catalogKey(.antigravityCLI, "")
+        if let models = snapshot.antigravity, !models.isEmpty,
+           !refreshedAt.contains(where: { $0.key.hasPrefix(prefix) && $0.value > date }),
+           acceptDiskDate(date, for: Self.catalogKey(.antigravityCLI, "default")), antigravity != models {
+            antigravity = models
+            refreshedAt = refreshedAt.filter { !$0.key.hasPrefix(prefix) }
+        }
+        for (id, selection) in snapshot.codexThreads ?? [:] where codexThreads[id] != selection {
+            codexThreads[id] = selection
+        }
+        if let modes = snapshot.antigravityModes, !modes.isEmpty, modes != antigravityModes { antigravityModes = modes }
+        for (model, window) in snapshot.claudeContextWindows ?? [:] where claudeContextWindows[model] != window {
+            claudeContextWindows[model] = window
+        }
+    }
+
+    private func acceptDiskDate(_ date: Date, for key: String) -> Bool {
+        guard date >= max(refreshedAt[key] ?? .distantPast, importedAt[key] ?? .distantPast) else { return false }
+        importedAt[key] = date
+        return true
+    }
+
+    static func catalogKey(_ harness: HarnessKind, _ scope: String) -> String { harness.rawValue + "|" + scope }
+
+    func isStale(for harness: HarnessKind, connection: ProviderConnection?, now: Date = Date()) -> Bool {
+        let key = Self.catalogKey(harness, Self.scope(for: connection))
+        return refreshedAt[key].map { now.timeIntervalSince($0) >= 900 } ?? true
+    }
+
+    func refreshIfStale(for harness: HarnessKind, connection: ProviderConnection?,
+                        read: @escaping @MainActor () async -> Void) async {
+        reloadIfChangedOnDisk()
+        guard isStale(for: harness, connection: connection) else { return }
+        let key = Self.catalogKey(harness, Self.scope(for: connection))
+        if let refresh = modelRefreshes[key] { return await refresh.value }
+        let refresh = Task {
+            await read()
+            modelRefreshes[key] = nil
+        }
+        modelRefreshes[key] = refresh
+        await refresh.value
     }
 
     /// Keeps the window Claude Code reported for `model`.
     func recordClaudeContextWindow(_ tokens: UInt64, model: String) {
         guard tokens > 0, !model.isEmpty, claudeContextWindows[model] != tokens else { return }
+        reloadIfChangedOnDisk()
         claudeContextWindows[model] = tokens
         save()
     }
@@ -108,13 +185,17 @@ final class HarnessModelCatalogStore {
         return claudeContextWindows[wantsMillion ? base + suffix : base]
     }
 
-    func recordAntigravity(_ models: [HarnessModelOption]) {
-        guard !models.isEmpty, antigravity != models else { return }
+    func recordAntigravity(_ models: [HarnessModelOption], for connection: ProviderConnection? = nil) {
+        guard !models.isEmpty else { return }
+        reloadIfChangedOnDisk()
+        refreshedAt[Self.catalogKey(.antigravityCLI, Self.scope(for: connection))] = Date()
+        guard antigravity != models else { return }
         antigravity = models
         save()
     }
 
     func recordAntigravityModes(_ choices: [ProviderCapabilityChoice]) {
+        reloadIfChangedOnDisk()
         guard !choices.isEmpty, antigravityModes != choices else { return }
         antigravityModes = choices
         save()
@@ -166,15 +247,22 @@ final class HarnessModelCatalogStore {
 
     func recordClaude(_ models: [HarnessModelOption], for connection: ProviderConnection?) {
         let scope = Self.scope(for: connection)
-        guard !models.isEmpty, claude[scope] != models else { return }
+        guard !models.isEmpty else { return }
+        reloadIfChangedOnDisk()
+        refreshedAt[Self.catalogKey(.claudeCode, scope)] = Date()
+        guard claude[scope] != models else { return }
         claude[scope] = models
         save()
     }
 
     func recordCodex(_ models: [CodexModelOption], for connection: ProviderConnection?) {
         let scope = Self.scope(for: connection)
-        guard !models.isEmpty, codex[scope] != models else { return }
+        reloadIfChangedOnDisk()
+        guard !models.isEmpty else { return }
+        refreshedAt[Self.catalogKey(.codex, scope)] = Date()
+        guard codex[scope] != models else { return }
         codex[scope] = models
+        codexModelsChanged?(scope, models)
         save()
     }
 
@@ -237,10 +325,14 @@ final class HarnessModelCatalogStore {
                                 antigravity: antigravity.isEmpty ? nil : antigravity,
                                 antigravityModes: antigravityModes.isEmpty ? nil : antigravityModes,
                                 claudeContextWindows: claudeContextWindows.isEmpty ? nil : claudeContextWindows)
-        StateFileWriter.shared.write(fileURL) {
+        StateFileWriter.shared.write(fileURL) { [modificationStamp] in
             try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            try JSONEncoder().encode(snapshot).write(to: fileURL, options: .atomic)
+            let data = try JSONEncoder().encode(snapshot)
+            try modificationStamp.date.withLock { stamp in
+                try data.write(to: fileURL, options: .atomic)
+                stamp = Self.modificationDate(fileURL)
+            }
         }
     }
 }

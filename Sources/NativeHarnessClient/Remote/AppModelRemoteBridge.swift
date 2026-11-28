@@ -1064,6 +1064,17 @@ final class AppModelRemoteBridge: RemoteBridge {
                                    acceptsFiles: policy.showsMentionControl ? true : nil)
     }
 
+    /// Answer immediately from a populated menu while refreshing the next read. An empty menu waits for choices.
+    static func prepareModels(_ menu: ComposerModelMenu, in model: AppModel, harness: HarnessKind,
+                              connection: ProviderConnection?, folder: URL?) async {
+        guard let runtime = model.runtimeSelections.selectedURL(for: harness) else { return }
+        let read = { @MainActor @Sendable in
+            await model.refreshModelsIfStale(harness: harness, runtimeURL: runtime, connection: connection, workspaceURL: folder)
+        }
+        if menu.canChoose && !menu.isEmpty { Task { await read() } }
+        else { await RemoteServer.waitAtMost(10, read) }
+    }
+
     func newTaskOptions(projectID: String?, harness named: String?,
                         settings picked: [String: String]) async -> Result<RemoteNewTaskOptions, RemoteError> {
         await newTaskOptions(projectID: projectID, harness: named, settings: picked, accountID: nil, composer: false, readCommands: false)
@@ -1111,12 +1122,8 @@ final class AppModelRemoteBridge: RemoteBridge {
             ComposerSessionOptionsProjection.newTask(harness: harness, choice: choice, catalogs: model.modelCatalogs,
                                                      connection: binding, workspaceURL: place.folder)
         }
-        // As opening the menu does, the harness's model list is read first where none is known yet.
-        if options().model?.menu.canChoose == false, let runtime = model.runtimeSelections.selectedURL(for: harness) {
-            let folder = place.folder
-            await RemoteServer.waitAtMost(10) { @MainActor in
-                await model.loadNewTaskModels(harness: harness, runtimeURL: runtime, connection: binding, workspaceURL: folder)
-            }
+        if let menu = options().model?.menu {
+            await Self.prepareModels(menu, in: model, harness: harness, connection: binding, folder: place.folder)
         }
         // What the phone picked so far, so the menus answer as they would after those picks.
         switch Self.choosing(picked, harness: harness, from: choice, model: model, connection: binding, folder: place.folder, allowsConfirmed: composer) {

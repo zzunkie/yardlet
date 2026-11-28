@@ -1646,6 +1646,8 @@ message's Edit message, and Fork from here. Each acts through the path the Mac's
   Mac draws it in orange). A permission control with nothing to choose has no choices, `value` `""`, its words in
   `title` and what its menu says in `note`. A choice with `confirm` is one the Mac's menu asks about first (Bypass
   permissions, Codex's Full access), in the Mac's words: the phone asks the same before it sends it.
+- A model menu can send `modelsOnly: true` with `taskSettings` to refresh its account catalog.
+  A populated menu opens immediately. Codex, Claude Code and Antigravity can read this list while the task stays detached.
 - `prepare: true` on a setting: the Mac's menu reads its choices before it opens (a task not connected to its
   harness, or a Codex model list not read yet). The phone shows the value now, and when the person opens that menu it
   asks `{"type": "taskSettings", "taskId": "4C1F…", "prepare": true}`, which reads them first, as opening the Mac's

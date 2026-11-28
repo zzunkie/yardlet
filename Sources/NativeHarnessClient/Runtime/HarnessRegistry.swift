@@ -154,6 +154,12 @@ actor HarnessRegistry {
         runtimeOverrides?.executable(for: harness, requested: requested.standardizedFileURL) ?? requested.standardizedFileURL
     }
 
+    func runningCodexModels(for key: Key) async throws -> [CodexModelOption]? {
+        let adapter = adapters[key]
+        let codex = adapter as? CodexAdapter ?? (adapter as? YHPCodexCompatibilityAdapter)?.codexAdapter
+        return try await codex?.modelsIfRunning()
+    }
+
     func invalidateAll() {
         adapters.removeAll()
     }

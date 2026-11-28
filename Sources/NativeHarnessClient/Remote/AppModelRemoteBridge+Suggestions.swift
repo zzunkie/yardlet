@@ -128,13 +128,8 @@ extension AppModelRemoteBridge {
             }
             choice.connection = account.connection
         }
-        // As opening the Mac's Options does, the harness's model list is read first where none is known yet.
-        if opening, let menu = TaskSuggestionStartOptions.sessionOptions(for: choice, catalogs: model.modelCatalogs).model?.menu,
-           !menu.canChoose || menu.isEmpty, let runtime = model.runtimeSelections.selectedURL(for: choice.harness) {
-            let harness = choice.harness, connection = choice.connection, folder = choice.place.folder
-            await RemoteServer.waitAtMost(10) { @MainActor in
-                await model.loadNewTaskModels(harness: harness, runtimeURL: runtime, connection: connection, workspaceURL: folder)
-            }
+        if opening, let menu = TaskSuggestionStartOptions.sessionOptions(for: choice, catalogs: model.modelCatalogs).model?.menu {
+            await Self.prepareModels(menu, in: model, harness: choice.harness, connection: choice.connection, folder: choice.place.folder)
         }
         let held = TaskSuggestionStartOptions.modelChoice(from: choice.providerOptions, harness: choice.harness)
         var picked: NewTaskModelChoice?

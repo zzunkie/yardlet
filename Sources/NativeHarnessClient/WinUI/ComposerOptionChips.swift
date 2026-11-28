@@ -18,6 +18,7 @@ final class ComposerOptionChips {
     /// Applies a choice by the path its control names.
     var choose: (_ id: String, _ value: String, _ apply: ComposerApplyPath) -> Void = { _, _, _ in }
     /// Reads the choices a control does not have yet: a detached task's settings, or a model list. Nothing starts.
+    var prepareModels: ((_ hasChoices: Bool) async -> Void)?
     var prepare: () async -> Void = {}
     /// Turns Codex's Plan mode off; without it the Plan indicator is not drawn.
     var turnOffPlanMode: (() -> Void)?
@@ -147,6 +148,11 @@ final class ComposerOptionChips {
         }
         guard let made = menu() else { return }
         made.placement = .top
+        if key == "model" {
+            made.opening.addHandler { [weak self] _, _ in
+                Task { await self?.readModelChoices(hasChoices: true) }
+            }
+        }
         control.flyout = made
         if opensAfterPreparing == key {
             opensAfterPreparing = nil
@@ -158,12 +164,16 @@ final class ComposerOptionChips {
         }
     }
 
+    private func readModelChoices(hasChoices: Bool) async {
+        if let prepareModels { await prepareModels(hasChoices) } else { await prepare() }
+    }
+
     private func prepareThenOpen(_ key: String) {
         guard !isPreparing else { return }
         isPreparing = true
         redraw()
         Task {
-            await prepare()
+            if key == "model" { await readModelChoices(hasChoices: false) } else { await prepare() }
             isPreparing = false
             opensAfterPreparing = key
             redraw()
