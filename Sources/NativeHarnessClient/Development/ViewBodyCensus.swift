@@ -19,6 +19,8 @@ enum ViewBodyCensus {
         /// A conversation turn drawn again in its own hosting view (`ConversationTurnHosting`).
         case conversationTurn
         /// A conversation turn's hosting view made, not found kept with its task.
+        case conversationTurnShow
+        case conversationHeightInvalidation
         case conversationTurnHosting
         /// A row of the conversation (a turn or a part of one) laid out anew to measure its height.
         case conversationRowLaidOut

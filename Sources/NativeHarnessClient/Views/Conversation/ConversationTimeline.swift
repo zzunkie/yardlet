@@ -134,7 +134,7 @@ struct ConversationTimeline: View {
         // The turns the rows drawn are of, which the rail marks.
         let railTurns = rows.turns(drawnIn: turns)
         let hasEarlierTurns = hasEarlierTurns(presentation.earlier, firstDrawn: railTurns.first, rows: rows)
-        let _ = rendering.keep(turnIDs: turns.map(\.id))
+        let rowIDs = rendering.keep(turnIDs: turns.map(\.id))
         // Every turn is told the limit card that offers to continue, which can be in an earlier turn
         // than the last (notices Claude wrote after it open turns of their own). It changes only as a
         // card comes or the task moves past it, not with each entry added, so a turn is not drawn
@@ -149,8 +149,9 @@ struct ConversationTimeline: View {
                 if ConversationRowListSwitch.isOn {
                     // The AppKit row list (`ConversationRowList`), in place of the stack below.
                     ConversationRowList(
-                        rows: turns.map { turn in
-                            ConversationTurnHost(turn: turn, part: loaded.rows.part(of: turn.id), context: context,
+                        rowIDs: rowIDs, part: loaded.rows.part(of:), row: { index in
+                            let turn = turns[index]
+                            return ConversationTurnHost(turn: turn, part: loaded.rows.part(of: turn.id), context: context,
                                                  handlers: handlers(for: turn, turnID: loaded.rows.turnID(of: turn.id)),
                                                  renderState: rendering)
                         },
@@ -183,12 +184,12 @@ struct ConversationTimeline: View {
                         guard !readingTracker.resumes(record: readingPosition) else { return }
                         let anchors = readingAnchors(loaded, window: window)
                         scrollState.isFollowing = readingPosition?.bookmark.followsLatest ?? true
-                        readingTracker.start(record: readingPosition, itemIDs: turns.map(\.id),
+                        readingTracker.start(record: readingPosition, itemIDs: rowIDs,
                                              startingAt: anchors.start(), resolve: anchors.resolve)
                         rowListScroller.restore(readingTracker.request)
                     }
                     .onDisappear { readingTracker.hide() }
-                    .onChange(of: turns.map(\.id)) { _, ids in
+                    .onChange(of: rowIDs) { _, ids in
                         readingTracker.updateItems(ids, resolve: readingAnchors(loaded, window: window).resolve)
                     }
                     .onChange(of: readingTracker.request) { _, request in rowListScroller.restore(request) }
@@ -260,7 +261,7 @@ struct ConversationTimeline: View {
                         .modifier(TranscriptScrollFollowing(
                             latestRequestID: latestRequestID, state: $scrollState,
                             readingPosition: readingPosition, readingTracker: readingTracker,
-                            readingItemIDs: turns.map(\.id),
+                            readingItemIDs: rowIDs,
                             pendingRequestIDs: presentation.pendingRequestIDs,
                             readingAnchors: readingAnchors(loaded, window: window),
                             pinsGrowthToBottom: true,

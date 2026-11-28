@@ -5,7 +5,7 @@ import SwiftUI
 /// views (`ConversationTurnHosting`) for the rows in view, in place of the eager SwiftUI stack in a
 /// scroll view (`ConversationTimeline.scrollView`). A row's height is kept by its hosting for each width
 /// and asked again only for the rows whose turn changed, and scrolling moves the clip view and puts the
-/// rows that crossed its edges in or out, without laying out or measuring anything in SwiftUI.
+/// rows that crossed its edges in or out, measuring them when they first enter the overscan area.
 ///
 /// It scrolls, follows the latest output (and lets go when the reader scrolls away from the end), brings
 /// earlier turns in at the top as the reader scrolls up to it while the rows in view stay where they are,
@@ -31,7 +31,9 @@ enum ConversationRowListSwitch {
 /// The list drawing a conversation's rows, while `ConversationRowListSwitch` is on.
 struct ConversationRowList: NSViewRepresentable {
     /// The rows drawn, in order: a whole turn or a part of one (`ConversationTurnRows`).
-    let rows: [ConversationTurnHost]
+    let rowIDs: [String]
+    let part: (String) -> ConversationRowPart
+    let row: (Int) -> ConversationTurnHost
     let renderState: ConversationRenderState
     @Binding var scrollState: TranscriptScrollFollowState
     let latestRequestID: String?
@@ -360,7 +362,7 @@ final class ConversationRowListController: NSObject {
     private let rowsView = ConversationRowsView()
     private var parent: ConversationRowList?
     private var environment = EnvironmentValues()
-    private var rows: [ConversationTurnHost] = []
+    private var measuredContent: [String: CGFloat] = [:]
     private var geometry = ConversationRowGeometry()
     /// The turns' hostings this list shows, by row ID; the render state keeps them for the task.
     private var hostings: [String: ConversationTurnHosting] = [:]
@@ -383,6 +385,7 @@ final class ConversationRowListController: NSObject {
     private var topLoading = TranscriptTopLoading()
     /// The view is moving for this controller, not for the reader.
     private var adjusting = 0
+    private var animatedScrolls = 0
     private var lastSize = CGSize.zero
     /// The viewport and the rows' height when the view last moved, or the list last changed them: a new
     /// width or rows that grew below leave the view where it was, and tell nothing that it moved.
@@ -392,7 +395,7 @@ final class ConversationRowListController: NSObject {
     /// the gesture ends.
     private var arrivedUnderGesture: CGFloat = 0
     /// SwiftUI is updating the list: what this controller writes to the conversation's state waits
-    /// for the update to end, and a row resizing waits for the update, which measures every row.
+    /// for the update to end, and a row resizing waits for the update, which measures the rows in view.
     private var isUpdating = false
 
     /// The column the turns are drawn in, in a row `width` wide: the conversation's width, inset.
@@ -427,7 +430,7 @@ final class ConversationRowListController: NSObject {
 
     @objc private func assistiveReadingChanged() {
         readsEveryRow = ConversationAssistiveReading.isOn()
-        tile()
+        change(refresh: true) {}
     }
 
     /// Where the viewport goes for something other than the reader's scroll.
@@ -447,20 +450,27 @@ final class ConversationRowListController: NSObject {
         if written == nil { followState = timeline.scrollState }
         isUpdating = true
         defer { isUpdating = false }
-        let ids = timeline.rows.map(\.turn.id)
-        if ids != geometry.ids {
-            let kept = Set(ids)
-            for (id, hosting) in hostings where !kept.contains(id) {
-                release(hosting)
-                hostings[id] = nil
+        let ids = timeline.rowIDs
+        change(refresh: true) {
+            if ids != geometry.ids {
+                let kept = Set(ids)
+                for (id, hosting) in hostings where !kept.contains(id) {
+                    release(hosting)
+                    DeferredHostingRelease.enqueue(hosting)
+                    hostings[id] = nil
+                    measuredContent[id] = nil
+                }
+                let leads = ids.indices.map { index in
+                    index == 0 ? ConversationLayout.topPadding : timeline.part(ids[index]).continuesTurn
+                        ? ConversationLayout.itemSpacing : ConversationLayout.turnSpacing
+                }
+                let heights = ids.indices.map { index in
+                    leads[index] + (measuredContent[ids[index]] ?? 240)
+                        + (index == ids.count - 1 ? ConversationLayout.bottomPadding : 0)
+                }
+                geometry.setRows(ids, heights: heights, leads: leads)
             }
         }
-        rows = timeline.rows
-        // Each row's turn draws again only when it changed (`ConversationTurnHosting.show`).
-        for (index, host) in rows.enumerated() {
-            hosting(for: ids[index]).show(host, environment: environment)
-        }
-        change { geometry.setRows(ids, heights: ids.indices.map(rowHeight), leads: ids.indices.map(gap)) }
         if let target = timeline.target, target.token != lastTargetToken {
             lastTargetToken = target.token
             go(to: .row(target.rowID, target.placement, animated: target.animated))
@@ -532,10 +542,16 @@ final class ConversationRowListController: NSObject {
         let viewport = scrollView.contentView.bounds.height
         switch place {
         case let .row(id, placement, animated):
-            guard let frame = contentFrame(ofRowID: id) else { return }
+            guard let index = geometry.index(of: id) else { return }
             pendingPlace = nil
+            change { measure(index) }
+            let frame = contentFrame(ofRow: index)
             let y = placement == .center ? frame.midY - viewport / 2 : frame.minY
-            scroll(toY: y, animated: animated)
+            scroll(toY: y, animated: animated) { [weak self] in
+                guard let self, let frame = contentFrame(ofRowID: id) else { return }
+                let corrected = placement == .center ? frame.midY - scrollView.contentView.bounds.height / 2 : frame.minY
+                scroll(toY: corrected)
+            }
         case let .offset(y):
             pendingPlace = nil
             scroll(toY: y)
@@ -586,25 +602,26 @@ final class ConversationRowListController: NSObject {
     /// The space before row `index`: the conversation's top, the space between turns, or the space
     /// between the items of one turn for a part that goes on from the one before.
     private func gap(_ index: Int) -> CGFloat {
-        if index == 0 { return ConversationLayout.topPadding }
-        return rows[index].part.continuesTurn ? ConversationLayout.itemSpacing : ConversationLayout.turnSpacing
+        geometry.leads[index]
     }
 
     private func bottom(_ index: Int) -> CGFloat {
-        index == rows.count - 1 ? ConversationLayout.bottomPadding : 0
+        index == geometry.count - 1 ? ConversationLayout.bottomPadding : 0
     }
 
-    /// A row's height: its turn's at the column's width, which the turn's hosting keeps for each width
-    /// until the turn changes, with the space around it.
-    private func rowHeight(_ index: Int) -> CGFloat {
-        let width = Self.columnWidth(in: rowsView.bounds.width)
-        guard width >= 80 else { return max(1, gap(index) + bottom(index)) }
-        return gap(index) + hosting(for: rows[index].turn.id).size(forWidth: width).height + bottom(index)
+    private func measure(_ index: Int) {
+        guard let parent else { return }
+        let id = geometry.ids[index]
+        let hosting = hosting(for: id)
+        hosting.show(parent.row(index), environment: environment)
+        let height = hosting.size(forWidth: Self.columnWidth(in: rowsView.bounds.width)).height
+        measuredContent[id] = height
+        geometry.setHeight(gap(index) + height + bottom(index), ofRow: index)
     }
 
     /// Where row `id`'s turn is drawn in the list's document, or nil while the row is not in the list.
     private func contentFrame(ofRowID id: String) -> CGRect? {
-        guard let index = geometry.index(of: id), index < rows.count, rowsView.bounds.width >= 80 else { return nil }
+        guard let index = geometry.index(of: id), rowsView.bounds.width >= 80 else { return nil }
         return contentFrame(ofRow: index)
     }
 
@@ -619,36 +636,48 @@ final class ConversationRowListController: NSObject {
     /// Applies `body`'s change to the rows and puts the viewport back at the place read before it: the
     /// end while following, or the row at the viewport's top, at the same point of it. With `scales`
     /// (a new width), that point is the same share of the row's height.
-    private func change(scales: Bool = false, _ body: () -> Void) {
+    private func change(scales: Bool = false, refresh: Bool = false, scrolling: Bool = false, _ body: () -> Void) {
         adjusting += 1
-        defer { adjusting -= 1 }
         let clip = scrollView.contentView
         let before = clip.bounds.minY
         let endBefore = geometry.contentHeight
         // The reader's gesture over a followed conversation: what arrives below waits for it to end.
         let holdsForGesture = followState.isFollowing && scrollView.isLiveScrolling
-        let anchor = geometry.anchor(offset: before, following: followState.isFollowing && !holdsForGesture)
+        let atEnd = geometry.distanceFromEnd(offset: before, viewportHeight: clip.bounds.height) <= 1
+        let anchor = geometry.anchor(offset: before, following: (!scrolling || atEnd) && followState.isFollowing && !holdsForGesture)
         body()
+        let viewport = clip.bounds.height
+        if Self.columnWidth(in: rowsView.bounds.width) >= 80, viewport > 0 {
+            var visited = IndexSet()
+            while true {
+                let offset = geometry.offset(for: anchor, viewportHeight: viewport, scales: scales, fallback: before)
+                let near = nearRows(offset: offset, viewport: viewport)
+                var needed = IndexSet(integersIn: near)
+                for row in heldRows(besides: near) where cells[geometry.ids[row]] != nil { needed.insert(row) }
+                needed.subtract(visited)
+                guard !needed.isEmpty else { break }
+                for row in needed where refresh || cells[geometry.ids[row]] == nil { measure(row) }
+                visited.formUnion(needed)
+            }
+        }
         let height = geometry.contentHeight
         if rowsView.frame.height != height { rowsView.setFrameSize(NSSize(width: rowsView.frame.width, height: height)) }
         if holdsForGesture { arrivedUnderGesture += max(0, height - endBefore) }
         scroll(toY: geometry.offset(for: anchor, viewportHeight: clip.bounds.height, scales: scales, fallback: before))
         tile()
-        lastSeen = (clip.bounds, height)
-        noteDistance()
+        adjusting -= 1
+        if scrolling { return }
+        if lastSeen?.visible != clip.bounds || lastSeen?.height != height {
+            reportScroll()
+        }
         goToPendingPlace()
     }
 
-    /// How near the end the view is after the rows changed under it, which a view kept at its place does
-    /// not scroll to report: "Latest response" shows once what grew below takes the end out of view, as
-    /// the stack's scroll geometry reports it. Only the reader's own moves change whether it follows.
-    private func noteDistance() {
-        let visible = scrollView.contentView.bounds
-        guard visible.width >= 80, visible.height >= 60 else { return }
-        var state = followState
-        state.observe(distance: geometry.distanceFromEnd(offset: visible.minY, viewportHeight: visible.height)
-            - arrivedUnderGesture, userDriven: false)
-        writeState(state)
+    private func nearRows(offset: CGFloat, viewport: CGFloat) -> Range<Int> {
+        guard viewport > 0, Self.columnWidth(in: rowsView.bounds.width) >= 80 else { return 0..<0 }
+        let margin = viewport * Self.overscan
+        return readsEveryRow ? 0..<geometry.count
+            : geometry.rows(from: offset - margin, to: offset + viewport + margin)
     }
 
     /// Puts the views of the rows near the viewport in their places, and takes out the views of the rows
@@ -660,9 +689,7 @@ final class ConversationRowListController: NSObject {
     /// Control on every row does, so the conversation reads to them as it did drawn whole.
     private func tile() {
         let visible = scrollView.contentView.bounds
-        let margin = visible.height * Self.overscan
-        let near = readsEveryRow ? 0..<geometry.count
-            : geometry.rows(from: visible.minY - margin, to: visible.maxY + margin)
+        let near = nearRows(offset: visible.minY, viewport: visible.height)
         let held = heldRows(besides: near)
         for (id, cell) in cells where !(geometry.index(of: id).map { near.contains($0) || held.contains($0) } ?? false) {
             cell.detach()
@@ -728,10 +755,8 @@ final class ConversationRowListController: NSObject {
 
     /// A turn grew or shrank on its own: a fold opened, a line streamed. Only it and the rows below it move.
     private func rowResized(_ id: String) {
-        guard !isUpdating, let index = geometry.index(of: id), index < rows.count else { return }
-        let height = rowHeight(index)
-        guard geometry.heights[index] != height else { return }
-        change { geometry.setHeight(height, ofRow: index) }
+        guard !isUpdating, adjusting == 0, cells[id] != nil, let index = geometry.index(of: id) else { return }
+        change { measure(index) }
     }
 
     // MARK: - Scrolling
@@ -753,23 +778,27 @@ final class ConversationRowListController: NSObject {
     }
 
     @objc private func boundsChanged() {
-        tile()
+        guard adjusting == 0 else { return }
+        let oldBounds = scrollView.contentView.bounds
+        let moved = lastSeen.map {
+            $0.height == geometry.contentHeight && $0.visible.size == oldBounds.size && abs($0.visible.minY - oldBounds.minY) > 1
+        } ?? false
+        change(scrolling: true) {}
+        reportScroll(moved: moved, readerScrolled: scrollView.isReaderScrolling)
+    }
+
+    private func reportScroll(moved: Bool = false, readerScrolled: Bool = false) {
         let visible = scrollView.contentView.bounds
         let height = geometry.contentHeight
-        let last = lastSeen
         lastSeen = (visible, height)
         guard let parent, visible.width >= 80, visible.height >= 60 else { return }
         let distance = geometry.distanceFromEnd(offset: visible.minY, viewportHeight: visible.height)
         if distance <= 1 { arrivedUnderGesture = 0 }
-        let readerScrolled = adjusting == 0 && scrollView.isReaderScrolling
         // The view moved over rows that stayed as they were, and not for this list: the reader, or
         // something brought into view for them (find's match, an accessibility scroll). As for the
         // stack (`TranscriptScrollMetrics.isUserMovement`), that decides whether to follow the latest
         // output; otherwise the next row measured again took the view back to the end.
-        let moved = adjusting == 0 && last.map {
-            $0.height == height && $0.visible.size == visible.size && abs($0.visible.minY - visible.minY) > 1
-        } ?? false
-        let userDriven = readerScrolled || moved
+        let userDriven = readerScrolled || (animatedScrolls == 0 && moved)
         // A place asked for whose row has not come in yet is given up once the reader goes elsewhere.
         if userDriven { pendingPlace = nil }
         var state = followState
@@ -802,12 +831,7 @@ final class ConversationRowListController: NSObject {
         if rowsView.frame.width != size.width {
             rowsView.setFrameSize(NSSize(width: size.width, height: rowsView.frame.height))
         }
-        // Every row's height is by width; a hosting keeps the heights it was measured at.
-        change(scales: widthChanged) {
-            if widthChanged {
-                geometry.setRows(geometry.ids, heights: geometry.ids.indices.map(rowHeight), leads: geometry.leads)
-            }
-        }
+        change(scales: widthChanged, refresh: widthChanged) {}
     }
 
     private func scrollToEnd() {
@@ -817,13 +841,13 @@ final class ConversationRowListController: NSObject {
     /// Moves the viewport's top to `y`, kept inside the list; `animated` eases there in ParityMotion's
     /// time unless the person asked for reduced motion. A window not on a display goes there at once: its
     /// animation would not run until it is shown, and the list would wait for it.
-    private func scroll(toY y: CGFloat, animated: Bool = false) {
+    private func scroll(toY y: CGFloat, animated: Bool = false, completion: (@MainActor @Sendable () -> Void)? = nil) {
         let clip = scrollView.contentView
         let target = min(max(0, y), geometry.maximumOffset(viewportHeight: clip.bounds.height))
         guard abs(clip.bounds.minY - target) >= 0.5 else { return }
         if animated, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
            scrollView.window?.occlusionState.contains(.visible) == true {
-            adjusting += 1
+            animatedScrolls += 1
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.16
                 context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
@@ -832,7 +856,9 @@ final class ConversationRowListController: NSObject {
                 MainActor.assumeIsolated {
                     guard let self else { return }
                     self.scrollView.reflectScrolledClipView(clip)
-                    self.adjusting -= 1
+                    self.animatedScrolls -= 1
+                    self.change(scrolling: true) {}
+                    completion?()
                 }
             }
             return
@@ -841,5 +867,10 @@ final class ConversationRowListController: NSObject {
         clip.scroll(to: NSPoint(x: 0, y: target))
         scrollView.reflectScrolledClipView(clip)
         adjusting -= 1
+        if adjusting == 0 {
+            change(scrolling: true) {}
+            reportScroll()
+        }
+        completion?()
     }
 }
