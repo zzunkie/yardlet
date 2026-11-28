@@ -3,10 +3,8 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// Codex turns as the timeline draws them, rendered in a test window that is never shown:
-/// a stopped turn and its command card, a command streaming output, a Plan mode turn with its
-/// implement question, and the notices the App Server sends beside a turn. The images go to
-/// `.build/codex-timeline-qa` for review.
+/// Renders Codex turns as the timeline draws them, in an unshown window, into
+/// `.build/codex-timeline-qa`.
 @MainActor
 final class CodexTimelineRenderingTests: XCTestCase {
     private let decoder = CodexTaskDecoder()

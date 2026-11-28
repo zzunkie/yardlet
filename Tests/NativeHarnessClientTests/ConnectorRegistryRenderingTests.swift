@@ -4,17 +4,8 @@ import XCTest
 @testable import NativeHarnessClient
 @testable import YardletAgentTools
 
-/// Add connector with the MCP registries and a program's page, drawn offscreen at the sheet's own
-/// size (580 × 660) into `.build/connector-registry-qa/`, light and dark, with what each says
-/// checked. The registries' answers are the recorded fixtures (`MCPRegistryTests`); nothing is
-/// asked of a registry, no program runs, and the harness files are fixtures with fake values.
-///
-/// - `add-registry-browse-*`: the sheet scrolled to "From MCP registries" without a search: servers
-///   at a service, the service's own first, with what each needs.
-/// - `add-registry-search-*`: a search for "notion": the directory's Notion and the registries'
-///   matches, programs on this Mac and one that cannot be connected among them.
-/// - `program-page-*`: a Docker program's page: what runs, its values, the button that runs it.
-/// - `settings-import-programs-*`: Settings → Connectors offering programs from Cursor and VS Code.
+/// Renders Add connector with the MCP registries offscreen into `.build/connector-registry-qa/`,
+/// light and dark, from recorded fixtures.
 @MainActor
 final class ConnectorRegistryRenderingTests: XCTestCase {
     private static let folder = "connector-registry-qa"

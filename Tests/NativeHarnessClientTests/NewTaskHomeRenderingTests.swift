@@ -3,13 +3,8 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// The new-task screen, Yardlet's home, drawn for review into `.build/new-task-qa/`: four projects and
-/// the chats with what their tasks need, wide (two and three columns) and narrow, in both appearances,
-/// quiet and empty, and with a chat chosen. Then what a person does in a real (unshown) window: a click
-/// on a project chooses where the task starts and a click on a line opens its task, Tab, ↓ and Return
-/// move from the composer through the projects to the folder's rows over the composer, and a narrower
-/// window puts the projects in one column. No provider, `gh` or Git command runs: pull requests are
-/// set on the monitor and the folders' Git state is given.
+/// Renders the new-task screen into `.build/new-task-qa/`, light and dark, without running a
+/// provider, `gh` or Git.
 @MainActor
 final class NewTaskHomeRenderingTests: XCTestCase {
     private var root: URL!

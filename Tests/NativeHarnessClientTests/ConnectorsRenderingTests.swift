@@ -4,16 +4,8 @@ import XCTest
 @testable import NativeHarnessClient
 @testable import YardletAgentTools
 
-/// Settings → Connectors and the composer's connector list, drawn offscreen into
-/// `.build/connectors-qa`, light and dark. Fixture connectors and fixture harness files only: no
-/// network, sign-in, provider, or window on screen.
-///
-/// - `settings-connectors-*`: the page with connectors in each state (connected first), the claude.ai
-///   switch, and the import suggestions.
-/// - `settings-add-slack-*`: the add sheet opened at Slack: its steps and the OAuth client fields.
-/// - `composer-connectors-*`: a task's list: switches, "Reconnect", a connector left to the
-///   harness's own server, one turned off here, and the harness's servers.
-/// - `sign-in-elsewhere-*`: the question before a sign-in page on another site than the server's.
+/// Renders Settings → Connectors and the composer's connector list offscreen into
+/// `.build/connectors-qa`, light and dark.
 @MainActor
 final class ConnectorsRenderingTests: XCTestCase {
     private var roots: [URL] = []

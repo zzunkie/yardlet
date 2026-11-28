@@ -4,16 +4,8 @@ import XCTest
 @testable import NativeHarnessClient
 @testable import YardletAgentTools
 
-/// Microsoft 365's and Zoom's setup in Settings → Connectors, drawn offscreen into
-/// `.build/microsoft-zoom-qa/`, light and dark, with what each says checked. Fixture records and
-/// fakes only: no network or sign-in.
-///
-/// - `microsoft-page-empty-*`: the Microsoft page before an app is saved: the Entra steps and fields.
-/// - `microsoft-page-builtin-accounts-*`: a build with Yardlet's own Microsoft app, a personal and a
-///   work account signed in, one needing sign-in again.
-/// - `zoom-page-*`: the Zoom page, all three products picked.
-/// - `add-directory-microsoft-zoom-*`: the directory's own-app group with Microsoft 365 and Zoom.
-/// - `setup-tiles-*`: "Set up in one go" with its four services.
+/// Renders Microsoft 365's and Zoom's setup offscreen into `.build/microsoft-zoom-qa/`, light and
+/// dark, from fixtures only.
 @MainActor
 final class MicrosoftZoomRenderingTests: XCTestCase {
     private static let folder = "microsoft-zoom-qa"

@@ -3,11 +3,8 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// The task composer as the person sees it while working (2026-10-16): one "+" for adding files,
-/// folders, commands and connectors; while a turn runs, the placeholder that says where Return
-/// and ⌘Return send a message (and that Return queues while the task waits to move to another
-/// account), and queue chips that say where each queued message goes. Images go
-/// to `.build/composer-stream-qa/` in both appearances, with each composer's accessibility row.
+/// Renders the task composer while a person works into `.build/composer-stream-qa/`, light and
+/// dark, with each composer's accessibility row.
 @MainActor
 final class ComposerStreamQARenderingTests: XCTestCase {
     private typealias F = ComposerUnificationFixtures

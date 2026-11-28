@@ -3,15 +3,8 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// Adding a mail account over IMAP, drawn into `.build/mailbox-qa/` in both appearances, with what each
-/// says checked. No server is reached: the pages are drawn before Connect.
-///
-/// - `imap-add-search-*`: Add connector searched for "IMAP": Mail (IMAP) with its app password.
-/// - `imap-setup-naver-*`: a Naver address, its three steps on Naver's website, then the password.
-/// - `imap-setup-other-*`: an address at no known service, with the servers to type.
-/// - `imap-setup-gmail-*`: a Gmail address (googlemail.com), sent to Gmail's own connector.
-/// - `imap-setup-accounts-*`, `imap-settings-*`: two accounts added, one whose password was refused, on
-///   the page and in Settings › Connectors.
+/// Renders adding a mail account over IMAP into `.build/mailbox-qa/`, light and dark, without
+/// reaching a server.
 @MainActor
 final class MailAccountSetupRenderingTests: XCTestCase {
     private static let folder = "mailbox-qa"

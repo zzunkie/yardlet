@@ -3,13 +3,7 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// The background tasks line above the composer, drawn offscreen into `.build/turn-summary-qa`, light
-/// and dark. No provider, process, app launch or window server interaction.
-///
-/// - `task-bar-*.png`: a Claude Code task whose two background agents and one background shell run
-///   after its turn ended: the collapsed line on the composer rail, above the composer.
-/// - `bar-expanded-*.png`: the line opened over a composer: each task with its elapsed time and stop
-///   control, one already stopping, one whose stop failed.
+/// Renders the background tasks line offscreen into `.build/turn-summary-qa`, light and dark.
 @MainActor
 final class BackgroundTasksRenderingTests: XCTestCase {
     private let now = Date()

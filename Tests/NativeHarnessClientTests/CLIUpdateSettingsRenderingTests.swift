@@ -3,16 +3,8 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// Settings › CLI Updates drawn offscreen (never shown) in both appearances into `.build/cli-update-qa`:
-///
-/// - `cli-updates-*.png`: the switch on, and six installs after one check: Codex (Homebrew cask)
-///   back on 0.157.1 after 0.163.0 failed Yardlet's check, with the newer runtime the ChatGPT app
-///   brings offered beside the Homebrew one the person chose, Claude Code inside the Claude app,
-///   OpenCode (npm) updated, Cursor Agent that Yardlet cannot check, Antigravity CLI up to date, and
-///   Grok Build waiting for its running task.
-/// - `cli-update-notice-*.png`: the main window's notice for Codex.
-///
-/// Every install is a fixture in a temporary folder and every command goes to a fake runner.
+/// Renders Settings › CLI Updates offscreen into `.build/cli-update-qa`, light and dark, from
+/// fixture installs and a fake runner.
 @MainActor
 final class CLIUpdateSettingsRenderingTests: XCTestCase {
     private var root: URL!

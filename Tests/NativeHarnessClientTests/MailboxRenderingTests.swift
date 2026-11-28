@@ -4,9 +4,7 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// The mailbox drawn in an unshown window with fixture accounts: the Mail word, the merged list, an
-/// opened thread with an agent's draft, the accounts' folders and labels, and spam. Opening a thread
-/// marks it read on its service; spam offers no agent.
+/// Renders the mailbox in an unshown window with fixture accounts.
 @MainActor
 final class MailboxRenderingTests: XCTestCase {
     func testTheMailboxListsEveryInboxAndOpensAThread() async throws {

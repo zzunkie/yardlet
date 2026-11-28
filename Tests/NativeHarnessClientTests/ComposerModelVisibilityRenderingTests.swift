@@ -3,10 +3,8 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// Renders, into `.build/model-visibility-qa` in both appearances, the composers of a Claude task
-/// and a Codex task that have not connected, the new-task composer for each harness, and the
-/// shared model menu each opens. The composers draw in a borderless window that is never put on
-/// screen, so their text fields draw; the menus draw with ImageRenderer. No provider is contacted.
+/// Renders the composers and their model menus into `.build/model-visibility-qa`, light and dark,
+/// in a window never put on screen.
 @MainActor
 final class ComposerModelVisibilityRenderingTests: XCTestCase {
     private let directory = URL(filePath: #filePath).deletingLastPathComponent().deletingLastPathComponent()

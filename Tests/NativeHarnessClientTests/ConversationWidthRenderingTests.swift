@@ -3,13 +3,9 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// The whole main window with the session rail, the side panel (Review) and the terminal all open, at
-/// a wide, a laptop and two narrow widths and where the rail and the floating panel come and go, light
-/// and dark, into `.build/conversation-width-render/<phase>/` (`CONVERSATION_WIDTH_RENDER` names the
-/// phase; without it the test is skipped).
-///
-/// No provider is contacted and no task attaches. The terminal runs zsh with its own startup folder,
-/// and Review reads a Git repository the test makes.
+/// Renders the whole main window at several widths into
+/// `.build/conversation-width-render/<phase>/`, light and dark; skipped unless
+/// `CONVERSATION_WIDTH_RENDER` names the phase.
 @MainActor
 final class ConversationWidthRenderingTests: XCTestCase {
     /// 1800, 1400, 1100 and 1000 points wide; 1407 and 1406, where the rail stands beside the

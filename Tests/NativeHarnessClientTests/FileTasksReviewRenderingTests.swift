@@ -3,16 +3,8 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// A Markdown change rendered in the review, and a file's related tasks, drawn with no window on screen,
-/// light and dark, into `.build/file-tasks-qa/`:
-///
-/// - `review-markdown-wide-*`: the review at 900 points, a Last turn's Markdown change rendered, the
-///   tasks that edited the file under its name.
-/// - `review-markdown-narrow-*`: the same at 380 points, where the file menu takes the file list's place.
-/// - `review-markdown-lines-wide-*`: the same file as the line diff, the rendered view switched off.
-/// - `files-tasks-*`: the files panel with the file open and its related tasks under the header.
-///
-/// The clicks go through the accessibility tree of a window that is never ordered on screen.
+/// Renders a Markdown change in the review and a file's related tasks offscreen into
+/// `.build/file-tasks-qa/`, light and dark.
 @MainActor
 final class FileTasksReviewRenderingTests: XCTestCase {
     private static let before = """

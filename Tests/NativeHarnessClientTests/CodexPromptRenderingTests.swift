@@ -3,11 +3,8 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// Sent Codex messages drawn the way the Codex app draws them, by the one renderer, with no window on
-/// screen: the request in the bubble, the files mentioned or pasted as chips that open their lines,
-/// counts of comments, annotations and selections, checks and conflicts as chips, the mode under the
-/// bubble, and none of the context the app keeps for the model. A long request clips at 20 lines of
-/// its own. Review images go to `.build/codex-prompt-qa/` in both appearances.
+/// Renders sent Codex messages as the Codex app draws them, offscreen into
+/// `.build/codex-prompt-qa/`, light and dark.
 @MainActor
 final class CodexPromptRenderingTests: XCTestCase {
     private let decoder = CodexTaskDecoder()

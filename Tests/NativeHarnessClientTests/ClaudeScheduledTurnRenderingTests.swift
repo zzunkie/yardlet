@@ -3,12 +3,8 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// A Claude task a schedule wakes, drawn by the one renderer with no window on screen: each check-in
-/// opens a turn of its own on the left under the Claude app's "Scheduled check-in" (a named Claude app
-/// task under "Scheduled task: {name}"), not the person's bubble, and the report before it stays in
-/// view as its turn's answer. So does a report a background subagent's own task followed, and the
-/// report before a background task's notice, which opens its turn under "Background task" (2026-10-24).
-/// Review images go to `.build/claude-scheduled-qa/` in both appearances.
+/// Renders a Claude task a schedule wakes offscreen into `.build/claude-scheduled-qa/`, light and
+/// dark.
 @MainActor
 final class ClaudeScheduledTurnRenderingTests: XCTestCase {
     func testScheduledCheckInsDrawAsTheirOwnTurnsUnderTheClaudeAppsWords() throws {

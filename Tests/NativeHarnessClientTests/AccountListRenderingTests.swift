@@ -3,9 +3,7 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// The one account list in each of its four modes, drawn in an unshown window in both appearances
-/// into `.build/account-list-qa`: the new-task chip's popover, a task's account sheet, a limit
-/// card's "Continue with another account" and Settings › Harness Accounts.
+/// Renders the account list in an unshown window into `.build/account-list-qa`, light and dark.
 @MainActor final class AccountListRenderingTests: XCTestCase {
     private var roots: [URL] = []
 

@@ -3,10 +3,8 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// A conversation image opened over the window (`ImageViewer`), as the Codex and Claude apps open
-/// one: fitted and never enlarged, zoomed by keys, moved between a message's images by the arrows,
-/// put away by Esc, and named for assistive apps. Renders over a real conversation at window size go
-/// to `.build/image-viewer-qa` in light and dark. No provider, CLI, app window or screen capture.
+/// Renders a conversation image opened in `ImageViewer` at window size into
+/// `.build/image-viewer-qa`, light and dark.
 @MainActor
 final class ImageViewerRenderingTests: XCTestCase {
     private var scratch: URL!

@@ -3,11 +3,8 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// The session rail drawn without a window on screen, a provider, an account, `gh` or user data,
-/// into `.build/session-rail-qa/`, light and dark: every card open and folded for Claude Code, Codex
-/// and OpenCode; the Changes card's pull request states; and a task with the rail beside its
-/// conversation at wide and narrow widths, beside a side panel, and raised where it has no room, and a
-/// side panel floating where it has none either.
+/// Renders the session rail offscreen into `.build/session-rail-qa/`, light and dark, without a
+/// provider, account, `gh` or user data.
 @MainActor
 final class SessionRailRenderingTests: XCTestCase {
     private typealias Fixtures = ComposerUnificationFixtures
