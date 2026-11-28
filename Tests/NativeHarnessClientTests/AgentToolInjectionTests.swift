@@ -155,12 +155,17 @@ final class AgentToolInjectionTests: XCTestCase {
         )
         let sessionID = UUID()
         let configurable = try XCTUnwrap(routed as? any HarnessAgentToolConfiguring)
-        await configurable.setAgentToolServer(launch(session: sessionID, directory: directory), for: sessionID)
+        var server = launch(session: sessionID, directory: directory)
+        server.additionalClaudeAllowedToolNames = ["gmail_send_message"]
+        await configurable.setAgentToolServer(server, for: sessionID)
         let handle = try await routed.createSession(
             CreateHarnessSessionRequest(localSessionID: sessionID, workspaceURL: workspace, initialPrompt: nil)
         )
         let configuration = await transport.configuration
         let path = try XCTUnwrap(configuration?.agentToolConfigPath, "The server has to survive the protocol wrapper")
+        let args = ClaudeProcessTransport.arguments(for: try XCTUnwrap(configuration))
+        XCTAssertTrue(args.contains("mcp__yardlet__gmail_send_message"))
+        XCTAssertFalse(args.contains("mcp__yardlet__gmail_delete_draft"))
         let written = try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: URL(filePath: path)))
         XCTAssertEqual(written["mcpServers"]?["yardlet"]?["env"]?[AgentToolEnvironment.session], .string(sessionID.uuidString))
         await routed.close(handle)

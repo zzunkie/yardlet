@@ -37,6 +37,16 @@ actor OAuthAPISession {
 
     /// Sends a request with the account's bearer token. `make` builds it afresh for a retry.
     func send(_ make: @Sendable () -> URLRequest) async throws -> (Data, HTTPURLResponse) {
+        let used = try await accessToken()
+        let first = try await http.send(authorized(make()))
+        guard first.1.statusCode == 401 else { return first }
+        try await refresh(from: used)
+        let second = try await http.send(authorized(make()))
+        if second.1.statusCode == 401 { throw Failure.signInRequired }
+        return second
+    }
+
+    func accessToken() async throws -> String {
         if !loaded {
             credential = try credentials.load(id)
             loaded = true
@@ -45,13 +55,14 @@ actor OAuthAPISession {
             throw Failure.signInRequired
         }
         if current.needsRefresh(at: now()) { try await refresh(from: current.accessToken) }
-        let used = credential?.accessToken
-        let first = try await http.send(authorized(make()))
-        guard first.1.statusCode == 401 else { return first }
-        try await refresh(from: used)
-        let second = try await http.send(authorized(make()))
-        if second.1.statusCode == 401 { throw Failure.signInRequired }
-        return second
+        guard let token = credential?.accessToken else { throw Failure.signInRequired }
+        return token
+    }
+
+    func refreshedAccessToken(replacing token: String) async throws -> String {
+        try await refresh(from: token)
+        guard let refreshed = credential?.accessToken else { throw Failure.signInRequired }
+        return refreshed
     }
 
     private func authorized(_ request: URLRequest) -> URLRequest {

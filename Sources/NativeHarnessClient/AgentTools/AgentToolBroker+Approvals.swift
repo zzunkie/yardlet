@@ -235,7 +235,10 @@ extension AgentToolBroker {
         if policy.readOnly, !facts.readOnly { return Self.readOnlyRefusal(tool) }
         guard policy.asksPerson else { return nil }
         let harnessAsked = origin == .direct && policy.harnessAsksBeforeDirectCalls
+            && claudeAllowedConnectorTools[sessionID]?.contains(tool) != true
         guard facts.readOnly else {
+            // Google weighs this write after the local read-only gate, including a write from a wrapper.
+            if facts.usesGoogleWorkspaceMCP { return nil }
             guard !harnessAsked else { return nil }
             let claudeName = Self.claudeName(tool)
             let input = JSONValue(arguments)

@@ -349,6 +349,9 @@ final class ConnectorCenter: ConnectorToolProviding {
         var googleBuiltInApp: GoogleOAuth.BuiltInApp?
         /// Microsoft's sign-in and Graph addresses, for Outlook, OneDrive, and Teams.
         var microsoft: MicrosoftOAuth.Endpoints = .live
+        /// The stateless clients registered for each Workspace service and remote tool. A tool without a
+        /// client uses the existing REST runner and its local approval policy.
+        var googleWorkspaceClients: [LocalConnectorService: [String: GoogleWorkspaceMCPClient]] = [:]
         /// The Microsoft Entra app this build carries; nil when it carries none.
         var microsoftBuiltInApp: MicrosoftOAuth.BuiltInApp?
         /// The client ID of Yardlet's own GitHub OAuth app, for GitHub's device sign-in; nil when
@@ -2057,6 +2060,26 @@ final class ConnectorCenter: ConnectorToolProviding {
         return tools
     }
 
+    private func workspaceClient(for service: LocalConnectorService?, tool: String) -> GoogleWorkspaceMCPClient? {
+        guard let service, [.gmail, .googleCalendar, .googleDrive].contains(service) else { return nil }
+        return environment.googleWorkspaceClients[service]?[tool]
+    }
+
+    func googleWorkspaceToolNames(for context: ConnectorToolContext) -> [String] {
+        guard !environment.googleWorkspaceClients.isEmpty else { return [] }
+        var names: [String] = []
+        for case let .accounts(service, _) in toolOwners(listedIn: context) {
+            let prefix = ConnectorToolNaming.accountToolPrefix(for: service, among: connectors)
+            for tool in service.tools ?? [] {
+                guard let name = tool["name"]?.stringValue, workspaceClient(for: service, tool: name) != nil else { continue }
+                names.append(ConnectorToolNaming.name(slug: prefix, tool: name))
+            }
+        }
+        return names
+    }
+
+    @ObservationIgnored var googleWorkspaceResponder: @MainActor (UUID) -> GoogleWorkspaceMCPClient.Responder? = { _ in nil }
+
     func serviceNames(for context: ConnectorToolContext) -> [String] {
         var names: [String] = []
         for owner in toolOwners(listedIn: context) {
@@ -2103,7 +2126,8 @@ final class ConnectorCenter: ConnectorToolProviding {
         }
     }
 
-    /// Runs a connector's tool within one limit for the whole call (`toolCallLimit`), which ends before the
+    /// Runs a connector tool. Workspace MCP limits each HTTP exchange separately around its approval.
+    /// Other connectors have one limit for the whole call (`toolCallLimit`), which ends before the
     /// MCP server stops waiting for the app, so the agent hears what Yardlet knows of the call rather than
     /// that the connection gave out. A call that changes something is never sent again by Yardlet once it
     /// may have reached the server; a read is, once, when the server could not answer it.
@@ -2118,6 +2142,7 @@ final class ConnectorCenter: ConnectorToolProviding {
         guard let (owner, toolName) = owner(ofTool: name) else { return nil }
         let service: String, tool: ToolJSON?
         var account: String?
+        var usesGoogleWorkspaceMCP = false
         switch owner {
         case .connector(let record):
             tool = record.offeredTools.first { $0["name"]?.stringValue == toolName }
@@ -2127,10 +2152,12 @@ final class ConnectorCenter: ConnectorToolProviding {
         case .accounts(let accounts, _):
             tool = accounts.tools?.first { $0["name"]?.stringValue == toolName }
             service = accounts.name
+            usesGoogleWorkspaceMCP = workspaceClient(for: accounts, tool: toolName) != nil
         }
         let title = tool?["title"]?.stringValue ?? tool?["annotations"]?["title"]?.stringValue ?? toolName
         return ConnectorToolFacts(service: service, title: title,
-                                  readOnly: tool?["annotations"]?["readOnlyHint"] == .bool(true), account: account)
+                                  readOnly: tool?["annotations"]?["readOnlyHint"] == .bool(true), account: account,
+                                  usesGoogleWorkspaceMCP: usesGoogleWorkspaceMCP)
     }
 
     /// Who makes a call: the task's model, through its harness, or a view of one of the connector's tools
@@ -2211,6 +2238,23 @@ final class ConnectorCenter: ConnectorToolProviding {
             return failure
         }
         let readOnly = tool?["annotations"]?["readOnlyHint"] == .bool(true)
+        // Only the HTTP rounds have a deadline. Keep the caller's cancellation and approval clock between them.
+        if let client = workspaceClient(for: record.localService, tool: toolName) {
+            guard let address = record.account else {
+                return .failure("Reconnect this Google Workspace account in Settings to use its tools.", .refused, retry: .no)
+            }
+            let session = accountSession(for: record)
+            do {
+                let token = try await session.accessToken()
+                let result = try await client.callTool(name: toolName, arguments: arguments, taskFolders: context.workspaceRoots,
+                                                       accountAddress: address, token: token, refreshToken: { rejected in
+                    try await session.refreshedAccessToken(replacing: rejected)
+                }, responder: context.taskID.flatMap { googleWorkspaceResponder($0) })
+                return Self.toolResult(result, server: record.name)
+            } catch {
+                return .error(error.localizedDescription)
+            }
+        }
         let limit = environment.toolCallLimit
         let answer = await Self.answer(within: limit) { [self] in
             await runConnectorTool(record, tool: toolName, arguments: arguments, readOnly: readOnly, context: context)

@@ -1771,7 +1771,7 @@ final class AppModel {
         }
         var interruptFailed = false
         do {
-            await stopSessionToolWork(for: session.id)
+            await stopSessionToolWork(for: session.id, stopping: false)
             guard store.sessions.contains(where: { $0.id == session.id }),
                   let adapter = adaptersBySessionID[session.id],
                   let handle = handlesBySessionID[session.id] else {

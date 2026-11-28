@@ -946,6 +946,7 @@ actor ClaudeAdapter:
                     contextLimit: contextLimitByLocalSessionID[handle.localSessionID] ?? defaultContextLimit(),
                     sessionName: sessionNameByLocalSessionID[handle.localSessionID],
                     agentToolConfigPath: agentToolConfigPath(for: handle.localSessionID),
+                    additionalClaudeAllowedToolNames: agentToolServerByLocalSessionID[handle.localSessionID]?.additionalClaudeAllowedToolNames ?? [],
                     forkSource: forkSources[handle.localSessionID],
                     permissionMode: permissionModeByLocalSessionID[handle.localSessionID],
                     model: launchModelByLocalSessionID[handle.localSessionID],

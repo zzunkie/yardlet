@@ -148,6 +148,8 @@ extension AppModel {
             guard let route = request.declinedByMessage,
                   let current = store.sessions.first(where: { $0.id == sessionID }),
                   pendingApproval(request.id, in: current) != nil else { continue }
+            // A message dismisses the local card. It does not select a denial option in a server form.
+            if sessionTools.dismissBoundForm(request.id) { continue }
             if route.isPlainDenial, readsDenialNote(request.id, in: current) {
                 await respond(to: request.id, answer: .denial(reason: PersonsMessageAnswer.denial), in: current)
             } else {

@@ -2063,6 +2063,32 @@ extension AppModel: SessionToolHandling, AgentToolApprovalHandling {
         }
     }
 
+    /// An interactive task can present Google's exact choices on its task card. Scheduled runs and
+    /// subagents have no interactive responder of their own.
+    func googleWorkspaceResponder(for callerID: UUID) -> GoogleWorkspaceMCPClient.Responder? {
+        guard let caller = sessionToolCaller(callerID), caller.id == caller.hostTaskID,
+              !scheduledTasks.isRunningScheduledTurn(in: callerID) else { return nil }
+        return { [weak self] card in
+            try await self?.answerGoogleWorkspaceCard(card, callerID: callerID)
+        }
+    }
+
+    private func answerGoogleWorkspaceCard(_ card: GoogleWorkspaceMCPClient.Card, callerID: UUID) async throws -> String? {
+        guard let caller = sessionToolCaller(callerID) else { return nil }
+        let request = PermissionRequest(id: SessionToolApproval.idPrefix + UUID().uuidString.lowercased(),
+                                        title: card.title, detail: card.detail, command: nil, actions: card.actions)
+        let answer = await sessionTools.decide(request, in: callerID, callerID: callerID,
+                                               wait: caller.remaining, boundToCall: true) { [weak self] in
+            self?.sessionToolApprovalsChanged(in: callerID)
+        }
+        try Task.checkCancellation()
+        switch answer {
+        case let .allowed(choice), let .denied(choice): return choice
+        case .declined, .unanswered: return nil
+        case .cancelled: throw CancellationError()
+        }
+    }
+
     func callDeadline(callerID: UUID) -> ContinuousClock.Instant? {
         sessionToolCaller(callerID)?.deadline
     }
@@ -2170,8 +2196,8 @@ extension AppModel: SessionToolHandling, AgentToolApprovalHandling {
 
     /// The caller's turn stopped or the task went away: its subagents stop and what its session
     /// tools wait on is refused. They stop with it, so no message of theirs starts its turn again.
-    func stopSessionToolWork(for taskID: UUID) async {
-        sessionTools.refuseApprovals(in: taskID)
+    func stopSessionToolWork(for taskID: UUID, stopping: Bool = true) async {
+        sessionTools.refuseApprovals(in: taskID, stopping: stopping)
         for run in sessionTools.runs(hostedBy: taskID) where !run.state.isFinished {
             run.notifiesCaller = false
             await stopAgentRun(run)
