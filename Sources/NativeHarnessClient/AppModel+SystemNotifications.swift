@@ -125,7 +125,7 @@ extension AppModel {
         case .claudeCode where ClaudeComposerCommands.isResetCandidate(command): return nil
         default: break
         }
-        let requests = pendingApprovals(in: session).filter { $0.declinedByMessage != nil }
+        let requests = pendingApprovals(in: session).filter { $0.declinedByMessage != nil || sessionTools.isBoundForm($0.id) }
         return requests.isEmpty && browserHandoffWaits[sessionID]?.isEmpty != false
             && simulatorTools.handoffs.waiting(for: sessionID) == nil ? nil : requests
     }
@@ -145,9 +145,11 @@ extension AppModel {
         simulatorTools.handoffs.answer(.personSentMessage, for: sessionID)
         for request in requests {
             // An earlier answer can end the turn and the rest with it.
-            guard let route = request.declinedByMessage,
-                  let current = store.sessions.first(where: { $0.id == sessionID }),
+            guard let current = store.sessions.first(where: { $0.id == sessionID }),
                   pendingApproval(request.id, in: current) != nil else { continue }
+            // A message dismisses the local card. It does not select a denial option in a server form.
+            if sessionTools.dismissBoundForm(request.id) { continue }
+            guard let route = request.declinedByMessage else { continue }
             if route.isPlainDenial, readsDenialNote(request.id, in: current) {
                 await respond(to: request.id, answer: .denial(reason: PersonsMessageAnswer.denial), in: current)
             } else {

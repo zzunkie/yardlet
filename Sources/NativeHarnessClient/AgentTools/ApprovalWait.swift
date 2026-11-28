@@ -33,11 +33,11 @@ enum ApprovalWait {
     }
 
     /// Waits on the person with the caller's clock stopped.
-    static func whilePersonReads<T>(isolation: isolated (any Actor)? = #isolation, _ wait: () async -> T) async -> T {
+    static func whilePersonReads<T>(isolation: isolated (any Actor)? = #isolation, _ wait: () async throws -> T) async rethrows -> T {
         let clock = clock
         clock?.personWaitBegan()
         defer { clock?.personWaitEnded() }
-        return await wait()
+        return try await wait()
     }
 }
 

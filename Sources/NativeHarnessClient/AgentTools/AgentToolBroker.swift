@@ -20,6 +20,7 @@ protocol ConnectorToolProviding: AnyObject {
     func connectorTools(for context: ConnectorToolContext) async -> [ToolJSON]
     /// Runs a connector's tool; nil when no connector has a tool of this name.
     func callConnectorTool(named name: String, arguments: ToolJSON, for context: ConnectorToolContext) async -> AgentToolResult?
+    func googleWorkspaceToolNames(for context: ConnectorToolContext) -> [String]
     /// The kinds of services whose tools the task's list holds ("Gmail", "Linear"), each once and
     /// without accounts, for the server's instructions.
     func serviceNames(for context: ConnectorToolContext) -> [String]
@@ -39,9 +40,11 @@ struct ConnectorToolFacts: Equatable, Sendable {
     /// The account a connector of one account acts in; nil for a tool its service's accounts share, whose call
     /// names the account (`ConnectorToolNaming.accountArgument`).
     var account: String? = nil
+    var usesGoogleWorkspaceMCP = false
 }
 
 extension ConnectorToolProviding {
+    func googleWorkspaceToolNames(for context: ConnectorToolContext) -> [String] { [] }
     func serviceNames(for context: ConnectorToolContext) -> [String] { [] }
     func connectorToolFacts(named name: String, for context: ConnectorToolContext) -> ConnectorToolFacts? { nil }
 }
@@ -165,6 +168,8 @@ final class AgentToolBroker: AgentToolLaunchProviding {
     private var browserToolsByTask: [UUID: Bool] = [:]
     /// Whether the Simulator switch was on when each task was injected.
     private var simulatorToolsByTask: [UUID: Bool] = [:]
+    /// The connector names delegated by the Claude CLI at session launch.
+    var claudeAllowedConnectorTools: [UUID: Set<String>] = [:]
     /// What each task's harness was found to load itself when the task was injected.
     private var connectorScopes: [UUID: ConnectorTaskScope] = [:]
     var connectors: (any ConnectorToolProviding)?
@@ -291,11 +296,15 @@ final class AgentToolBroker: AgentToolLaunchProviding {
             let services = connectors?.serviceNames(for: connectorContext(localSessionID)) ?? []
             if !services.isEmpty { launchEnvironment[AgentToolEnvironment.services] = services.joined(separator: "\n") }
         }
+        let allowed = connectorScope?.harness == .claudeCode
+            ? connectors?.googleWorkspaceToolNames(for: connectorContext(localSessionID)) ?? [] : []
+        claudeAllowedConnectorTools[localSessionID] = allowed.isEmpty ? nil : Set(allowed)
         return AgentToolServerLaunch(
             command: executable.path(percentEncoded: false),
             environment: launchEnvironment,
             privateDirectory: environment.privateDirectory,
-            leftOutServerURLs: connectorScope?.leftOutNativeServers.map(\.url) ?? []
+            leftOutServerURLs: connectorScope?.leftOutNativeServers.map(\.url) ?? [],
+            additionalClaudeAllowedToolNames: allowed
         )
     }
 
@@ -332,6 +341,7 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         browserToolsByTask.removeValue(forKey: localSessionID)
         simulatorToolsByTask.removeValue(forKey: localSessionID)
         connectorScopes.removeValue(forKey: localSessionID)
+        claudeAllowedConnectorTools.removeValue(forKey: localSessionID)
         approvedReadServices.removeValue(forKey: localSessionID)
         // A first read's or a download's question still waiting is withdrawn: its answer no longer allows anything.
         let prefix = localSessionID.uuidString + "|"

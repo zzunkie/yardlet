@@ -508,6 +508,29 @@ import XCTest
         }
     }
 
+    func testGoogleWorkspaceMCPNewMessageDismissesAFormWithoutDenialOption() async throws {
+        let fixture = try await makeFixture(followUps: .steer)
+        let model = fixture.model, task = fixture.task
+        let request = PermissionRequest(id: SessionToolApproval.idPrefix + UUID().uuidString, title: "Confirm",
+                                        detail: nil, command: nil,
+                                        actions: [.init(id: "ALLOW_ONCE", label: "Allow once", decision: .allow,
+                                                        kind: "allow_once")])
+        let waiter = Task {
+            await model.sessionTools.decide(request, in: task.id, callerID: task.id, wait: .seconds(10),
+                                            boundToCall: true) { model.sessionToolApprovalsChanged(in: task.id) }
+        }
+        defer { waiter.cancel() }
+        try await waitUntil { model.sessionTools.isBoundForm(request.id) }
+        let waits = try XCTUnwrap(model.waitsForPersonsMessage("Change the recipient", in: task.id))
+        XCTAssertEqual(waits.map(\.id), [request.id])
+        XCTAssertNil(waits.first?.declinedByMessage)
+        await model.answerWaits(waits, forPersonsMessageIn: task.id)
+        XCTAssertFalse(model.sessionTools.isBoundForm(request.id))
+        let result = await waiter.value
+        XCTAssertEqual(result, .declined)
+        await model.shutdown()
+    }
+
     /// A message the person sends while Claude waits on them goes first, as one for its next step (or held for the
     /// turn's end, as the setting says), and then the request is declined with words saying the person sent a message
     /// instead and did not refuse, as Claude Code itself closes an approval a new message arrives after. The turn goes

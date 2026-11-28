@@ -485,7 +485,9 @@ final class SessionToolCenter {
     enum CardAnswer: Equatable, Sendable {
         /// Allowed, with the allow the person chose ("" where the card offered none of its own).
         case allowed(String)
+        case denied(String)
         case declined
+        case cancelled
         /// Nobody answered while the call could wait. The card stays up for `cardStays` more, nil once its own time
         /// ended and it went; the call's `ApprovalWait.record` says so too.
         case unanswered(cardStays: Duration?)
@@ -497,13 +499,13 @@ final class SessionToolCenter {
     /// again (the same caller, title, detail and answers) waits on that card, or takes the answer the person gave
     /// meanwhile, once. A question asked outside a tool call (a download the agent's act started) takes its card away
     /// then. A call cancelled meanwhile (a stopped turn, a script stopped) takes its card away at once and is answered no.
-    func decide(_ request: PermissionRequest, in taskID: UUID, callerID: UUID?, wait: Duration,
+    func decide(_ request: PermissionRequest, in taskID: UUID, callerID: UUID?, wait: Duration, boundToCall: Bool = false,
                 onChange: @escaping @MainActor () -> Void) async -> CardAnswer {
         guard !Task.isCancelled else { return .declined }
-        let key = Self.cardKey(request, taskID: taskID, callerID: callerID)
+        let key = boundToCall ? request.id : Self.cardKey(request, taskID: taskID, callerID: callerID)
         let now = ContinuousClock.now
         leftAnswers = leftAnswers.filter { $0.value.until > now }
-        if let left = leftAnswers.removeValue(forKey: key) { return Self.answer(left.answer, to: request) }
+        if let left = leftAnswers.removeValue(forKey: key) { return left.answer }
         let id: String
         if let leftID = leftCards.removeValue(forKey: key), cards[leftID] != nil {
             id = leftID
@@ -511,7 +513,7 @@ final class SessionToolCenter {
             id = request.id
             let expires = now + cardLife
             approvals[taskID, default: []].append(SessionToolApproval(id: id, taskID: taskID, request: request))
-            cards[id] = Card(key: key, taskID: taskID, callerID: callerID, expires: expires, onChange: onChange,
+            cards[id] = Card(key: key, boundToCall: boundToCall, taskID: taskID, callerID: callerID, expires: expires, onChange: onChange,
                              life: Task { @MainActor [weak self] in
                                  try? await Task.sleep(until: expires)
                                  guard !Task.isCancelled else { return }
@@ -521,7 +523,7 @@ final class SessionToolCenter {
         }
         guard let expires = cards[id]?.expires else { return .declined }
         let callEnds = now + max(.zero, wait)
-        let staysUp = ApprovalWait.record != nil
+        let staysUp = !boundToCall && ApprovalWait.record != nil
         let leaving = callEnds < expires ? Task { @MainActor [weak self] in
             try? await Task.sleep(until: callEnds)
             guard !Task.isCancelled else { return }
@@ -541,7 +543,7 @@ final class SessionToolCenter {
         onChange()
         switch end {
         case let .answered(answer):
-            return Self.answer(answer, to: request)
+            return answer
         case .left:
             let stays = max(.zero, expires - .now)
             ApprovalWait.record?.note(.init(cardStays: stays))
@@ -556,8 +558,16 @@ final class SessionToolCenter {
     /// any more keeps its answer for the same call made again. False when no card is up under this ID.
     @discardableResult
     func answer(_ id: String, allow: Bool, actionID: String? = nil) -> Bool {
-        guard let card = takeCard(id) else { return false }
-        let answer: String?? = allow ? .some(actionID) : nil
+        guard let request = approval(id)?.request, let card = takeCard(id) else { return false }
+        let answer: CardAnswer
+        let decision: PermissionDecision = allow ? .allow : .deny
+        if let actionID, request.actions.contains(where: { $0.id == actionID && $0.decision == decision }) {
+            answer = allow ? .allowed(actionID) : .denied(actionID)
+        } else if allow && !card.boundToCall {
+            answer = .allowed(PermissionActionPreference.preferred(from: request.actions, decision: .allow)?.id ?? "")
+        } else {
+            answer = .declined
+        }
         if let waiter = approvalWaiters.removeValue(forKey: id) {
             waiter.resume(returning: .answered(answer))
         } else {
@@ -567,11 +577,25 @@ final class SessionToolCenter {
         return true
     }
 
+    func isBoundForm(_ id: String) -> Bool { cards[id]?.boundToCall == true }
+
+    /// A new message closes the outstanding form without choosing any of the server's options.
+    func dismissBoundForm(_ id: String) -> Bool {
+        guard isBoundForm(id) else { return false }
+        return answer(id, allow: false)
+    }
+
     /// Refuses every approval a task waits on, and takes away the cards no call waits on any more: its turn stopped,
     /// or it went away.
-    func refuseApprovals(in taskID: UUID) {
+    func refuseApprovals(in taskID: UUID, stopping: Bool = false) {
         for approval in approvals(for: taskID) {
-            if approvalWaiters[approval.id] != nil { answer(approval.id, allow: false) } else { withdraw(approval.id) }
+            if stopping, cards[approval.id]?.boundToCall == true {
+                cancelWaiter(approval.id, answer: .cancelled)
+            } else if approvalWaiters[approval.id] != nil {
+                answer(approval.id, allow: false)
+            } else {
+                withdraw(approval.id)
+            }
         }
         leftAnswers = leftAnswers.filter { $0.value.taskID != taskID }
     }
@@ -596,7 +620,7 @@ final class SessionToolCenter {
     @ObservationIgnored var cardLife: Duration = SessionToolPolicy.approvalTimeout
 
     private enum CardEnd {
-        case answered(String??)
+        case answered(CardAnswer)
         /// The call that waited on it could wait no longer; it stays up.
         case left
         /// Its own time ended and it went.
@@ -605,6 +629,7 @@ final class SessionToolCenter {
 
     private struct Card {
         let key: String
+        let boundToCall: Bool
         let taskID: UUID
         let callerID: UUID?
         let expires: ContinuousClock.Instant
@@ -617,19 +642,12 @@ final class SessionToolCenter {
     /// The cards no call waits on any more, by `cardKey`.
     @ObservationIgnored private var leftCards: [String: String] = [:]
     /// The answers such cards got, by `cardKey`, kept for the same call made again until `until`.
-    @ObservationIgnored private var leftAnswers: [String: (answer: String??, taskID: UUID, callerID: UUID?,
+    @ObservationIgnored private var leftAnswers: [String: (answer: CardAnswer, taskID: UUID, callerID: UUID?,
                                                            until: ContinuousClock.Instant)] = [:]
 
     private static func cardKey(_ request: PermissionRequest, taskID: UUID, callerID: UUID?) -> String {
         [taskID.uuidString, callerID?.uuidString ?? "", request.title, request.detail ?? "", request.command ?? "",
          request.actions.map(\.id).joined(separator: ",")].joined(separator: "\u{1}")
-    }
-
-    private static func answer(_ answer: String??, to request: PermissionRequest) -> CardAnswer {
-        guard let answer else { return .declined }
-        let allows = request.actions.filter { $0.decision == .allow }
-        if let answer, allows.contains(where: { $0.id == answer }) { return .allowed(answer) }
-        return .allowed(PermissionActionPreference.preferred(from: allows, decision: .allow)?.id ?? "")
     }
 
     /// Takes the card down: off its task's list and out of the cards no call waits on.
@@ -662,10 +680,10 @@ final class SessionToolCenter {
     }
 
     /// The call waiting on the card was cancelled: the card goes, and the call is answered no.
-    private func cancelWaiter(_ id: String) {
+    private func cancelWaiter(_ id: String, answer: CardAnswer = .declined) {
         guard let waiter = approvalWaiters.removeValue(forKey: id) else { return }
         _ = takeCard(id)
-        waiter.resume(returning: .answered(nil))
+        waiter.resume(returning: .answered(answer))
     }
 
     /// Takes down a card no call waits on.

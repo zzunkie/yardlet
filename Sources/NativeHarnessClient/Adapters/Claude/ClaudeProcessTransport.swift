@@ -1,4 +1,5 @@
 import Foundation
+import YardletAgentTools
 
 protocol ClaudeTransport: Actor {
     func start(_ configuration: ClaudeLaunchConfiguration) async throws
@@ -170,6 +171,7 @@ actor ClaudeProcessTransport: ClaudeTransport {
         if let path = configuration.agentToolConfigPath {
             arguments.append("--allowedTools")
             arguments.append(contentsOf: AgentToolServerLaunch.claudeAllowedTools)
+            arguments.append(contentsOf: configuration.additionalClaudeAllowedToolNames.map { "mcp__\(AgentToolEnvironment.serverName)__\($0)" })
             arguments.append(contentsOf: ["--mcp-config", path])
         }
         return arguments

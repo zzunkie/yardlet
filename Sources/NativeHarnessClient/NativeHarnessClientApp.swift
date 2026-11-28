@@ -647,6 +647,7 @@ struct NativeHarnessClientApp: App {
                     }
                     // A visual fixture may have put its own in place already.
                     if model.connectorCenter == nil { model.connectorCenter = MacAgentToolService.shared.connectors }
+                    model.connectorCenter?.googleWorkspaceResponder = { [weak model] in model?.googleWorkspaceResponder(for: $0) }
                     if !model.usesVisualFixture {
                         // A new task's browser profile starts from the task that started it; a task's
                         // profile goes with it. One the person moved under another task starts its own.

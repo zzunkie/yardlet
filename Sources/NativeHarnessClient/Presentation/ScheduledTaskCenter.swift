@@ -68,6 +68,11 @@ final class ScheduledTaskCenter {
         indexContinuing()
     }
 
+    func isRunningScheduledTurn(in taskID: UUID) -> Bool {
+        guard let turn = runningTurns[taskID] else { return false }
+        return turn.endedAt == nil
+    }
+
     func schedule(id: UUID) -> ScheduledTask? {
         schedules.first { $0.id == id }
     }

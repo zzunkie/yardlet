@@ -24,12 +24,14 @@ final class GmailConnectorTests: XCTestCase {
         agent: (any OAuthUserAgent)? = FakeUserAgent(),
         credentials: InMemoryConnectorCredentialStore = InMemoryConnectorCredentialStore(),
         repository: any ConnectorRepository = InMemoryConnectorRepository(),
-        now: @escaping @Sendable () -> Date = { Date() }
+        now: @escaping @Sendable () -> Date = { Date() },
+        configure: (inout ConnectorCenter.Environment) -> Void = { _ in }
     ) -> ConnectorCenter {
         var environment = ConnectorCenter.Environment(
             repository: repository, credentials: credentials, http: google, userAgent: agent,
             sha256: MacOAuthUserAgent.sha256, clientVersion: "9.9", now: now)
         environment.google = FakeGoogle.endpoints
+        configure(&environment)
         return ConnectorCenter(environment: environment)
     }
 
@@ -735,6 +737,54 @@ final class GmailConnectorTests: XCTestCase {
     }
 
     // MARK: - Several accounts
+
+    func testGoogleWorkspaceMCPRevokedRefreshMarksAllServicesForReconnect() async throws {
+        let google = FakeGoogle()
+        google.grantedScope = GoogleOAuth.scope(for: [.gmail, .googleCalendar])
+        let server = GoogleScriptedServer([.init(body: "", status: 401)])
+        let center = makeCenter(google: google, configure: { environment in
+            let client = GoogleWorkspaceMCPClient(endpoint: URL(string: "https://example.test/mcp/v1")!, transport: server)
+            environment.googleWorkspaceClients = [.gmail: ["list_labels": client]]
+        })
+        try await center.saveGoogleApp(clientID: FakeGoogle.clientID, secret: FakeGoogle.clientSecret)
+        let account = try XCTUnwrap(center.addAccount(services: [.gmail, .googleCalendar]))
+        await center.waitForConnection(account.id)
+        XCTAssertEqual(account.services.count, 2)
+        for record in account.services { XCTAssertEqual(center.record(record.id)?.status, .connected) }
+        google.revoke(google.signInAs)
+        let refused = try await call(center, "gmail_list_labels")
+        XCTAssertTrue(refused.isError)
+        XCTAssertTrue(refused.text.contains("Reconnect"), refused.text)
+        for record in account.services { XCTAssertEqual(center.record(record.id)?.status, .signInRequired) }
+    }
+
+    func testGoogleWorkspaceMCPRegisteredToolsUseRoundTripDeadlinesAndTaskScope() async throws {
+        let google = FakeGoogle()
+        let server = GoogleScriptedServer([.form(), .done])
+        let client = GoogleWorkspaceMCPClient(endpoint: URL(string: "https://example.test/mcp/v1")!, transport: server)
+        let center = makeCenter(google: google, configure: { environment in
+            environment.googleWorkspaceClients = [.gmail: ["list_labels": client]]
+            environment.toolCallLimit = .zero
+        })
+        try await center.saveGoogleApp(clientID: FakeGoogle.clientID, secret: FakeGoogle.clientSecret)
+        let record = try XCTUnwrap(center.addGmailAccount())
+        await center.waitForConnection(record.id)
+        let task = UUID()
+        let context = ConnectorToolContext(taskID: task)
+        XCTAssertEqual(center.googleWorkspaceToolNames(for: context), ["gmail_list_labels"])
+        XCTAssertEqual(center.connectorToolFacts(named: "gmail_list_labels", for: context)?.usesGoogleWorkspaceMCP, true)
+        XCTAssertEqual(center.connectorToolFacts(named: "gmail_send_message", for: context)?.usesGoogleWorkspaceMCP, false)
+        center.googleWorkspaceResponder = { id in
+            XCTAssertEqual(id, task)
+            return { _ in "ALLOW_ONCE" }
+        }
+        let result = try XCTUnwrapAsync(await center.callNamingTheOnlyAccount("gmail_list_labels", [:], for: context))
+        XCTAssertFalse(result.isError, result.text)
+        let requests = await server.requests
+        XCTAssertEqual(requests.map(\.timeoutInterval), [150, 150])
+        center.setConnector(record.id, on: false, inTask: task)
+        XCTAssertEqual(center.googleWorkspaceToolNames(for: context), [])
+    }
 
     /// Accounts share one set of tools: each call names the account it acts in, one of those connected and
     /// on in the task, with no default, and goes with that account's sign-in.

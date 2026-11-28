@@ -18,6 +18,9 @@ struct AgentToolServerLaunch: Equatable, Sendable {
     /// the harness's configuration writes their addresses (`ConnectorTaskScope.leftOutNativeServers`).
     var leftOutServerURLs: [URL] = []
 
+    /// Exact connector names whose approvals go through this task’s broker and Google Workspace.
+    var additionalClaudeAllowedToolNames: [String] = []
+
     /// A Codex MCP call may wait for a page load or a batch, beyond Codex's default limit, and a
     /// session tool may wait for another task's turn (`SessionToolWaiting.ceiling`).
     static let codexToolTimeoutSeconds: Int64 = 1_800

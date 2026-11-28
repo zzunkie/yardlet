@@ -85,6 +85,47 @@ final class AgentToolApprovalTests: XCTestCase {
         XCTAssertEqual(connectors.calls, [])
     }
 
+    func testGoogleWorkspaceMCPDelegatesWritesAndKeepsFirstReadAndPlanGates() async throws {
+        let (broker, session, token, connectors, approvals) = try makeBroker(policy: policy(claudeCLIAsks: true))
+        connectors.facts["gmail_send"]?.usesGoogleWorkspaceMCP = true
+        connectors.facts["gmail_search"]?.usesGoogleWorkspaceMCP = true
+        let launch = try XCTUnwrap(broker.agentToolServer(for: session, workspaceRoots: [],
+                                                           connectorScope: .init(harness: .claudeCode)))
+        XCTAssertEqual(Set(launch.additionalClaudeAllowedToolNames), ["gmail_send", "gmail_search"])
+        _ = await direct("gmail_search", broker, session, token)
+        _ = await direct("gmail_search", broker, session, token)
+        _ = await direct("gmail_send", broker, session, token)
+        _ = await script(#"return callTool("gmail_send", {});"#, broker, session, token)
+        XCTAssertEqual(approvals.titles, [L10n.format("Allow this task to read from %@?", "Gmail")])
+        approvals.policy = policy(readOnly: true)
+        let refusal = await direct("gmail_send", broker, session, token)
+        XCTAssertTrue(text(refusal).contains("read-only"))
+        XCTAssertEqual(connectors.calls, ["gmail_search", "gmail_search", "gmail_send", "gmail_send"])
+    }
+
+    func testGoogleWorkspaceMCPCardsKeepExplicitDenialDistinctFromDismissAndStop() async throws {
+        let center = SessionToolCenter(defaults: try XCTUnwrap(UserDefaults(suiteName: UUID().uuidString)))
+        let task = UUID()
+        let deny = PermissionRequestAction(id: "DENY_ONCE", label: "Deny", decision: .deny, kind: "reject_once")
+        func ask() -> Task<SessionToolCenter.CardAnswer, Never> {
+            let request = PermissionRequest(id: UUID().uuidString, title: "Send", detail: "Mail", command: nil, actions: [deny])
+            return Task { await center.decide(request, in: task, callerID: task, wait: .seconds(60), boundToCall: true) {} }
+        }
+        let denied = ask()
+        try await waitUntil { !center.approvals(for: task).isEmpty }
+        let card = try XCTUnwrap(center.approvals(for: task).first)
+        center.answer(card.id, allow: false, actionID: deny.id)
+        let result = await denied.value
+        XCTAssertEqual(result, .denied("DENY_ONCE"))
+        for stopping in [false, true] {
+            let waiting = ask()
+            try await waitUntil { !center.approvals(for: task).isEmpty }
+            center.refuseApprovals(in: task, stopping: stopping)
+            let answer = await waiting.value
+            XCTAssertEqual(answer, stopping ? .cancelled : .declined)
+        }
+    }
+
     func testClaudeCodesOwnCardAnswersOnlyItsDirectCall() async throws {
         let (broker, session, token, connectors, approvals) = try makeBroker(policy: policy(claudeCLIAsks: true))
         _ = await direct("gmail_send", broker, session, token)
@@ -799,7 +840,7 @@ private final class RecordingApprovals: AgentToolApprovalHandling {
 
 @MainActor
 private final class ApprovalConnectors: ConnectorToolProviding {
-    private let facts: [String: ConnectorToolFacts] = [
+    var facts: [String: ConnectorToolFacts] = [
         "gmail_search": .init(service: "Gmail", title: "Search", readOnly: true),
         "gmail_send": .init(service: "Gmail", title: "Send", readOnly: false, account: "me@example.test"),
         "slack_read": .init(service: "Slack", title: "Read", readOnly: true)
@@ -815,6 +856,10 @@ private final class ApprovalConnectors: ConnectorToolProviding {
         guard facts[name] != nil else { return nil }
         calls.append(name)
         return .text("{}")
+    }
+
+    func googleWorkspaceToolNames(for context: ConnectorToolContext) -> [String] {
+        facts.filter { $0.value.usesGoogleWorkspaceMCP }.keys.sorted()
     }
 
     func connectorToolFacts(named name: String, for context: ConnectorToolContext) -> ConnectorToolFacts? {

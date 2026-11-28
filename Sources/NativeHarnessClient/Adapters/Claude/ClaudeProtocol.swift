@@ -23,6 +23,7 @@ struct ClaudeLaunchConfiguration: Equatable, Sendable {
     /// The Yardlet MCP server's `--mcp-config` file. Nil leaves the launch arguments unchanged;
     /// the servers the user configured for Claude Code load as they always do.
     var agentToolConfigPath: String? = nil
+    var additionalClaudeAllowedToolNames: [String] = []
     var forkSource: HarnessSessionForkSource? = nil
     /// The permission mode the task last chose, in the selector's own value. Nil launches in
     /// Manual, as every task did before the mode was kept.
