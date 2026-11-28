@@ -18,6 +18,18 @@ enum RuntimeProcessEnvironment {
         return values
     }
 
+    /// Account checks and interactive account commands should run the selected CLI version.
+    static func accountCommand(for harness: HarnessKind, connection: ProviderConnection?) -> [String: String] {
+        var values = connection?.environment ?? [:]
+        switch harness {
+        case .claudeCode: values["DISABLE_AUTOUPDATER"] = "1"
+        case .museCode: values["MUSE_NO_AUTO_UPDATE"] = "1"
+        case .antigravityCLI: values["AGY_CLI_DISABLE_AUTO_UPDATE"] = "true"
+        default: break
+        }
+        return values
+    }
+
     static func values(
         executableURL: URL,
         base: [String: String] = app,

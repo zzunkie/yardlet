@@ -55,9 +55,15 @@ enum ProviderSignIn {
     static func neededHere(_ harness: HarnessKind) -> String {
         switch harness {
         case .claudeCode: L10n.string("Claude Code needs a one-time sign-in here. The Claude app keeps its own sign-in.")
-        case .codex, .antigravityCLI: L10n.format("Sign in to %@ to start a task here.", harness.displayName)
-        default: L10n.string("No usable runtime-owned account was found.")
+        case .openCode, .pi, .hermes: L10n.string("Provider not connected")
+        default: L10n.format("Sign in to %@ to start a task here.", harness.displayName)
         }
+    }
+
+    static func signedInDetail(_ harness: HarnessKind) -> String {
+        AccountConnectionPresentation.usesProviderLanguage(harness)
+            ? L10n.string("Provider connected")
+            : L10n.format("Signed in to %@.", harness.displayName)
     }
 
     /// The same for a Claude login whose terminal works from something an app does not get: Yardlet

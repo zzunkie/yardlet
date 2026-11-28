@@ -51,6 +51,10 @@ struct ProviderConnection: Identifiable, Codable, Hashable, Sendable {
     /// task's connection is written back as it was read.
     let credentialSelector: String?
 
+    var consoleTitle: String {
+        name == harness.displayName ? name : "\(name) · \(harness.displayName)"
+    }
+
     var providerDisplayName: String { Self.providerDisplayName(providerID) }
 
     static func providerDisplayName(_ providerID: String?) -> String {
@@ -739,7 +743,7 @@ final class ProviderConnectionStore {
               let arguments = Self.signOutArguments[connection.harness] else { throw ProviderConnectionError.invalidBinding }
         guard let executableURL,
               let result = try? await AccountCommandRunner.run(executableURL: executableURL, arguments: arguments,
-                  environment: connection.environment, timeout: .seconds(30)),
+                  environment: RuntimeProcessEnvironment.accountCommand(for: connection.harness, connection: connection), timeout: .seconds(30)),
               result.exitCode == 0 else { throw ProviderConnectionError.signOutFailed(connection.harness.displayName) }
         try remove(connection)
         let home = URL(filePath: path)

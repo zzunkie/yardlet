@@ -6075,7 +6075,7 @@ final class AppModel {
             throw HarnessAdapterError.runtimeNotFound(runtime)
         }
         let status = try await AccountCommandRunner.run(executableURL: runtime,
-            arguments: ["auth", "status"], environment: connection.environment)
+            arguments: ["auth", "status"], environment: RuntimeProcessEnvironment.accountCommand(for: .claudeCode, connection: connection))
         guard HarnessAccountBroker.commandAccountState(for: .claudeCode, result: status) == .signedIn
         else { throw ProviderConnectionError.signedOut }
         return task
@@ -6194,7 +6194,7 @@ final class AppModel {
                 throw HarnessAdapterError.capabilityUnavailable(L10n.string("Runtime unavailable"))
             }
             let status = try await AccountCommandRunner.run(executableURL: runtime, arguments: ["auth", "status"],
-                environment: target.environment)
+                environment: RuntimeProcessEnvironment.accountCommand(for: target.harness, connection: target))
             guard HarnessAccountBroker.commandAccountState(for: target.harness, result: status) == .signedIn
             else { throw ProviderConnectionError.signedOut }
             guard connections.isSameAccount(HarnessAccountBroker.claudeAccountIdentity(from: status.output), as: source)

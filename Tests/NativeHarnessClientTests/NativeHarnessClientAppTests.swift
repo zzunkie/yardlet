@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Observation
 import SwiftTerm
 import SwiftUI
 import XCTest
@@ -135,8 +136,7 @@ final class NativeHarnessClientAppTests: XCTestCase {
                         + "printf 'YARDLET_LOGIN_INPUT_OK\\n'"
                 ],
                 initialInput: "\r",
-                initialInputTrigger: "YARDLET_LOGIN_PROMPT",
-                usesPseudoTerminal: true
+                initialInputTrigger: "YARDLET_LOGIN_PROMPT"
             )
         )
         // As the Account Center starts a sign-in: with the CLI details hidden. The CLI still gets a
@@ -174,8 +174,7 @@ final class NativeHarnessClientAppTests: XCTestCase {
                         + "if [ \"$answer\" = 'yardlet-one-time-code' ]; then "
                         + "printf 'YARDLET_MANUAL_INPUT_OK\\n'; fi"
                 ],
-                initialInput: nil,
-                usesPseudoTerminal: true
+                initialInput: nil
             )
         )
         let terminal = attachLoginTerminal(to: controller)
@@ -231,6 +230,42 @@ final class NativeHarnessClientAppTests: XCTestCase {
         XCTAssertEqual(controller.phase, .inputRequired)
     }
 
+    func testTerminalInteractionRetainsBrowserLinkWithoutPublishingIdlePolls() async throws {
+        let controller = AccountLoginController()
+        defer { controller.stop() }
+        controller.start(AccountInteractiveCommand(
+            executableURL: URL(filePath: "/bin/sh"),
+            arguments: ["-c", "echo https://auth.example.test/login; read -r input"],
+            initialInput: nil, interaction: .terminalRequired))
+        let terminal = attachLoginTerminal(to: controller)
+        defer { _ = terminal }
+        try await waitUntil { controller.detectedURL != nil }
+        XCTAssertEqual(controller.phase, .inputRequired)
+        let publication = expectation(description: "Idle output changed")
+        publication.isInverted = true
+        withObservationTracking { _ = controller.output } onChange: { publication.fulfill() }
+        await fulfillment(of: [publication], timeout: 0.2)
+    }
+
+    func testCancelledInitialInputCannotReachReplacementTerminal() async throws {
+        let controller = AccountLoginController()
+        defer { controller.stop() }
+        let shell = URL(filePath: "/bin/sh")
+        controller.start(AccountInteractiveCommand(executableURL: shell, arguments: ["-c", "read -r answer"],
+                                                   initialInput: "unexpected\r"))
+        let first = attachLoginTerminal(to: controller)
+        controller.cancel()
+        controller.start(AccountInteractiveCommand(executableURL: shell, arguments: ["-c", "read -r answer; echo received"],
+                                                   initialInput: nil))
+        let second = attachLoginTerminal(to: controller)
+        defer { withExtendedLifetime((first, second)) {} }
+        try await Task.sleep(for: .milliseconds(1050))
+        XCTAssertTrue(controller.isRunning)
+        XCTAssertFalse(controller.output.contains("unexpected"))
+        controller.pressEnter()
+        try await waitUntil { controller.phase == .completed }
+    }
+
     func testUnexpectedRuntimePickerEscapesGuidedPreparingState() async throws {
         let controller = AccountLoginController()
         defer { controller.stop() }
@@ -262,8 +297,7 @@ final class NativeHarnessClientAppTests: XCTestCase {
                     "-c",
                     "trap '' INT; /bin/sh -c 'trap \"\" INT; sleep 120' & wait"
                 ],
-                initialInput: nil,
-                usesPseudoTerminal: true
+                initialInput: nil
             )
         )
         let terminal = attachLoginTerminal(to: controller)

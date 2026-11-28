@@ -361,6 +361,10 @@
 "Checking account status…" = "アカウントの状態を確認中…";
 "Stored by: %@" = "保存先: %@";
 "Sign in" = "サインイン";
+"Signing out…" = "サインアウト中…";
+"Continue signing out in the terminal" = "ターミナルでサインアウトを続けてください";
+"Sign-out could not be completed" = "サインアウトできませんでした";
+"Sign-out cancelled" = "サインアウトをキャンセルしました";
 "Sign out" = "サインアウト";
 "Sign out?" = "サインアウトしますか？";
 "The selected CLI will remove its own stored account credentials." = "選択した CLI に保存されているアカウント認証情報が削除されます。";

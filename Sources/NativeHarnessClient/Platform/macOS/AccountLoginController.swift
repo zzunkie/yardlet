@@ -24,6 +24,7 @@ final class AccountLoginController: NSObject, @MainActor LocalProcessTerminalVie
     @ObservationIgnored private weak var terminalView: LocalProcessTerminalView?
     @ObservationIgnored private var pendingCommand: AccountInteractiveCommand?
     @ObservationIgnored private var terminalPollTask: Task<Void, Never>?
+    @ObservationIgnored private var initialInputTask: Task<Void, Never>?
     @ObservationIgnored private var terminalOutputPrefix = ""
     @ObservationIgnored private var pendingInitialInput: String?
     @ObservationIgnored private var pendingInitialInputTrigger: String?
@@ -31,6 +32,8 @@ final class AccountLoginController: NSObject, @MainActor LocalProcessTerminalVie
     private var automaticPrompt: String?
     @ObservationIgnored private var verifySuccessfulExit: (() async -> Bool)?
     @ObservationIgnored private var verificationTask: Task<Void, Never>?
+    /// A prepared sign-in may replace a successful sign-out before the console redraws.
+    @ObservationIgnored var onSuccessfulCompletion: (() -> Void)?
     private var verificationFailed = false
     private let outputLimit = 256 * 1024
 
@@ -40,8 +43,9 @@ final class AccountLoginController: NSObject, @MainActor LocalProcessTerminalVie
         if verificationFailed { return .failed }
         if isRunning, exitCode != nil { return .preparing }
         if isRunning {
+            if interaction == .terminalRequired { return .inputRequired }
             if detectedURL != nil { return .browserHandoff }
-            if interaction == .terminalRequired || Self.outputRequiresInput(output, automaticPrompt: automaticPrompt) {
+            if Self.outputRequiresInput(output, automaticPrompt: automaticPrompt) {
                 return .inputRequired
             }
             return opensBrowser ? .browserHandoff : .preparing
@@ -107,14 +111,20 @@ final class AccountLoginController: NSObject, @MainActor LocalProcessTerminalVie
             environment: environment,
             currentDirectory: FileManager.default.homeDirectoryForCurrentUser.path(percentEncoded: false)
         )
+        // A synchronous exit can already have started the next command.
+        guard terminalView === view else { return }
+        guard view.process.running else {
+            if exitCode == nil { didTerminate(exitCode: -1) }
+            return
+        }
         processIdentifier = view.process.shellPid
-        isRunning = view.process.running
         startTerminalPolling()
 
         if command.initialInputTrigger == nil, let initialInput = command.initialInput {
             pendingInitialInput = nil
-            Task { [weak self] in
-                try? await Task.sleep(for: .milliseconds(900))
+            initialInputTask = Task { [weak self] in
+                do { try await Task.sleep(for: .milliseconds(900)) } catch { return }
+                guard !Task.isCancelled else { return }
                 self?.send(initialInput)
             }
         }
@@ -148,9 +158,11 @@ final class AccountLoginController: NSObject, @MainActor LocalProcessTerminalVie
     func completeVerifiedConnection() {
         guard isRunning, !wasCancelled else { return }
         connectionVerified = true
+        let completion = onSuccessfulCompletion
         stopProcess(clearOutcome: false)
         detectedURL = nil
         detectedCode = nil
+        completion?()
     }
 
     func openDetectedURL() {
@@ -168,9 +180,12 @@ final class AccountLoginController: NSObject, @MainActor LocalProcessTerminalVie
     }
 
     private func stopProcess(clearOutcome: Bool) {
+        onSuccessfulCompletion = nil
         verificationTask?.cancel()
         verificationTask = nil
         verifySuccessfulExit = nil
+        initialInputTask?.cancel()
+        initialInputTask = nil
         terminalPollTask?.cancel()
         terminalPollTask = nil
         if let terminalView {
@@ -242,6 +257,8 @@ final class AccountLoginController: NSObject, @MainActor LocalProcessTerminalVie
 
     private func didTerminate(exitCode: Int32?) {
         refreshTerminalOutput()
+        initialInputTask?.cancel()
+        initialInputTask = nil
         terminalPollTask?.cancel()
         terminalPollTask = nil
         pendingCommand = nil
@@ -249,8 +266,11 @@ final class AccountLoginController: NSObject, @MainActor LocalProcessTerminalVie
         pendingInitialInputTrigger = nil
         processIdentifier = nil
         self.exitCode = exitCode ?? -1
+        let completion = onSuccessfulCompletion
+        onSuccessfulCompletion = nil
         guard exitCode == 0, let verifySuccessfulExit else {
             isRunning = false
+            if exitCode == 0, !wasCancelled { completion?() }
             return
         }
         self.verifySuccessfulExit = nil
@@ -262,6 +282,7 @@ final class AccountLoginController: NSObject, @MainActor LocalProcessTerminalVie
             self.verificationFailed = !verified
             self.isRunning = false
             self.verificationTask = nil
+            if verified { completion?() }
         }
     }
 

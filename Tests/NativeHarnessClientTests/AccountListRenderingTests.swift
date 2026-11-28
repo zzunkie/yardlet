@@ -398,7 +398,11 @@ import XCTest
 
         // Signing out alone finishes when the probe reads it, and returns rather than using an account.
         await model.logout(descriptor: descriptor, runtimeSelections: runtime)
+        XCTAssertTrue(model.showsLoginDetails)
         await host.settle(until: { model.loginController.phase == .completed })
+        await host.settle(until: {
+            host.accessibilityElements().contains { $0.label == L10n.string("Signed out") || $0.value == L10n.string("Signed out") }
+        })
         XCTAssertEqual(model.loginController.operation, .disconnect)
         XCTAssertFalse(model.loginController.isRunning)
         XCTAssertEqual(store.defaultSnapshots[.antigravityCLI]?.state, .signedOut)

@@ -83,7 +83,7 @@ Gemini CLI, Gajae Code, Oh My Pi and Deep Agents Code are no longer built in (`H
 tasks still load under their identifiers, and Yardlet's own settings for them are dropped. Choosing a Google model
 provider in another harness such as Pi is separate from the removed Gemini CLI entry.
 
-For OpenCode, Yardlet hosts the provider and authentication method choice of the official `auth login`. For Pi, it
+For OpenCode, Yardlet opens the terminal for both the provider picker in `auth login` and the saved credential picker in `auth logout`. For Pi, it
 looks up the provider that the user specifies or that is set in Pi's own settings.json. Without a setting, it does not
 assume ChatGPT as the default provider. The default Pi connection and adding a new Pi account choose the provider
 first. Pi's authentication method choice screen is also recognized as waiting for input.
@@ -637,7 +637,8 @@ separate account folder (the keychain items of Antigravity CLI and Cursor Agent,
   credential-free probe reads the default sign-in signed out; the console then stops the CLI, and that reading becomes
   the sign-in's reading.
 - Sign In With Another Account then starts the harness's sign-in in a new terminal of the same console. A sign-out that
-  fails or is cancelled starts nothing.
+  fails or is cancelled starts nothing. Grok Build offers sign-out only for a stored login. A login supplied solely by
+  the environment remains available while the environment supplies it.
 - No file, folder, task binding or saved account changes.
 
 The Antigravity CLI row shows the signed-in address that `AGY_CLI_CDE_AUTH_ACTION=check agy` prints

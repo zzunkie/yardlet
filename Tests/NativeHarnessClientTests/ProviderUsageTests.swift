@@ -176,7 +176,7 @@ final class ProviderUsageTests: XCTestCase {
         // is signed out, and an answer is signed in with the allowance it read, newer than the
         // session's.
         func answer(_ script: String) throws {
-            try ("#!/bin/sh\n[ \"$1 $2\" = \"usage --json\" ] || exit 9\n" + script).write(to: executable, atomically: true, encoding: .utf8)
+            try ("#!/bin/sh\n[ \"$MUSE_NO_AUTO_UPDATE\" = 1 ] || exit 8\n[ \"$1 $2\" = \"usage --json\" ] || exit 9\n" + script).write(to: executable, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
         }
         try answer("echo 'muse usage: not logged in: run `muse login` first' >&2\nexit 1\n")

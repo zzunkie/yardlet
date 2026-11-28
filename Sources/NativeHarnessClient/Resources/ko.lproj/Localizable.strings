@@ -361,6 +361,10 @@
 "Checking account status…" = "계정 상태 확인 중…";
 "Stored by: %@" = "저장 주체: %@";
 "Sign in" = "로그인";
+"Signing out…" = "로그아웃 중…";
+"Continue signing out in the terminal" = "터미널에서 로그아웃을 계속하세요";
+"Sign-out could not be completed" = "로그아웃을 완료하지 못했습니다";
+"Sign-out cancelled" = "로그아웃이 취소되었습니다";
 "Sign out" = "로그아웃";
 "Sign out?" = "로그아웃할까요?";
 "The selected CLI will remove its own stored account credentials." = "선택한 CLI가 자체 저장한 계정 인증 정보를 제거합니다.";

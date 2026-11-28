@@ -140,7 +140,7 @@ actor HarnessAccountBroker {
             startupMessage = nil
         case .antigravityCLI:
             let help = try? await AccountCommandRunner.run(executableURL: executableURL, arguments: ["help", "acp"],
-                environment: antigravityEnvironment, timeout: .seconds(3))
+                environment: accountEnvironment(for: .antigravityCLI), timeout: .seconds(3))
             let supportsLogin = help?.exitCode == 0 && help?.output.split(whereSeparator: \.isNewline).contains {
                 $0.split(whereSeparator: \.isWhitespace).first == "--login"
             } == true
@@ -163,14 +163,13 @@ actor HarnessAccountBroker {
                 .processEnvironment().values else { return nil }
             environment = Self.codexEnvironmentOverrides(from: nativeEnvironment)
         } else {
-            environment = harness == .antigravityCLI ? antigravityEnvironment : connection?.environment ?? [:]
+            environment = accountEnvironment(for: harness)
         }
         return AccountInteractiveCommand(
             executableURL: executableURL,
             arguments: arguments,
             initialInput: initialInput,
             initialInputTrigger: harness == .antigravityCLI && initialInput != nil ? "Select login method:" : nil,
-            usesPseudoTerminal: [HarnessKind.antigravityCLI, .hermes].contains(harness),
             environment: environment,
             startupMessage: startupMessage,
             opensBrowser: harness == .antigravityCLI,
@@ -218,7 +217,7 @@ actor HarnessAccountBroker {
                 .processEnvironment().values else { return nil }
             environment = Self.codexEnvironmentOverrides(from: nativeEnvironment)
         } else {
-            environment = harness == .antigravityCLI ? antigravityEnvironment : connection?.environment ?? [:]
+            environment = accountEnvironment(for: harness)
         }
         return AccountInteractiveCommand(
             executableURL: executableURL,
@@ -227,7 +226,7 @@ actor HarnessAccountBroker {
             initialInputTrigger: harness == .antigravityCLI ? "? for shortcuts" : nil,
             environment: environment,
             operation: .disconnect,
-            interaction: [.kimiCode, .antigravityCLI, .pi].contains(harness)
+            interaction: [.openCode, .kimiCode, .antigravityCLI, .pi].contains(harness)
                 ? .terminalRequired
                 : .guided
         )
@@ -310,14 +309,14 @@ actor HarnessAccountBroker {
             ],
             environment: connection?.environment ?? [:]
         )
-        let value = try JSONDecoder().decode(JSONValue.self, from: Data(result.output.utf8))
+        let value = try? JSONDecoder().decode(JSONValue.self, from: Data(result.output.utf8))
         let state: AccountAuthState
-        if value["provider"]?.stringValue == provider,
-           value["status"]?.stringValue == "ready", result.exitCode == 0 {
+        if value?["provider"]?.stringValue == provider,
+           value?["status"]?.stringValue == "ready", result.exitCode == 0 {
             state = .signedIn
-        } else if value["provider"]?.stringValue == provider,
-                  value["status"]?.stringValue == "not_ready", result.exitCode == 1,
-                  value["reason"]?.stringValue == "credentials_not_configured" {
+        } else if value?["provider"]?.stringValue == provider,
+                  value?["status"]?.stringValue == "not_ready", result.exitCode == 1,
+                  value?["reason"]?.stringValue == "credentials_not_configured" {
             state = .signedOut
         } else {
             // Pi also returns `invalid` and `provider_not_found`. Neither proves
@@ -325,8 +324,8 @@ actor HarnessAccountBroker {
             state = .unknown
         }
         let detail: String = switch state {
-        case .signedIn: L10n.format("%@ authentication is ready in Pi.", provider)
-        case .signedOut: L10n.format("%@ is not connected in Pi.", provider)
+        case .signedIn: L10n.format("%@ authentication is ready in Pi.", ProviderConnection.providerDisplayName(provider))
+        case .signedOut: L10n.format("%@ is not connected in Pi.", ProviderConnection.providerDisplayName(provider))
         default: L10n.string("Account status could not be confirmed.")
         }
         return HarnessAccountSnapshot(
@@ -371,7 +370,7 @@ actor HarnessAccountBroker {
                 providerID: nil,
                 state: .unknown,
                 accountLabel: nil,
-                detail: L10n.string("This runtime does not expose a structured account probe."),
+                detail: L10n.string("Account status could not be confirmed."),
                 credentialOwner: descriptor.displayName,
                 checkedAt: Date(),
                 usage: [notExposedUsage()],
@@ -384,7 +383,7 @@ actor HarnessAccountBroker {
             try await AccountCommandRunner.run(
                 executableURL: executableURL,
                 arguments: arguments,
-                environment: connection?.environment ?? [:],
+                environment: accountEnvironment(for: descriptor.id),
                 // Claude Code reads its login from the Keychain, which can answer slowly. A check
                 // cut off here reads as "not verified", which says less than the answer it waits for.
                 timeout: descriptor.id == .claudeCode ? Self.claudeStatusTimeout : .seconds(12)
@@ -408,7 +407,7 @@ actor HarnessAccountBroker {
         var metrics: [AccountUsageMetric]?
         var usageProbeFailed: Bool?
         if descriptor.id == .claudeCode, state == .signedIn {
-            let reading = await ClaudeUsageProbe.read(executableURL: executableURL, environment: connection?.environment ?? [:])
+            let reading = await ClaudeUsageProbe.read(executableURL: executableURL, environment: accountEnvironment(for: .claudeCode))
             usageProbeFailed = false
             switch reading {
             case let .limits(rows):
@@ -462,9 +461,9 @@ actor HarnessAccountBroker {
                 ? ProviderSignIn.claudeSignedOutDetail(shellVariables: LoginShellPath.claudeSignInVariables)
                 : ProviderSignIn.neededHere(.claudeCode)
         } else if state == .signedOut {
-            detail = L10n.string("No usable runtime-owned account was found.")
+            detail = ProviderSignIn.neededHere(descriptor.id)
         } else if state == .signedIn {
-            detail = L10n.string("The selected runtime reports usable authentication.")
+            detail = ProviderSignIn.signedInDetail(descriptor.id)
         } else {
             detail = L10n.string("Account status could not be confirmed.")
         }
@@ -493,13 +492,17 @@ actor HarnessAccountBroker {
                 detail: L10n.string("Claude Code did not report plan limits for this login."),
                 resetsAt: nil, evidence: .notExposed)]
         }
+        let accountLabel: String? = switch (descriptor.id, state) {
+        case (.kiroCLI, .signedIn): Self.kiroAccountEmail(from: result.output)
+        case (.cursorAgent, .signedIn): Self.cursorAccountEmail(from: result.output)
+        default: claudeIdentity?.displayLabel
+        }
         return HarnessAccountSnapshot(
             id: descriptor.id.rawValue,
             harness: descriptor.id,
             providerID: nil,
             state: state,
-            accountLabel: descriptor.id == .kiroCLI && state == .signedIn
-                ? Self.kiroAccountEmail(from: result.output) : claudeIdentity?.displayLabel,
+            accountLabel: accountLabel,
             accountOrganization: claudeIdentity?.groupingOrganization,
             accountPlan: claudeIdentity?.planLabel,
             loginExpiresAt: descriptor.id == .claudeCode && state == .signedIn
@@ -581,16 +584,17 @@ actor HarnessAccountBroker {
     /// Read in the environment the account's Grok runs in: a saved account's `GROK_HOME`, without
     /// the API keys an account folder does not inherit.
     private func grokSnapshot(descriptor: HarnessDescriptor) -> HarnessAccountSnapshot {
-        let state = Self.grokCredentialState(environment: RuntimeProcessEnvironment.accountScoped(
+        let credential = Self.grokCredentialState(environment: RuntimeProcessEnvironment.accountScoped(
             ProcessInfo.processInfo.environment.merging(connection?.environment ?? [:]) { _, new in new }))
         let detail: String
+        let state = credential.state
         switch state {
         case .signedIn:
-            detail = L10n.string("Grok has a locally stored OAuth session or API key.")
+            detail = ProviderSignIn.signedInDetail(.grokBuild)
         case .signedOut:
-            detail = L10n.string("No Grok OAuth session or API key was found.")
+            detail = ProviderSignIn.neededHere(.grokBuild)
         case .unknown, .actionRequired, .unavailable:
-            detail = L10n.string("Grok credential status could not be read safely.")
+            detail = L10n.string("Account status could not be confirmed.")
         }
         return HarnessAccountSnapshot(
             id: descriptor.id.rawValue,
@@ -603,17 +607,17 @@ actor HarnessAccountBroker {
             checkedAt: Date(),
             usage: [notExposedUsage()],
             canLogin: state != .signedIn,
-            canLogout: state == .signedIn
+            canLogout: credential.canLogout
         )
     }
 
-    private var antigravityEnvironment: [String: String] {
-        (connection?.environment ?? [:]).merging(["AGY_CLI_DISABLE_AUTO_UPDATE": "true"]) { _, new in new }
+    private func accountEnvironment(for harness: HarnessKind) -> [String: String] {
+        RuntimeProcessEnvironment.accountCommand(for: harness, connection: connection)
     }
 
     func antigravityUsage(executableURL: URL) async -> [AccountUsageMetric] {
         guard let result = try? await AccountCommandRunner.run(executableURL: executableURL,
-            arguments: AntigravityUsage.arguments, environment: antigravityEnvironment, timeout: .seconds(30))
+            arguments: AntigravityUsage.arguments, environment: accountEnvironment(for: .antigravityCLI), timeout: .seconds(30))
         else { return [] }
         return AntigravityUsage.metrics(fromOutput: result.output) ?? []
     }
@@ -622,7 +626,7 @@ actor HarnessAccountBroker {
         let checkResult = try? await AccountCommandRunner.run(
             executableURL: executableURL,
             arguments: [],
-            environment: antigravityEnvironment.merging(["AGY_CLI_CDE_AUTH_ACTION": "check"]) { _, new in new }
+            environment: accountEnvironment(for: .antigravityCLI).merging(["AGY_CLI_CDE_AUTH_ACTION": "check"]) { _, new in new }
         )
         let checked = Self.antigravityAccountCheck(checkResult, fallbackState: Self.antigravityCredentialState())
         return Self.antigravityAuthSnapshot(descriptor: descriptor, state: checked.state, accountLabel: checked.accountLabel)
@@ -700,15 +704,15 @@ actor HarnessAccountBroker {
     /// observation there is no row.
     private func museCodeSnapshot(descriptor: HarnessDescriptor, executableURL: URL) async -> HarnessAccountSnapshot {
         let result = try? await AccountCommandRunner.run(executableURL: executableURL,
-            arguments: ["usage", "--json"], environment: connection?.environment ?? [:])
+            arguments: ["usage", "--json"], environment: accountEnvironment(for: .museCode))
         let state = result.map(Self.museAccountState) ?? .unknown
         if state == .signedIn, let read = result.flatMap({ Self.museUsage(fromCommandOutput: $0.output) }) {
             await museUsageStore.record(read, for: descriptor.id)
         }
         let observed = await museUsageStore.latest(for: descriptor.id)
         let detail = switch state {
-        case .signedIn: L10n.string("The selected runtime reports usable authentication.")
-        case .signedOut: L10n.string("No usable runtime-owned account was found.")
+        case .signedIn: ProviderSignIn.signedInDetail(descriptor.id)
+        case .signedOut: ProviderSignIn.neededHere(descriptor.id)
         default: L10n.string("Account status could not be confirmed.")
         }
         return HarnessAccountSnapshot(
@@ -741,11 +745,18 @@ actor HarnessAccountBroker {
     static func grokCredentialState(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         fileManager: FileManager = .default
-    ) -> AccountAuthState {
-        if let apiKey = environment["XAI_API_KEY"],
-           !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return .signedIn
+    ) -> (state: AccountAuthState, canLogout: Bool) {
+        let persisted = grokStoredCredentialState(environment: environment, fileManager: fileManager)
+        if persisted == .signedIn { return (.signedIn, true) }
+        if let key = environment["XAI_API_KEY"], !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return (.signedIn, false)
         }
+        return (persisted, false)
+    }
+
+    private static func grokStoredCredentialState(
+        environment: [String: String], fileManager: FileManager
+    ) -> AccountAuthState {
         let home: URL
         if let configuredHome = environment["GROK_HOME"], !configuredHome.isEmpty {
             home = URL(filePath: configuredHome, directoryHint: .isDirectory)
@@ -925,6 +936,15 @@ actor HarnessAccountBroker {
         normalizedOutput.split(whereSeparator: \.isNewline).contains {
             $0.range(of: #"^\S+\s+type=\S+\s+models=[0-9]+\s+source="#, options: .regularExpression) != nil
         }
+    }
+
+    static func cursorAccountEmail(from output: String) -> String? {
+        guard let value = structuredAccountPayload(from: output),
+              let email = value["email"]?.stringValue ?? value["user"]?["email"]?.stringValue,
+              email.count <= 200, email.contains("@"),
+              email.rangeOfCharacter(from: .whitespacesAndNewlines) == nil,
+              email.rangeOfCharacter(from: .controlCharacters) == nil else { return nil }
+        return email
     }
 
     /// `kiro-cli whoami` prints "Logged in with <method>" and, for a sign-in that has one, an

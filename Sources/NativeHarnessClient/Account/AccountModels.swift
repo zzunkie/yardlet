@@ -385,7 +385,7 @@ enum AccountAccessibilityProjection {
         }
         parts.append(snapshot.detail)
         if let providerID = snapshot.providerID, !providerID.isEmpty {
-            parts.append(providerID)
+            parts.append(ProviderConnection.providerDisplayName(providerID))
         }
         if !snapshot.credentialOwner.isEmpty {
             parts.append(L10n.format("Stored by: %@", snapshot.credentialOwner))
@@ -424,7 +424,7 @@ enum AccountConnectionInteraction: Equatable, Sendable {
     /// terminal mounted as a hidden transport and exposes it only as diagnostics.
     case guided
     /// The runtime owns a picker or prompt that cannot be represented safely from a
-    /// stable machine-readable contract. Yardlet asks the user to reveal that UI.
+    /// stable machine-readable contract. Yardlet opens the terminal for it.
     case terminalRequired
 }
 
@@ -442,7 +442,6 @@ struct AccountInteractiveCommand: Sendable {
     let arguments: [String]
     let initialInput: String?
     let initialInputTrigger: String?
-    let usesPseudoTerminal: Bool
     let environment: [String: String]
     let opensBrowser: Bool
     let startupMessage: String?
@@ -454,7 +453,6 @@ struct AccountInteractiveCommand: Sendable {
         arguments: [String],
         initialInput: String?,
         initialInputTrigger: String? = nil,
-        usesPseudoTerminal: Bool = false,
         environment: [String: String] = [:],
         startupMessage: String? = nil,
         opensBrowser: Bool = false,
@@ -465,7 +463,6 @@ struct AccountInteractiveCommand: Sendable {
         self.arguments = arguments
         self.initialInput = initialInput
         self.initialInputTrigger = initialInputTrigger
-        self.usesPseudoTerminal = usesPseudoTerminal
         self.environment = environment
         self.opensBrowser = opensBrowser
         self.startupMessage = startupMessage

@@ -3,17 +3,16 @@ import Foundation
 /// Reading a sign-in command's terminal output, the same on every platform: the device code it
 /// shows, whether it waits for a choice, and its text without terminal escapes.
 extension AccountLoginController {
+    nonisolated private static let deviceCode = try! NSRegularExpression(
+        pattern: #"(?i:\bcode\b|코드)[^\r\nA-Za-z0-9]{0,12}([0-9]{3} [0-9]{3}|[A-Z0-9]{4,}(?:-[A-Z0-9]{4,})?)(?![\w-])"#
+    )
+
     nonisolated static func firstDeviceCode(in value: String) -> String? {
         let normalized = stripANSI(value)
-        let pattern = #"(?i)(?:device\s+code|verification\s+code|code|코드)[^A-Z0-9]{0,24}([A-Z0-9]{4,}(?:-[A-Z0-9]{4,})?)"#
-        guard let expression = try? NSRegularExpression(pattern: pattern) else { return nil }
-        for match in expression.matches(
-            in: normalized,
-            range: NSRange(normalized.startIndex..., in: normalized)
-        ) {
+        for match in deviceCode.matches(in: normalized, range: NSRange(normalized.startIndex..., in: normalized)) {
             guard let range = Range(match.range(at: 1), in: normalized) else { continue }
-            let candidate = String(normalized[range]).uppercased()
-            if candidate != "HTTP", candidate != "HTTPS" { return candidate }
+            let code = normalized[range]
+            if code.contains(where: { $0.isNumber || $0 == "-" }) { return String(code) }
         }
         return nil
     }
@@ -28,16 +27,29 @@ extension AccountLoginController {
                 return choice.isEmpty || choice.hasPrefix("●") || choice.hasPrefix("○")
             }).joined(separator: "\n")
         }
-        if normalized.contains("●"), normalized.contains("○") { return true }
-        return [
-            "select login method",
-            "select authentication method",
-            "login method",
-            "choose a provider",
-            "select a provider",
-            "select provider",
-            "enter api key"
-        ].contains { normalized.contains($0) }
+        // Read the active prompt, ignoring completed questions above it. Clack uses a
+        // vertical rail around the choices, then replaces the diamond when answered.
+        let rail = CharacterSet(charactersIn: "│┃ \t")
+        var hasChoice = false
+        for line in normalized.split(separator: "\n").reversed() {
+            let text = line.trimmingCharacters(in: rail)
+            if text.isEmpty { continue }
+            if text.hasPrefix("●") || text.hasPrefix("○") {
+                hasChoice = true
+                continue
+            }
+            if text.hasPrefix("◇") || text.hasPrefix("✔") { return false }
+            if hasChoice || text.hasPrefix("◆") { return true }
+            if text.range(of: #"\[(?:y/n|n/y)\]\s*[:?]?$"#, options: .regularExpression) != nil { return true }
+            if text.range(of: #"^enter (?:api key|start url|region)\s*[:?]?\s*$"#, options: .regularExpression) != nil {
+                return true
+            }
+            return [
+                "select credential", "select login method", "select authentication method", "login method",
+                "choose a provider", "select a provider", "select provider", "press enter"
+            ].contains { text.hasPrefix($0) }
+        }
+        return hasChoice
     }
 
     nonisolated static func stripANSI(_ value: String) -> String {

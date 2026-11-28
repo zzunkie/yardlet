@@ -49,7 +49,7 @@ struct AccountSnapshotCache {
                 id: id, harness: harness, providerID: providerID, state: state,
                 accountLabel: accountLabel, accountOrganization: accountOrganization,
                 accountPlan: accountPlan, loginExpiresAt: loginExpiresAt,
-                detail: state == .signedIn ? L10n.string("The selected runtime reports usable authentication.")
+                detail: state == .signedIn ? ProviderSignIn.signedInDetail(harness)
                     : ProviderSignIn.neededHere(harness),
                 credentialOwner: HarnessCatalog.descriptor(for: harness)
                     .map { L10n.format("%@ credential store", $0.displayName) } ?? "",

@@ -206,7 +206,6 @@ struct ConnectionCenterContent: View {
     @State private var movingRemoval: AccountRemovalSheet.Request?
     @State private var accountNote: String?
     @State private var selectedHarness: HarnessKind?
-    @State private var showsLoginDetails = false
     @State private var searchText = ""
     @State private var filter: HarnessCenterFilter = .all
     @State private var hoveredHarness: HarnessKind?
@@ -294,9 +293,6 @@ struct ConnectionCenterContent: View {
         .onChange(of: selectedHarness) { _, harness in
             showsConnectionDetails = harness.map { runtimeSelections.selectedURL(for: $0) == nil } ?? false
             if harness == .pi { piProviderID = HarnessAccountBroker.piConfiguredProvider(homePath: nil) ?? "" }
-        }
-        .onChange(of: model.activeHarness) { _, activeHarness in
-            if activeHarness != nil { showsLoginDetails = false }
         }
         .alert(disconnectConfirmationTitle, isPresented: Binding(
             get: { pendingLogout != nil },
@@ -1115,7 +1111,7 @@ struct ConnectionCenterContent: View {
         VStack(spacing: 0) {
             HStack {
                 Button {
-                    model.closeConsole()
+                    finishConsole(usingAccount: returnsSetupToTask && completedSignIn)
                 } label: {
                     Label(L10n.string("Back"), systemImage: "chevron.left")
                 }
@@ -1137,128 +1133,26 @@ struct ConnectionCenterContent: View {
 
             Divider()
 
-            VStack(spacing: ParitySpace.s16) {
-                Spacer(minLength: ParitySpace.s4)
-
-                HarnessLogoView(descriptor: descriptor, size: 52)
-
-                VStack(spacing: ParitySpace.s8) {
-                    Text(connectionHeading(descriptor: descriptor))
-                        .font(.parity(.section, scale: 1))
-                    HStack(spacing: ParitySpace.s8) {
-                        if model.loginController.phase == .preparing {
-                            ProgressView()
-                                .controlSize(.mini)
-                        } else {
-                            Image(systemName: connectionPhaseSymbol)
-                        }
-                        Text(connectionPhaseTitle)
-                    }
-                    .font(.parity(.caption, weight: .medium, scale: 1))
-                    .foregroundStyle(connectionPhaseColor)
-                    if let detail = connectionPhaseDetail {
-                        Text(detail)
-                            .font(.parity(.caption, scale: 1))
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                            .frame(maxWidth: 430)
-                    }
-                }
-
-                if let code = model.loginController.detectedCode {
-                    HStack(spacing: ParitySpace.s12) {
-                        VStack(alignment: .leading, spacing: ParitySpace.s4) {
-                            Text(L10n.string("Verification code"))
-                                .font(.parity(.caption, weight: .medium, scale: 1))
-                                .foregroundStyle(.secondary)
-                            Text(code)
-                                .font(.system(size: 15, weight: .semibold, design: .monospaced)).fontDesign(nil)
-                                .textSelection(.enabled)
-                        }
-                        Spacer()
-                        Button(L10n.string("Copy code")) {
-                            model.loginController.copyDetectedCode()
-                        }
-                        .controlSize(.small)
-                        .parityPointer()
-                    }
-                    .padding(ParitySpace.s12)
-                    .frame(maxWidth: 430)
-                    .background(ParityTheme.elevated, in: RoundedRectangle(cornerRadius: ParityRadius.row))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: ParityRadius.row).stroke(ParityTheme.separator)
-                    }
-                }
-
-                HStack(spacing: ParitySpace.s8) {
-                    if model.loginController.detectedURL != nil {
-                        Button(L10n.string("Continue in browser")) {
-                            model.loginController.openDetectedURL()
-                        }
-                        .parityProminentButton()
-                        .controlSize(.small)
-                        .parityPointer()
-                    }
-                    if model.loginController.phase == .inputRequired,
-                       !showsLoginDetails {
-                        Button(L10n.string("Continue setup")) {
-                            showsLoginDetails = true
-                        }
-                        .parityProminentButton()
-                        .controlSize(.small)
-                        .parityPointer()
-                    }
-                    if !model.loginController.isRunning {
-                        // A finished sign-out has no account to use; it only returns.
-                        let signedIn = model.loginController.phase == .completed
-                            && model.loginController.operation == .connect
-                        Button(L10n.string(signedIn ? "Use this account" : "Back")) {
-                            if signedIn {
-                                model.useFinishedSignIn()
-                                model.closeConsole()
-                                onFinish()
-                            } else {
-                                model.closeConsole()
-                            }
-                        }
-                        .controlSize(.small)
-                        .parityPointer()
-                    }
-                }
-
-                Spacer(minLength: 2)
-
-                Button {
-                    showsLoginDetails.toggle()
-                } label: {
-                    Label(
-                        L10n.string(showsLoginDetails ? "Hide CLI details" : "Show CLI details"),
-                        systemImage: showsLoginDetails ? "chevron.down" : "chevron.right"
-                    )
-                }
-                .buttonStyle(.plain)
-                .font(.parity(.caption, scale: 1))
-                .foregroundStyle(.secondary)
-                .parityPointer()
+            ViewThatFits(in: .vertical) {
+                connectionSummary(descriptor)
+                ScrollView { connectionSummary(descriptor) }
             }
-            .padding(.horizontal, ParitySpace.s20)
-            .padding(.top, ParitySpace.s16)
-            .padding(.bottom, showsLoginDetails ? ParitySpace.s12 : ParitySpace.s20)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             AccountLoginConsoleTerminal(
                 controller: model.loginController,
-                isVisible: showsLoginDetails
+                isVisible: model.showsLoginDetails
             )
             // A terminal runs one command; the next one starts in a new terminal.
             .id(model.loginController.commandID)
             .background(Color(nsColor: NativeTerminalSession.backgroundColor))
-            .accessibilityHidden(!showsLoginDetails)
+            .accessibilityHidden(!model.showsLoginDetails)
             .accessibilityLabel(L10n.string("Interactive CLI terminal"))
             .accessibilityHint(L10n.string(
                 "Click the terminal, then type or paste the response requested by the CLI."
             ))
 
-            if showsLoginDetails {
+            if model.showsLoginDetails {
                 Divider()
                 HStack(spacing: ParitySpace.s8) {
                     Image(systemName: "keyboard")
@@ -1294,16 +1188,130 @@ struct ConnectionCenterContent: View {
                     if returnsSetupToTask { onFinish() }
                     return
                 }
-                // A verified sign-out or a sign-in verification already published its reading.
-                if model.loginController.connectionVerified
-                    || (model.loginController.operation == .connect && model.loginController.exitCode == 0) { return }
+                if model.loginController.operation == .connect && model.loginController.exitCode == 0 { return }
             }
+            // A default login confirmed by a probe already published its reading. A saved
+            // account with its own folder still needs its list entry refreshed.
+            if model.loginController.connectionVerified && model.activeConnection?.homePath == nil { return }
             Task { await recheckAccounts(of: descriptor.id) }
         }
     }
 
+    private func connectionSummary(_ descriptor: HarnessDescriptor) -> some View {
+        VStack(spacing: model.showsLoginDetails ? ParitySpace.s8 : ParitySpace.s16) {
+            if !model.showsLoginDetails {
+                Spacer(minLength: ParitySpace.s4)
+                HarnessLogoView(descriptor: descriptor, size: 52)
+            }
+
+            VStack(spacing: ParitySpace.s8) {
+                Text(connectionHeading(descriptor: descriptor))
+                    .font(.parity(.section, scale: 1))
+                HStack(spacing: ParitySpace.s8) {
+                    if model.loginController.phase == .preparing {
+                        ProgressView()
+                            .controlSize(.mini)
+                    } else {
+                        Image(systemName: connectionPhaseSymbol)
+                    }
+                    Text(connectionPhaseTitle)
+                }
+                .font(.parity(.caption, weight: .medium, scale: 1))
+                .foregroundStyle(connectionPhaseColor)
+                if let detail = connectionPhaseDetail {
+                    Text(detail)
+                        .font(.parity(.caption, scale: 1))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 430)
+                }
+            }
+
+            if let code = model.loginController.detectedCode {
+                HStack(spacing: ParitySpace.s12) {
+                    VStack(alignment: .leading, spacing: ParitySpace.s4) {
+                        Text(L10n.string("Verification code"))
+                            .font(.parity(.caption, weight: .medium, scale: 1))
+                            .foregroundStyle(.secondary)
+                        Text(code)
+                            .font(.system(size: 15, weight: .semibold, design: .monospaced)).fontDesign(nil)
+                            .textSelection(.enabled)
+                    }
+                    Spacer()
+                    Button(L10n.string("Copy code")) {
+                        model.loginController.copyDetectedCode()
+                    }
+                    .controlSize(.small)
+                    .parityPointer()
+                }
+                .padding(ParitySpace.s12)
+                .frame(maxWidth: 430)
+                .background(ParityTheme.elevated, in: RoundedRectangle(cornerRadius: ParityRadius.row))
+                .overlay {
+                    RoundedRectangle(cornerRadius: ParityRadius.row).stroke(ParityTheme.separator)
+                }
+            }
+
+            HStack(spacing: ParitySpace.s8) {
+                if model.loginController.detectedURL != nil {
+                    Button(L10n.string("Continue in browser")) {
+                        model.loginController.openDetectedURL()
+                    }
+                    .parityProminentButton()
+                    .controlSize(.small)
+                    .parityPointer()
+                }
+                if model.loginController.phase == .inputRequired,
+                   !model.showsLoginDetails {
+                    Button(L10n.string(model.loginController.operation == .disconnect ? "Show CLI details" : "Continue setup")) {
+                        model.showsLoginDetails = true
+                    }
+                    .parityProminentButton()
+                    .controlSize(.small)
+                    .parityPointer()
+                }
+                if !model.loginController.isRunning {
+                    // A finished sign-out has no account to use; it only returns.
+                    Button(L10n.string(completedSignIn ? "Use this account" : "Back")) {
+                        finishConsole(usingAccount: completedSignIn)
+                    }
+                    .controlSize(.small)
+                    .parityPointer()
+                }
+            }
+
+            if !model.showsLoginDetails { Spacer(minLength: 2) }
+
+            Button {
+                model.showsLoginDetails.toggle()
+            } label: {
+                Label(
+                    L10n.string(model.showsLoginDetails ? "Hide CLI details" : "Show CLI details"),
+                    systemImage: model.showsLoginDetails ? "chevron.down" : "chevron.right"
+                )
+            }
+            .buttonStyle(.plain)
+            .font(.parity(.caption, scale: 1))
+            .foregroundStyle(.secondary)
+            .parityPointer()
+        }
+        .padding(.horizontal, ParitySpace.s20)
+        .padding(.top, model.showsLoginDetails ? ParitySpace.s4 : ParitySpace.s16)
+        .padding(.bottom, model.showsLoginDetails ? ParitySpace.s4 : ParitySpace.s20)
+    }
+
+    private var completedSignIn: Bool {
+        model.loginController.phase == .completed && model.loginController.operation == .connect
+    }
+
+    private func finishConsole(usingAccount: Bool) {
+        if usingAccount { model.useFinishedSignIn() }
+        model.closeConsole()
+        if usingAccount { onFinish() }
+    }
+
     private func connectionHeading(descriptor: HarnessDescriptor) -> String {
-        if let connection = model.activeConnection { return connection.name + " · " + descriptor.displayName }
+        if let connection = model.activeConnection { return connection.consoleTitle }
         return switch model.loginController.operation {
         case .connect:
             L10n.format("Connect %@", descriptor.displayName)
@@ -1313,7 +1321,17 @@ struct ConnectionCenterContent: View {
     }
 
     private var connectionPhaseTitle: String {
-        switch model.loginController.phase {
+        if model.loginController.operation == .disconnect {
+            return switch model.loginController.phase {
+            case .preparing: L10n.string("Signing out…")
+            case .browserHandoff: L10n.string("Continue in your browser")
+            case .inputRequired: L10n.string("Continue signing out in the terminal")
+            case .completed: L10n.string("Signed out")
+            case .failed: L10n.string("Sign-out could not be completed")
+            case .cancelled: L10n.string("Sign-out cancelled")
+            }
+        }
+        return switch model.loginController.phase {
         case .preparing: L10n.string("Preparing secure connection…")
         case .browserHandoff: L10n.string("Continue in your browser")
         case .inputRequired: L10n.string("One more setup step is required")
@@ -1331,11 +1349,12 @@ struct ConnectionCenterContent: View {
         case .browserHandoff:
             L10n.string("Yardlet never receives your password.")
         case .inputRequired:
-            L10n.string("The harness asks you to choose a provider or a sign-in method.")
+            model.loginController.operation == .disconnect
+                ? nil : L10n.string("The harness asks you to choose a provider or a sign-in method.")
         case .failed:
             L10n.string("Open CLI details to see the error.")
         case .cancelled:
-            L10n.string("Nothing was changed.")
+            model.loginController.operation == .disconnect ? nil : L10n.string("Nothing was changed.")
         }
     }
 
