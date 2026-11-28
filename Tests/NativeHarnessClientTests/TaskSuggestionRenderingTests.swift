@@ -4,23 +4,8 @@ import XCTest
 @testable import NativeHarnessClient
 @testable import YardletAgentTools
 
-/// Suggested-task chips drawn by the one conversation renderer with no window on screen, into
-/// `.build/task-suggestion-qa/`, light and dark:
-///
-/// - `claude-chips-*`: a finished Claude Code turn whose calls folded, and two consecutive
-///   `spawn_task` calls left in view as one card, "2 suggested tasks", one in a worktree.
-/// - `codex-chip-*`: a Codex thread's `yardlet` MCP call as one chip under "New session".
-/// - `resolved-*`: three suggestions, one started ("Started", opens its task), one dismissed (gone).
-/// - `progress-*`: one being started ("Starting…"), one whose start failed (why, under its summary,
-///   with Options, Do it here and Start again), one sent here ("Sent to this session").
-/// - `places-*`: where the agent said each starts — "Starts in web-app · In a worktree" and
-///   "As a subtask of ‘<parent>’" — before the summary, and a worktree asked for outside Git: "Local",
-///   quietly, with the settings.
-/// - `options-popover-*`: Options — harness, account, where, Local or New worktree, model and
-///   permissions, each a one-level menu, and Start — for a Claude task that bypasses permissions,
-///   nested under ‘<parent>’.
-/// - `options-outside-git-*`: the same for a folder outside Git the agent wanted a worktree in:
-///   Local, quietly, with no menu to choose another.
+/// Renders suggested-task chips as the conversation draws them, offscreen into
+/// `.build/task-suggestion-qa/`, light and dark.
 @MainActor
 final class TaskSuggestionRenderingTests: XCTestCase {
     private static let workspace = URL(filePath: "/work/uploader", directoryHint: .isDirectory)

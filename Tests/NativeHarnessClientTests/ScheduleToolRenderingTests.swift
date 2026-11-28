@@ -4,14 +4,8 @@ import XCTest
 @testable import NativeHarnessClient
 @testable import YardletAgentTools
 
-/// A schedule an agent created, drawn by the one conversation renderer with no window on screen,
-/// into `.build/schedule-tools-qa/`, light and dark:
-///
-/// - `claude-row-*`: a finished Claude Code turn whose calls folded, the `create_scheduled_task` call
-///   left in view as one row — clock, name, its rule and next run, and Open.
-/// - `codex-row-*`: a Codex thread's `yardlet` MCP call as the same row.
-/// - `states-*`: three rows of one turn — a paused schedule, a one-off, and one deleted since.
-/// - `claude-request-*`: Claude Code asking before the call, on the request card, in Yardlet's words.
+/// Renders a schedule an agent created, as the conversation draws it, offscreen into
+/// `.build/schedule-tools-qa/`, light and dark.
 @MainActor
 final class ScheduleToolRenderingTests: XCTestCase {
     private static let workspace = URL(filePath: "/work/uploader", directoryHint: .isDirectory)

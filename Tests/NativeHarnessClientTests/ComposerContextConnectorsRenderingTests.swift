@@ -4,20 +4,8 @@ import XCTest
 @testable import NativeHarnessClient
 @testable import YardletAgentTools
 
-/// The composer's context window and connector list, drawn offscreen into
-/// `.build/composer-context-qa`, light and dark. No provider, process, app launch or window server.
-///
-/// - `context-claude-*`: a Claude Code task at 48%: numbers, bar, `/context` breakdown, auto-compact.
-/// - `context-claude-near-*`: 76%, warning colour, "Auto-compacts soon" and "Compact session".
-/// - `context-codex-*`: a Codex thread at 25% with its last turn and running total.
-/// - `context-empty-*`: a Claude Code task before its first turn.
-/// - `connectors-menu-*`: the "+" menu with "Connectors" and its reconnection hint, beside the list it
-///   opens: Manage connectors, then Yardlet's connectors and, under their heading, the session's MCP
-///   servers.
-/// - `composer-ring-*`: the task composer with the ring beside the model menu.
-/// - `context-limit-*`: a Claude Code task's context limit on its Default, which names the 600k Settings
-///   gives it, in the context window and, as `context-limit-rail-*`, in the session rail's narrower card;
-///   `context-limit-rail-claude-*` with Claude Code's own default, the longest name Default has.
+/// Renders the composer's context window and connector list offscreen into
+/// `.build/composer-context-qa`, light and dark.
 @MainActor
 final class ComposerContextConnectorsRenderingTests: XCTestCase {
     private typealias Fixtures = ComposerContextAndConnectorsTests

@@ -3,12 +3,7 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// A running turn reads as its words, folded summaries and one live line (decision of 2026-10-16:
-/// tool lines piled up too much, the progress line was unclear, and a running call should not open;
-/// `ConversationLiveWork`). Drawn without a provider into `.build/composer-stream-qa/`:
-/// `running-turn-{light,dark}.png` (a Claude Code turn running a command after reads, searches, an
-/// edit and commands), `running-turn-thinking-{light,dark}.png` and
-/// `running-turn-waiting-{light,dark}.png`.
+/// Renders a running turn without a provider into `.build/composer-stream-qa/`, light and dark.
 @MainActor
 final class RunningTurnRenderingTests: XCTestCase {
     private static let start = Date(timeIntervalSince1970: 1_800_000_000)

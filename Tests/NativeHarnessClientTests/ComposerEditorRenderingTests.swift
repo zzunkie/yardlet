@@ -3,12 +3,9 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// Both composers drawn in an unshown window, light and dark, in the states their shared editor
-/// owns: attachment chips, a notice, the typed `/` and `@` lists, bash mode and the queue's chips.
-/// Typing goes through the real field editor. Images and accessibility lists are written under
-/// `.build/composer-editor-qa/<phase>/` (`COMPOSER_EDITOR_QA_PHASE`, `after` unless set), and an
-/// `after` list is compared with the `before` list drawn from the code before the editor was
-/// shared, when that run's files are present. No provider, CLI, app window or screen capture.
+/// Renders both composers in an unshown window into `.build/composer-editor-qa/<phase>/`
+/// (`COMPOSER_EDITOR_QA_PHASE`, `after` unless set), light and dark, and compares an `after` run
+/// with a `before` run's files when present.
 @MainActor
 final class ComposerEditorRenderingTests: XCTestCase {
     private struct Scenario {

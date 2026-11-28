@@ -3,9 +3,7 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// Renders Claude bash mode offscreen into `.build/bash-mode-qa`, light and dark: the composer in
-/// bash mode and while a command runs, and the conversation's command rows running, finished,
-/// long, silent, stopped and failed. No provider, shell, window server interaction or app launch.
+/// Renders Claude bash mode offscreen into `.build/bash-mode-qa`, light and dark.
 @MainActor
 final class ClaudeBashModeRenderingTests: XCTestCase {
     func testTheComposerInBashModeAndWhileACommandRuns() throws {

@@ -3,10 +3,7 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// Renders Claude's follow-up queue offscreen into `.build/claude-followup-qa`: a message Claude
-/// Code holds, one Yardlet holds, a failed one and a failed one another task sent (a schedule's run
-/// whose task did not start), running and paused; and a follow-up Claude read in the middle of a
-/// turn, as the conversation shows it. No provider, window server interaction or app launch is involved.
+/// Renders Claude's follow-up queue offscreen into `.build/claude-followup-qa`.
 @MainActor
 final class ClaudeFollowUpRenderingTests: XCTestCase {
     func testClaudesQueueShowsWhatClaudeHoldsWhatWaitsAndThePause() throws {

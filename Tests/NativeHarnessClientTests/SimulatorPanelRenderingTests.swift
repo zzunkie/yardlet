@@ -3,13 +3,8 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// The Simulator tab drawn in an unshown window with fictional devices: the launcher with Simulator after Browser,
-/// the device list with a device another task uses, iOS simulators and Android emulators listed together, what each
-/// missing part says, both platforms missing at once, a saved tab whose Xcode or Android SDK is gone, a device
-/// booting, a device that is off, several Simulator tabs in one task, and a screen the helper could not show, for each
-/// reason. Drawn under
-/// `.build/simulator-panel/`, in both appearances. The live screen is checked against a real simulator in
-/// `SimulatorPanelQATests`.
+/// Renders the Simulator tab with fictional devices into `.build/simulator-panel/`, light and dark;
+/// `SimulatorPanelQATests` checks a real simulator.
 @MainActor
 final class SimulatorPanelRenderingTests: XCTestCase {
     private let size = NSSize(width: 460, height: 760)

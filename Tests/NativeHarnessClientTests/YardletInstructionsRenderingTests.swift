@@ -3,15 +3,8 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// Yardlet instructions drawn offscreen (never shown) in both appearances into `.build/yardlet-instructions-qa`:
-///
-/// - `settings-instructions-*.png`: Settings › Yardlet Instructions with a written guideline, the
-///   switch on, the note on global instruction files and the harnesses that receive nothing.
-/// - `settings-instructions-off-*.png`: the same with the switch off.
-/// - `project-instructions-*.png`: a project's edit sheet with its own text below the folders.
-/// - `project-instructions-off-*.png`: the sheet with "Turn off in this project" checked.
-///
-/// The store lives in a temporary folder with preferences held in memory.
+/// Renders Yardlet instructions offscreen into `.build/yardlet-instructions-qa`, light and dark,
+/// with a temporary store.
 @MainActor
 final class YardletInstructionsRenderingTests: XCTestCase {
     private var root: URL!

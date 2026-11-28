@@ -4,10 +4,7 @@ import XCTest
 @testable import NativeHarnessClient
 @testable import YardletRemote
 
-/// Settings sections and the Harness Accounts section with remembered, current, unfinished and signed-out
-/// readings, the Claude Code and Codex harness pages opened from their rows, and the whole list with
-/// General's headings, drawn in an offscreen window (never shown) in both appearances into
-/// `.build/settings-qa`.
+/// Renders Settings in an unshown window into `.build/settings-qa`, light and dark.
 @MainActor final class SettingsRenderingTests: XCTestCase {
     private let directory = WindowlessRender.repositoryRoot.appending(path: ".build/settings-qa")
     private var roots: [URL] = []

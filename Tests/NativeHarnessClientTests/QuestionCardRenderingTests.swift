@@ -3,13 +3,8 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// Claude's `AskUserQuestion` card as the conversation draws it: two questions, each choosing one
-/// or more of four options with descriptions, under the window's monochrome tint (`MainWindow`
-/// tints its shell `Color.primary`). The options and the buttons must read in light and dark,
-/// waiting with nothing picked, waiting with picks (the first of two questions, as the card asks one
-/// at a time), and answered (2026-10-16: the button's words did not show in light mode). A question
-/// whose option carries a preview shows it beside the options, under the picked option where the
-/// card is narrow, and beside the answer once answered.
+/// Renders Claude's `AskUserQuestion` card as the conversation draws it, under the window's
+/// monochrome tint, light and dark.
 @MainActor
 final class QuestionCardRenderingTests: XCTestCase {
     static let questions = [

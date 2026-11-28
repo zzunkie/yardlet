@@ -6,12 +6,8 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// The Files panel drawn without a window on screen, light and dark, into `.build/file-preview-qa/`:
-/// a small source file with its colors, a 3 MB one without colors or editing and its one line
-/// saying so, a 25 MB one shown from its beginning with the file's app and Finder, and, opened from a
-/// link as a person clicks one, a file outside the task's folder (read-only), an image, a PDF and a
-/// file it cannot show. The files are written into `YARDLET_FILE_PREVIEW_QA_DIR` (a temporary folder
-/// without it) and removed.
+/// Renders the Files panel offscreen into `.build/file-preview-qa/`, light and dark, from files
+/// written into `YARDLET_FILE_PREVIEW_QA_DIR` (a temporary folder without it).
 @MainActor
 final class WorkspaceFilePreviewRenderingTests: XCTestCase {
     private static let sample = """

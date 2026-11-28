@@ -3,15 +3,8 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// The calendar drawn in an unshown window with fictional accounts (`FakeCalendarService`): the section words with
-/// the mailbox on and then the calendar too, what comes next and every calendar to show or hide, the week with
-/// invitations not answered, overlapping meetings side by side, an all-day event and Yardlet's scheduled runs on their
-/// layer, an invitation opened and accepted on its own service, the hand-off to an agent, and one day. The runs are a
-/// heavy week's (`ManyRunsFixture`, about 600): the recurring ones sum up in the all-day row and the one-off ones
-/// stand at their times, the sidebar folds each day's into one row, and the day lists them beside its hours, which the
-/// keyboard goes through. While the calendar shows it reads its days again as often as it is set to; once the window
-/// shows its tasks, it reads nothing. Drawn under `.build/calendar-qa/`, with the sidebar at 240 and 351 points, in
-/// both appearances.
+/// Renders the calendar in an unshown window with fictional accounts into `.build/calendar-qa/`,
+/// light and dark.
 @MainActor
 final class CalendarRenderingTests: XCTestCase {
     private var korean: Bool { L10n.string("Calendar") == "캘린더" }

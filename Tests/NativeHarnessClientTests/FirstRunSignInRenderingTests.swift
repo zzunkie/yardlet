@@ -3,9 +3,8 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// What someone with Claude history and no Claude Code login sees on a first run, drawn in an unshown
-/// window in both appearances into `.build/first-run-claude-qa`: the new-task account chip, the
-/// account list and the failed turn. They draw in the Mac's language; `QA_LANGUAGE` names the files.
+/// Renders a first run with Claude history and no Claude Code login into
+/// `.build/first-run-claude-qa`, light and dark; `QA_LANGUAGE` names the files.
 @MainActor final class FirstRunSignInRenderingTests: XCTestCase {
     func testTheSignedOutFirstRun() throws {
         let directory = try WindowlessRender.directory("first-run-claude-qa")

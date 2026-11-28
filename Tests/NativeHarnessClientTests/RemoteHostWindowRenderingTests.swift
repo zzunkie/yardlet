@@ -6,46 +6,8 @@ import XCTest
 @testable import YardletRemote
 @testable import YardletRemoteFixtureSupport
 
-/// The desktop remote drawn offscreen (never shown) in both appearances into `.build/remote-qa`, on loopback:
-/// nothing runs a provider, and nothing is paired but the test's own hosts.
-///
-/// Against the app's own model as the host (`AppModelRemoteBridge`), so cards carry exactly what the host's
-/// own cards offer, with the same conversation drawn by the local timeline beside it:
-/// - `remote-host-approval-*.png` and `local-approval-*.png`: a Claude Code task waiting on a Bash approval,
-///   with Claude Code's own three answers.
-/// - `remote-host-question-*.png` and `local-question-*.png`: a question with its options.
-/// - `remote-host-lines-*.png` and `local-lines-*.png`: the same turn with its Read and Edit lines opened.
-/// - `remote-host-suggestion-*.png` and `local-suggestion-*.png`: a finished task with a suggested task's chip;
-///   `remote-host-suggestion-options-*.png` and `local-suggestion-options-*.png`: its Options popover.
-/// - `remote-host-outputs-*.png` and `local-outputs-*.png`: a task that wrote a report and a chart, with the
-///   session rail's Outputs card beside it.
-/// - `remote-host-schedules-*.png` and `local-schedules-*.png`: the scheduled tasks list beside a schedule.
-/// - `remote-rail-facts-*.png` and `local-rail-facts-*.png`: the host's account, context, limits, plan, child task
-///   and pull-request checks on the shared rail; `comparison-rail-facts-*.png` puts them side by side.
-/// - `remote-home-facts-*.png` and `local-home-facts-*.png`: the same answer line and finished-today count;
-///   `comparison-home-facts-*.png` puts the local home on the left and the remote home on the right.
-/// - `remote-attention-menu-*.png` and `local-attention-menu-*.png`: the Dock badge count, activity toggle and menu
-///   bar menu with the host's waiting and unread tasks; `comparison-attention-menu-*.png` puts them side by side.
-/// - `remote-form-*.png` and `local-form-*.png`: a Codex MCP form's card, the remote one read from what the host
-///   sends for it.
-/// - In full detail (§15.24), `remote-full-*.png` and `local-full-*.png`: `answer`, an answer past the phone's 32,000
-///   characters; `pictures`, a message's two pictures; `limit`, a plan limit's card with its windows and Auto-continue;
-///   `codex`, a Codex turn opened, with a model reroute, a compaction, a subagent and a proposed plan.
-///
-/// Against the fixture host (`RemoteFixtureBridge`), which streams and answers:
-/// - `remote-connect-*.png`: File › Connect to Mac… with one paired Mac.
-/// - `remote-host-running-*.png`: a turn running after its approval was answered, with a queued message.
-/// - `remote-host-answered-*.png`: a finished task's turns, each folded under its answer.
-/// - `remote-host-new-*.png`: a new task with the host's project, harness and model menus.
-/// - `remote-host-form-*.png`: an MCP form waiting in the host window.
-/// - `remote-host-offline-*.png`: the host gone, its list and conversation kept under the banner.
-///
-/// A task's controls (§15.23), against the app's own model as the host, beside the local conversation and composer:
-/// - `remote-controls-codex-*.png` and `local-controls-codex-*.png`: a Codex task's bottom row and its turns' Edit
-///   message and Fork from here.
-/// - `remote-controls-edit-*.png` and `local-controls-edit-*.png`: the same task editing its latest request.
-/// - `remote-controls-needs-terminal-*.png`: Bypass permissions refused for a device without its Terminal permission.
-/// - `remote-controls-claude-*.png` and `local-controls-claude-*.png`: a Claude Code task in Bypass permissions.
+/// Renders the desktop remote offscreen into `.build/remote-qa`, light and dark, on loopback with
+/// only the test's own hosts paired.
 @MainActor
 final class RemoteHostWindowRenderingTests: XCTestCase {
     func testBankedResetConfirmationMatchesHostOverLoopback() async throws {

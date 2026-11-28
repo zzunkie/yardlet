@@ -3,9 +3,8 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// Renders a task's side panel offscreen into `.build/right-panel-qa`: the first open (the launcher), a
-/// strip with several tabs, and a narrow panel, for Codex and Claude Code tasks. The Review tab reads
-/// this checkout's Git state; no provider, app launch or window server interaction is involved.
+/// Renders a task's side panel offscreen into `.build/right-panel-qa`; the Review tab reads this
+/// checkout's Git state.
 @MainActor
 final class RightPanelRenderingTests: XCTestCase {
     private let root = URL(filePath: #filePath).deletingLastPathComponent().deletingLastPathComponent()

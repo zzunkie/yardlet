@@ -5,24 +5,8 @@ import XCTest
 @testable import NativeHarnessClient
 @testable import YardletAgentTools
 
-/// The Apple connectors on screen, drawn into `.build/apple-connectors-qa/`, light and dark, with
-/// what each says checked. The connection flows run in a transparent window ordered in far off
-/// screen, pressed through accessibility as a click would: no window shows, nothing takes the
-/// person's input, and no privacy prompt, keychain item, or Xcode appears (the stores are the
-/// tests' own, `AppleConnectorTests`).
-///
-/// - `add-search-app-*`: Add connector searched for "App": Apple Calendar, Reminders, and Contacts
-///   in one click, App Store Connect with its key.
-/// - `add-search-xcode-*`: Xcode, offered because this test's Mac has its bridge, with what it needs.
-/// - `asc-page-empty-*`, `asc-page-filled-*`: App Store Connect's page fresh, then with a team key's
-///   file chosen and its IDs entered.
-/// - `asc-page-connected-*`: after Connect, the key in the list and the question about its file.
-/// - `flow-calendar-*`: Apple Calendar's Connect pressed in the directory; macOS (the test's store)
-///   asked once; Settings with it connected.
-/// - `flow-xcode-error-*`: Xcode's bridge stopping because Xcode's Intelligence settings keep other
-///   agents out; Settings says so and what to do.
-/// - `settings-apple-*`: Settings → Connectors with every Apple connector, one refused by macOS.
-/// - `claude-request-asc-submit-*`: Claude Code asking before a version is submitted for review.
+/// Renders the Apple connectors offscreen into `.build/apple-connectors-qa/`, light and dark,
+/// without a privacy prompt, keychain item or Xcode.
 @MainActor
 final class AppleConnectorsRenderingTests: XCTestCase {
     private static let folder = "apple-connectors-qa"

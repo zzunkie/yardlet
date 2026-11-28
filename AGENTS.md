@@ -83,3 +83,5 @@ Maintainers keep working notes outside this repository, in the ignored folder `d
 - `docs/design/` holds design records: a design for something not built yet, or one kept for the
   reasons behind what was built. Each says so in its first lines and names the document that
   describes the behavior. A design record is not kept current; behavior goes in that document.
+- A test file's top doc comment does not list its individual test cases or rendered images: the test
+  names already say what each covers, and a list there makes unrelated pull requests conflict.

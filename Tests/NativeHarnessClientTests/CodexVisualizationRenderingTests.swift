@@ -6,10 +6,8 @@ import XCTest
 @testable import YardletAgentTools
 @testable import YardletRemote
 
-/// A Codex inline visualization drawn by the real web view in its message: the isolation it runs under (another
-/// origin than Yardlet's page, no bridge handler, nothing fetched, no window), the height it reports, the state it
-/// saves, the app's appearance as it changes, the same page moved into the expanded sheet and back, and the skill's
-/// kit around the fragment when a Codex home on the Mac holds one. Review images go to `.build/chat-media-qa/`.
+/// Renders a Codex inline visualization in its real, isolated web view, with no window on screen,
+/// into `.build/chat-media-qa/`.
 @MainActor
 final class CodexVisualizationRenderingTests: XCTestCase {
     private let decoder = CodexTaskDecoder()

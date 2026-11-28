@@ -4,22 +4,8 @@ import XCTest
 @testable import NativeHarnessClient
 @testable import YardletAgentTools
 
-/// Gmail's setup in Settings → Connectors, drawn offscreen into `.build/gmail-qa/`, light and dark,
-/// with what each says checked. Fixture records and a fake Google only: no network or sign-in.
-///
-/// - `add-gmail-sheet-*`: Add connector opened at Gmail, as the sheet shows it, before an app is saved.
-/// - `gmail-page-empty-*`: the whole Gmail page then: the Google OAuth app's steps and fields.
-/// - `gmail-page-accounts-*`: an app saved, a personal and a Workspace account connected, and one
-///   that needs signing in again.
-/// - `gmail-page-steps-*`: the same with the app's steps opened again.
-/// - `gmail-page-builtin-empty-*`, `gmail-page-builtin-accounts-*`: a build with Yardlet's own Google
-///   app, before and after accounts sign in.
-/// - `gmail-page-builtin-analytics-*`: the same with an account that turned Analytics on with
-///   Yardlet's app, which now waits for an app of the person's own.
-/// - `add-directory-own-apps-*`: the directory's own-app group, Gmail with its account count.
-/// - `settings-gmail-*`: Settings → Connectors with the Gmail accounts among the connectors.
-/// - `claude-request-send-*`: Claude Code asking before a send, on the request card.
-/// - `claude-row-send-*`: the send's row in the conversation once it ran, with the account it named.
+/// Renders Gmail's setup offscreen into `.build/gmail-qa/`, light and dark, with fixture records
+/// and a fake Google.
 @MainActor
 final class GmailSetupRenderingTests: XCTestCase {
     private static let folder = "gmail-qa"

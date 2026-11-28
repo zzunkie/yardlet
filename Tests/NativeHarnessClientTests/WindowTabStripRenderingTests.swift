@@ -3,10 +3,8 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// The window's tab strip drawn in the whole main window, light and dark, into
-/// `.build/window-tabs-render/`: three tabs (a running task, a split view with an unread task, and
-/// the new-task screen), the split view's tab shown, and one tab, which draws no strip; and the title bar's
-/// row shared with a side panel's tabs (also under the Nord and Ember presets) and a split view alone in its window.
+/// Renders the window's tab strip in the whole main window into `.build/window-tabs-render/`, light
+/// and dark.
 @MainActor
 final class WindowTabStripRenderingTests: XCTestCase {
     private static let folder = "window-tabs-render"

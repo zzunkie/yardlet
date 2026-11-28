@@ -3,37 +3,8 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// Settings → Passwords and the item sheet, drawn offscreen into `.build/vault-qa`, light and dark, from
-/// an in-memory vault holding made-up sign-ins. No keychain, Touch ID, browser or window on screen.
-///
-/// - `settings-vault-*`: the switch and three items (sites, kinds, agent use, last use).
-/// - `settings-vault-unsigned-*`: an ad-hoc build with an empty vault: the switch off and disabled.
-/// - `vault-item-*`: a saved item's sheet with its previous passwords, recent uses and passkey line.
-/// - `vault-item-new-*`: a new item from a page, with its site and username filled in.
-/// - `vault-item-code-removed-*`, `vault-item-code-only-removed-*`: Remove pressed beside a saved code, in a sign-in and
-///   in an item that holds only the code.
-/// - `settings-vault-unlinked-*`: codes with no site, with the sites suggested for them and one left to type.
-/// - `settings-vault-search-*`: the lists narrowed by a search.
-/// - `settings-vault-accounts-*`, `vault-item-account-*`: two accounts of one username, and one's item sheet.
-/// - `vault-item-secret-fields-*`, `vault-item-secret-field-added-*`: a sign-in with an organization's ID and password
-///   in masked fields beside its own, and the same sheet with a secret field being added by hand.
-/// - `vault-save-bar-*`: the browser panel's save, update and add-username bars.
-/// - `vault-setup-bar-*`: the browser panel's two-factor setup bars, the page's and the ones the agent asks with.
-/// - `settings-vault-wallet-*`, `vault-card-*`, `vault-address-*`, `vault-wallet-bars-*`: addresses and cards.
-/// - `vault-backup-key-<language>-*`, `vault-backup-import-<language>-*`, `vault-export-menu-<language>-*`: an encrypted
-///   backup's recovery key shown once, the prompt for it on import, and the Export menu.
-/// - `vault-picker-*`, `vault-picker-search-*`, `vault-picker-codes-*`, `vault-picker-empty-*`: the browser panel's
-///   key button list on a site's page, searched, searched for a code from the code bar, and on a site with nothing.
-/// - `vault-picker-aws-passwords-*`, `-codes-*`, `-any-*`, `-search-*`: the list on a cloud console's sign-in at a
-///   password field, at a code field, with no field, and searched.
-/// - `settings-vault-browser-import-<language>-*`: the page with "Import from Another Browser…" beside its own imports.
-/// - `browser-import-sheet-<language>-*`, `browser-import-sheet-settings-<language>-*`, `browser-panel-menu-<language>-*`:
-///   that import's sheet over made-up Whale and Firefox folders and a Chrome one it may not read, with Whale the
-///   default browser, from a task's panel (the page's site chosen) and from Settings (none chosen), and the browser
-///   panel's ⋯ menu that also opens it. `<language>` is the one the run draws in (`-AppleLanguages '(ko)'` for Korean).
-/// - `browser-import-sheet-default-firefox-<language>-*`, `browser-import-sheet-unreadable-chrome-<language>-*`,
-///   `browser-import-picker-<language>-*`: the sheet opening on the default browser, Firefox with its sites or Chrome
-///   with where to allow Yardlet, and the browser list it offers then.
+/// Renders Settings → Passwords and the vault's sheets and bars offscreen into `.build/vault-qa`,
+/// light and dark, from an in-memory vault without keychain or Touch ID.
 @MainActor
 final class VaultSettingsRenderingTests: XCTestCase {
     private static let github = VaultItem(

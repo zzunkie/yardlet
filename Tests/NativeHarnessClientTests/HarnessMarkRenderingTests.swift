@@ -3,12 +3,8 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// The harness marks before task titles, drawn offscreen into `.build/harness-mark-qa`, light and
-/// dark: for every harness with a packaged logo, a sidebar with a pinned (top-level) task and a
-/// project holding a selected and an unselected task, one overview per appearance
-/// (`sidebar-all-*`), the name labels at the title bar's and new-task menu's sizes (`labels-*`),
-/// and each mark's measured contrast against the row (`mark-contrast.txt`). No provider, window
-/// server interaction, or app launch.
+/// Renders the harness marks before task titles offscreen into `.build/harness-mark-qa`, light and
+/// dark.
 @MainActor
 final class HarnessMarkRenderingTests: XCTestCase {
     private static let markedHarnesses = HarnessCatalog.builtIns.map(\.id).filter {

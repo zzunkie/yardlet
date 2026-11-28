@@ -3,13 +3,8 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// Scheduled tasks drawn for review into `.build/schedules-qa/`, light and dark: the sidebar entry,
-/// the list in the task list's place beside the chosen schedule with what its runs used and its run
-/// history (a run that went to another account among them, and its task's hover card), the empty
-/// place, the editor for each trigger (a weekly one at five times among them) and for continuing a
-/// task, and the other-app import sheet
-/// before and after an import. No provider, runtime or app file is touched; the import sheet draws a
-/// listing made from made-up schedules.
+/// Renders scheduled tasks offscreen into `.build/schedules-qa/`, light and dark, without touching
+/// a provider, runtime or app file.
 @MainActor
 final class ScheduledTaskRenderingTests: XCTestCase {
     private var root: URL!

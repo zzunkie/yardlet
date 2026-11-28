@@ -4,20 +4,8 @@ import XCTest
 @testable import NativeHarnessClient
 @testable import YardletAgentTools
 
-/// The easier connector setup, drawn offscreen into `.build/connectors-easy-qa/`, light and dark,
-/// with what each says checked. Fixture records, fixture harness files with fake values, and a
-/// defaults suite of its own: no network, sign-in, or real account.
-///
-/// - `assistant-google-empty-*`: Set up Google with nothing done: seven steps, each console page's
-///   button, copy buttons for the app name, the six scopes, and the redirect URL.
-/// - `assistant-google-underway-*`: three console pages opened, a client ID pasted that is not one.
-/// - `assistant-slack-*`, `assistant-slack-filled-*`: Set up Slack fresh, then with Slack's page
-///   opened and a client ID that checks out.
-/// - `google-accounts-*`: the app saved and two Google accounts, Gmail, Calendar, and Drive turned
-///   on or off per account, one service needing sign-in.
-/// - `settings-suggestions-*`: Settings → Connectors with services used through claude.ai and Codex
-///   apps offered for Yardlet, and the two setup tiles.
-/// - `add-own-apps-*`: Add connector's own-app group: Google in one row, Slack.
+/// Renders the easier connector setup offscreen into `.build/connectors-easy-qa/`, light and dark,
+/// from fixtures only.
 @MainActor
 final class ConnectorsEasyQARenderingTests: XCTestCase {
     private static let folder = "connectors-easy-qa"

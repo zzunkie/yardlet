@@ -4,19 +4,8 @@ import XCTest
 @testable import NativeHarnessClient
 @testable import YardletAgentTools
 
-/// The composer's "+" menu and Settings → Connectors after the 2026-10-17 redesign, drawn offscreen
-/// into `.build/plus-connectors-qa/after`, light and dark, with what each says checked. Fixture
-/// connectors and a fake server only: no network, sign-in, provider, or window on screen.
-///
-/// - `plus-menu-*`: the "+" menu (files or photos, folder | slash commands, connectors with its
-///   hint) beside the connector list it opens.
-/// - `plus-menu-keyboard-*`: the menu opened from the keyboard, its first row highlighted.
-/// - `settings-empty-*`, `settings-connected-*`: the page with no connectors, and with connectors in
-///   every state — connected first, then needs sign-in and error with its reason.
-/// - `add-*`: the add sheet: the directory as it opens, a key (GitHub, Browserbase), an OAuth app of
-///   one's own (Slack, Gmail with the Google note), and a server by URL.
-/// - `add-search-*`, `add-builtin-google-*`: the directory searched (one service, and none), and a
-///   build with Yardlet's own Google app, where Google connects in one click.
+/// Renders the composer's "+" menu and Settings → Connectors offscreen into
+/// `.build/plus-connectors-qa/after`, light and dark.
 @MainActor
 final class PlusConnectorsQARenderingTests: XCTestCase {
     private var roots: [URL] = []

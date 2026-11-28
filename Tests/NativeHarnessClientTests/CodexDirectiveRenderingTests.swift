@@ -3,11 +3,8 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// A Codex answer's directives drawn the way the Codex app draws them, by the one renderer, with no
-/// window on screen: citations as links named for the file and its place, follow-ups as their
-/// phrase, review comments in one card that shows three, a suggested task, two disclosures and a
-/// visualization card. The same words in a Claude conversation stay text. Review images go to
-/// `.build/codex-directive-qa/` in both appearances.
+/// Renders a Codex answer's directives as the Codex app draws them, offscreen into
+/// `.build/codex-directive-qa/`, light and dark.
 @MainActor
 final class CodexDirectiveRenderingTests: XCTestCase {
     private let decoder = CodexTaskDecoder()

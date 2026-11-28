@@ -3,14 +3,7 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// The parts of the Claude Code look the user took on 2026-10-15:
-/// calls and thinking as status lines folded into a summary, Claude Code's conversation spacing and
-/// sent bubble, the answer's copy shown on hover or focus, and the composer's corner and controls, in
-/// Yardlet's own colors. Drawn without a window on screen, provider, account or user data: one
-/// window-like fixture — the title bar, the sidebar with pinned, chats and projects, a Claude Code task
-/// with a sent message, a folded finished turn, a running turn with thinking, a read, an edit with
-/// its diff and a running command, and the composer — light and dark, into
-/// `.build/claude-look-qa/applied/`.
+/// Renders the Claude Code look offscreen into `.build/claude-look-qa/applied/`, light and dark.
 @MainActor
 final class ClaudeLookRenderingTests: XCTestCase {
     static let size = NSSize(width: 1280, height: 860)

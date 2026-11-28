@@ -4,10 +4,8 @@ import XCTest
 @testable import NativeHarnessClient
 @testable import YardletAgentTools
 
-/// The rail's Agents, Background tasks and Preview cards and what they open beside the task, drawn
-/// without a provider, a process or user data into `.build/session-rail-agents-qa/`, light and dark;
-/// and the window's own clicks on them: an agent's row opens its conversation in the side panel, its
-/// request is answered from the rail, a shell's row opens its output, a child task's row goes to it.
+/// Renders the session rail's agent and task cards and what they open into
+/// `.build/session-rail-agents-qa/`, light and dark.
 @MainActor
 final class SessionRailAgentsRenderingTests: XCTestCase {
     private static let folder = "session-rail-agents-qa"

@@ -4,17 +4,8 @@ import XCTest
 @testable import NativeHarnessClient
 @testable import YardletRemote
 
-/// Settings › Remote drawn offscreen (never shown) in both appearances into `.build/remote-qa`:
-///
-/// - `remote-off-*.png`: the switch off, nothing else.
-/// - `remote-pairing-*.png`: on, kept awake on power, reachable on the same Wi-Fi, Tailscale and the Yardlet
-///   server, a pairing open with its QR code, the link to the Android app, its link to copy and time left, and
-///   two paired devices: a phone connected now and a Mac last seen yesterday.
-/// - `remote-link-*.png`: a phone asking to link through the account, with its number.
-/// - `remote-paired-*.png`: after the pairing and the link, with the paired phone named.
-///
-/// Nothing listens: the service reads fixture interfaces and its listener and relay states are set by
-/// the test. Its preferences live in a throwaway suite and its keys in memory.
+/// Renders Settings › Remote offscreen into `.build/remote-qa`, light and dark; nothing listens and
+/// its keys stay in memory.
 @MainActor
 final class RemoteSettingsRenderingTests: XCTestCase {
     private var onPower = true

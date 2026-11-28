@@ -3,23 +3,8 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// The menu bar item's menu drawn offscreen into `.build/menu-bar-qa`, light and dark. An `NSMenu`
-/// draws only while it is open on screen, so the items `MenuBarMenuController` builds are drawn
-/// here by `MenuPanel`, line for line in the system menu's layout (headers, title and subtitle,
-/// read-only lines, indentation, submenus, separators). No status item, window or app is shown.
-///
-/// - `menu-*.png`: the item in the menu bar with the menu open on ten tasks across three projects
-///   and a chat with the sidebar's state marks, one usage line per account (four Claude accounts and
-///   Codex, whose latest check could not finish), Recent's More submenu, and "Restart to update" for a
-///   staged build; beside it the menu with nothing to list and the icon on a bar of each appearance.
-/// - `account-menu-*.png`: the sidebar's account menu (`SidebarAccountMenuController`) with the same
-///   accounts under Usage, each with its harness and what is left under it.
-/// - `settings-general-*.png`: Settings › General with "Show in menu bar" first.
-/// - `settings-general-updates-*.png`: the same in a build that updates with Sparkle, which adds
-///   "Automatically check for updates" last.
-/// - `settings-general-lid-*.png` and `menu-lid-*.png`: "Keep tasks working with the lid closed" on
-///   while macOS waits for the person to allow the helper, and the menu's first lines while the screen
-///   and the lid are kept awake; `menu-lid-hot-*.png` while a critical heat lets the Mac sleep.
+/// Renders the menu bar item's menu offscreen into `.build/menu-bar-qa`, light and dark, through
+/// `MenuPanel`, since an `NSMenu` draws only while open on screen.
 @MainActor
 final class MenuBarRenderingTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_792_158_000) // 2026-10-16 13:40 UTC

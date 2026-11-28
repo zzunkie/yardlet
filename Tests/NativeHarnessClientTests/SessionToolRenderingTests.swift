@@ -4,22 +4,8 @@ import XCTest
 @testable import NativeHarnessClient
 @testable import YardletAgentTools
 
-/// The session tools drawn by the one conversation renderer with no window on screen, into
-/// `.build/session-tools-qa/`, light and dark:
-///
-/// - `received-message-*`: a message another task sent, under "Sent from {task}" (a link to it), then
-///   the receiving task's answer.
-/// - `subagents-running-*`: a running Claude Code turn with two `run_agent` cards: one working (its
-///   latest step on one line, Stop) and one waiting for the person, whose request waits at the end of
-///   the turn like every request.
-/// - `subagent-done-*`: a finished Codex subagent's card with its model and answer.
-/// - `approval-card-*`: `send_message_to_task` into another project waiting on the person's card;
-///   `read-approval-card-*` and `list-approval-card-*`: `read_task` of another project's task and `list_tasks` of every
-///   project's, on the same card.
-/// - `setting-approval-card-*`, `setting-changed-*`: `update_setting` waiting on the person's card, and the
-///   change it made as a row in the folded turn.
-/// - `simulator-approval-card-*`, `device-approval-card-*`: `simulator_attach` waiting on the person's card for a
-///   simulator, and for a real device with what it can reach.
+/// Renders the session tools as the conversation draws them, offscreen into
+/// `.build/session-tools-qa/`, light and dark.
 @MainActor
 final class SessionToolRenderingTests: XCTestCase {
     private static let workspace = URL(filePath: "/work/uploader", directoryHint: .isDirectory)

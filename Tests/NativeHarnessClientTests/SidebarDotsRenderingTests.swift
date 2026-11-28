@@ -4,18 +4,8 @@ import UniformTypeIdentifiers
 import XCTest
 @testable import NativeHarnessClient
 
-/// The sidebar's Claude-style status dots and nested sessions drawn offscreen into
-/// `.build/sidebar-dots-qa`, light and dark, in the 240 pt sidebar. No provider, process, window
-/// server interaction, or app launch.
-///
-/// - `states-*.png`: one row per state across harnesses (Claude Code, Codex, OpenCode over ACP,
-///   Cursor and Antigravity headless, Pi RPC, Kimi): approval and question dots (one for a question a
-///   restart cut off, with no turn running), a failed turn, a plan limit, a running task with its CPU,
-///   an unread result, a pull request and an idle task; a split view; two collapsed projects
-///   summarizing by the most urgent.
-/// - `families-*.png`: a pinned family, an expanded family with a grandchild, a collapsed family
-///   keeping a waiting task and counting the rest, a collapsed family counting all, a task whose
-///   parent is archived at top level, and a family under Chats.
+/// Renders the sidebar's status dots and nested sessions offscreen into `.build/sidebar-dots-qa`,
+/// light and dark.
 @MainActor
 final class SidebarDotsRenderingTests: XCTestCase {
     private let now = Date()

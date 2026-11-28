@@ -3,14 +3,8 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// The sidebar's task states and the activity view drawn offscreen into `.build/attention-qa`,
-/// light and dark. No provider, process, window server interaction, or app launch.
-///
-/// - `sidebar-*.png`: an expanded project with one row per state (approval and question dots, a
-///   failed turn, a plan limit, a running task with its CPU, an unread result, an idle task), a split
-///   view and two collapsed projects summarizing their tasks by the most urgent state.
-/// - `activity-*.png`: the same tasks in the activity view, the view with nothing listed, and the
-///   activity button off, off with a task needing attention, and on.
+/// Renders the sidebar's task states and the activity view offscreen into `.build/attention-qa`,
+/// light and dark.
 @MainActor
 final class AttentionRenderingTests: XCTestCase {
     @MainActor

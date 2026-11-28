@@ -3,10 +3,7 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// Task Resource Usage drawn offscreen into `.build/resource-usage-qa`, light and dark: a sidebar
-/// whose busy tasks carry the CPU mark (one held by the Claude app, one running in Yardlet with its
-/// spinner, and a collapsed project summing its busy task) beside idle and unread rows, and the
-/// Task Resource Usage table. No provider, process, window server interaction, or app launch.
+/// Renders Task Resource Usage offscreen into `.build/resource-usage-qa`, light and dark.
 @MainActor
 final class TaskResourceRenderingTests: XCTestCase {
     func testSidebarRowsShowTheCPUMarkOnlyForBusyTasks() throws {

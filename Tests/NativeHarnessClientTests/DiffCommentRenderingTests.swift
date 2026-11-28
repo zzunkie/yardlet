@@ -3,14 +3,7 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// Diff comments drawn with no window on screen, light and dark, into `.build/diff-comments-qa/`:
-///
-/// - `diff-comments-*`: the review's file with two waiting comments under their lines (one on a deleted
-///   line, one on two added lines), a new comment open under the line after them, and a comment across
-///   the sides under the second hunk.
-/// - `composer-comments-*`: the task composer with the "3 comments" chip beside the request.
-/// - `claude-sent-comments-*`: a Claude Code message sent with comments: the request in the bubble and
-///   the comment chip above it, none of the comment text.
+/// Renders diff comments offscreen into `.build/diff-comments-qa/`, light and dark.
 @MainActor
 final class DiffCommentRenderingTests: XCTestCase {
     private typealias Fixtures = DiffCommentTests

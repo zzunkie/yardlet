@@ -4,10 +4,8 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// The Codex app's markup drawn the way the app draws it, by the one renderer, with no window on
-/// screen: an automation's heartbeat under "Sent by scheduled task" in a two-line bubble, its reply as
-/// words, directives left out, and a long sent message clipped at twenty lines with "Show more".
-/// Review images go to `.build/codex-render-qa/` in both appearances.
+/// Renders the Codex app's markup as the app draws it, offscreen into `.build/codex-render-qa/`,
+/// light and dark.
 @MainActor
 final class CodexMessageMarkupRenderingTests: XCTestCase {
     private let decoder = CodexTaskDecoder()

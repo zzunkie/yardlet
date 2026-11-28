@@ -3,10 +3,7 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// A task's pull request where Yardlet shows it, drawn without a window on screen, a provider, an
-/// account, `gh` or user data: the title bar's badge in each state, the sidebar rows' quiet mark,
-/// and the new-task warning about a task already running in the chosen folder — light and dark,
-/// into `.build/pr-badge-qa/`.
+/// Renders a task's pull request marks offscreen into `.build/pr-badge-qa/`, light and dark.
 @MainActor
 final class TaskPullRequestRenderingTests: XCTestCase {
     private static let workspace = URL(filePath: "/tmp/pr-badge-qa/yardlet", directoryHint: .isDirectory)

@@ -4,11 +4,8 @@ import UniformTypeIdentifiers
 import XCTest
 @testable import NativeHarnessClient
 
-/// Renders the sidebar offscreen into `.build/move-project-qa`, light and dark, before and after a
-/// chat moves into a project (the Codex app thread the person had moved to a project of theirs), and
-/// a task in its project's own folder moved to Chats from its row's menu. A menu is built as a right
-/// click builds it and drawn beside the sidebar, never opened. No provider, app launch, or window
-/// server interaction.
+/// Renders the sidebar before and after a project move offscreen into `.build/move-project-qa`,
+/// light and dark.
 @MainActor
 final class TaskProjectMoveRenderingTests: XCTestCase {
     func testTheSidebarShowsAMovedChatUnderItsNewProject() throws {
