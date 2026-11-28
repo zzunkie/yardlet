@@ -41,6 +41,7 @@ final class BrowserHost {
         var seed: String?
         var profile = ""
         var copyRequest: Int32?
+        let generation = UUID()
     }
     private var waitingTabs: [Int: WaitingTab] = [:]
     /// DevTools messages for a waiting tab (the agent's first navigation), sent once it is at its page.
@@ -95,6 +96,10 @@ final class BrowserHost {
             HostLog.write("command \(name) tab=\(tab) \(detail)")
         }
 #endif
+        if afterRelease[tab] != nil {
+            afterRelease[tab]?.append(command)
+            return
+        }
         switch name {
         case "open":
             guard let requested = fields["url"] as? String, let viewport = fields["viewport"] as? [String: Any] else { return }
@@ -122,11 +127,12 @@ final class BrowserHost {
             }
             if created == 1 { advance(tab) }
             // A profile that never loads leaves no tab waiting for good.
-            if created == 2 {
+            if created == 2, let generation = waitingTabs[tab]?.generation {
                 DispatchQueue.main.asyncAfter(deadline: .now() + Self.profileDeadline) { [weak self] in
                     MainActor.assumeIsolated {
-                        guard yardlet_cef_cancel_waiting_browser(Int32(tab)) == 1 else { return }
-                        self?.notOpened(tab, "profile", "The tab's browser profile did not load within "
+                        guard let self, self.waitingTabs[tab]?.generation == generation,
+                              yardlet_cef_cancel_waiting_browser(Int32(tab)) == 1 else { return }
+                        self.notOpened(tab, "profile", "The tab's browser profile did not load within "
                                         + "\(Int(Self.profileDeadline)) seconds")
                     }
                 }
@@ -304,6 +310,13 @@ final class BrowserHost {
             if yardlet_cef_unresponsive_action(Int32(tab), terminate ? 1 : 0) == 1 {
                 HostLog.write("renderer \(terminate ? "ended" : "waited for") tab=\(tab)")
             }
+        case "prepareDemotion":
+            discarder.discard(tab: tab, urgent: fields["urgent"] as? Bool ?? false,
+                              action: .releaseBrowser(allowAgentForm: fields["allowAgentForm"] as? Bool ?? false))
+        case "releaseBrowser":
+            guard openTabs.contains(tab) else { return send(["closed": ["tab": tab]]) }
+            afterRelease[tab] = []
+            yardlet_cef_close_browser(Int32(tab))
         case "discard":
             discarder.discard(tab: tab, urgent: fields["urgent"] as? Bool ?? false)
         case "close":
@@ -497,6 +510,8 @@ final class BrowserHost {
         }
     }
 
+    // CEF closes asynchronously. Commands for a new browser with the same tab ID follow BeforeClose.
+    private var afterRelease: [Int: [[String: Any]]] = [:]
     private var openTabs = Set<Int>()
     /// Tabs whose renderer has not handled input for 15 seconds, as last reported to Yardlet.
     private var unresponsiveTabs = Set<Int>()
@@ -566,6 +581,10 @@ final class BrowserHost {
             HostLog.write("browser closed tab=\(tab)")
             blockedPopupSources = blockedPopupSources.filter { $0.value.opener != tab }
             openTabs.remove(tab)
+            popupRects[tab] = nil
+            scrollOffsets[tab] = nil
+            unresponsiveTabs.remove(tab)
+            accessibility.forget(tab: tab)
             forgetPainting(tab)
             chromiumWindows?.closed(tab)
             waitingTabs[tab] = nil
@@ -574,6 +593,14 @@ final class BrowserHost {
             surfaces?.forget(key: "\(tab).view")
             surfaces?.forget(key: "\(tab).popup")
             send(["closed": ["tab": tab]])
+            if afterRelease[tab] != nil {
+                // Leave CEF's BeforeClose callback before creating another browser for this tab.
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, let queued = self.afterRelease.removeValue(forKey: tab), !self.isShuttingDown,
+                          let open = queued.firstIndex(where: { $0["open"] != nil }) else { return }
+                    queued[open...].forEach(self.perform)
+                }
+            }
             if isShuttingDown, yardlet_cef_open_browser_count() == 0 { yardlet_cef_quit_message_loop() }
         case YardletCEFEventAddress.rawValue:
             send(["address": ["tab": tab, "url": text ?? ""]])

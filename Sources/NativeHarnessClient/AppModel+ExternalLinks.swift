@@ -47,8 +47,7 @@ extension AppModel {
 
     /// The mailbox turned off: its browser panel closes, with its pages.
     func closeMailBrowser() {
-        guard let panel = taskWorkspaces.loadedState(for: TaskWorkspaceStore.mailID) else { return }
-        panel.browserClient?.closeTabs(forSession: TaskWorkspaceStore.mailID)
+        guard taskWorkspaces.loadedState(for: TaskWorkspaceStore.mailID) != nil else { return }
         taskWorkspaces.remove(for: TaskWorkspaceStore.mailID)
     }
 }

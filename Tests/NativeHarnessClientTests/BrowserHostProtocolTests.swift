@@ -74,6 +74,10 @@ final class BrowserHostProtocolTests: XCTestCase {
         XCTAssertEqual(try decoder.decode(BrowserHostEvent.self, from: Data(#"{"navigationRequest":{"tab":3}}"#.utf8)),
                        .navigationRequest(tab: 3))
         // The memory saver's discards, which the host's TabDiscarder answers by hand (BROWSER_HOST section 3, "Memory saver").
+        XCTAssertEqual(try json(BrowserHostCommand.prepareDemotion(tab: 3, urgent: false, allowAgentForm: true)),
+                       #"{"prepareDemotion":{"allowAgentForm":true,"tab":3,"urgent":false}}"#)
+        XCTAssertEqual(try decoder.decode(BrowserHostEvent.self, from: Data(#"{"demotionReady":{"tab":3}}"#.utf8)), .demotionReady(tab: 3))
+        XCTAssertEqual(try json(BrowserHostCommand.releaseBrowser(tab: 3)), #"{"releaseBrowser":{"tab":3}}"#)
         XCTAssertEqual(try json(BrowserHostCommand.discard(tab: 3, urgent: false)), #"{"discard":{"tab":3,"urgent":false}}"#)
         XCTAssertEqual(try decoder.decode(BrowserHostEvent.self, from: Data(#"{"discarded":{"tab":3}}"#.utf8)), .discarded(tab: 3))
         XCTAssertEqual(try decoder.decode(BrowserHostEvent.self, from: Data(#"{"editableField":{"tab":3,"kind":4,"focusMoved":true}}"#.utf8)),

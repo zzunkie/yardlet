@@ -5,11 +5,9 @@ import Foundation
 /// QA for the memory saver's discards against the real browser host (docs/BROWSER_HOST.md §3 "Memory saver"), run by
 /// `run-check.sh … --ui-fixture-browser-check-only=memory-saver --ui-fixture-browser-memory-saver=4
 /// --ui-fixture-browser-agent-visible=1`: Chrome's four hours become four seconds. One task's tabs, with no panel:
-/// two pages holding memory with a frame from another site, a page whose policy allows no script, and the pages Chrome
-/// keeps (sound playing, a form typed into, a page and the pop-up it opened, which share a renderer, and a PDF). The
-/// first three are discarded and the rest kept, each for its reason; the browser's processes and memory before and
-/// after go to `result.json` (and run-check.sh samples them at the phase markers). A discarded tab loads its page
-/// again for the agent and for a panel, with its history; turning the saver off loads the rest. Then the agent's tabs
+/// pages holding memory and tabs sharing a renderer release their browsers, while sound, personal forms and PDFs
+/// keep theirs. The fixture measures host processes and memory, reopens tabs for a panel and the agent, then checks
+/// that turning the saver off loads the rest. Then the agent's tabs
 /// no panel showed on screen go soon after its turn (`runAgentTabs`), and tabs saved before a restart come back with only
 /// the one in front loaded (`runRestoredTabs`).
 @MainActor
@@ -54,6 +52,8 @@ final class BrowserHostMemorySaverQA {
               "tabs \(client.tabs(forSession: session).count)")
         _ = await waitUntil(.seconds(10)) { popup?.title == "Saver next" && popup?.isLoading == false }
 
+        if let popup { client.attachPanel(to: popup) }
+
         // Everything hidden past the saver's time (the agent's window is one second).
         try? await Task.sleep(for: .seconds(2))
         let before = measure()
@@ -67,13 +67,21 @@ final class BrowserHostMemorySaverQA {
         // Sound is "audible" for its first minute (the browser process's signal), then "media" (the renderer's answer).
         let kept: [(BrowserTab?, Set<String>, String)] = [
             (media, ["audible", "media"], "sound plays"), (form, ["form"], "a form typed into"),
-            (opener, ["shared"], "its pop-up shares its renderer"), (popup, ["shared"], "its opener shares its renderer"),
             (pdf, ["pdf"], "a PDF")
         ]
         _ = await waitUntil(.seconds(20)) { kept.allSatisfy { $0.0?.discardRefusal != nil } }
         for (tab, reasons, why) in kept {
             check("kept: \(why)", tab?.isDiscarded == false && tab?.discardRefusal.map(reasons.contains) == true,
                   "discarded \(String(describing: tab?.isDiscarded)), reason \(tab?.discardRefusal ?? "none")")
+        }
+        let openerReleased = await waitUntil(.seconds(20)) { opener.pendingAddress != nil }
+        if let popup {
+            let title = await value(popup, "document.title")
+            check("a shared-renderer popup stays live when its hidden opener is released",
+                  openerReleased && popup.pendingAddress == nil && title == .string("Saver next"), Self.describe(title))
+            client.detachPanel(from: popup)
+            let popupReleased = await waitUntil(.seconds(20)) { popup.pendingAddress != nil }
+            check("the popup can also be released once hidden", popupReleased, popup.title)
         }
         check("a discard is no crash", [first, second, noScript].allSatisfy { $0.crash == nil },
               [first, second, noScript].map { $0.crash?.errorCode ?? "-" }.joined(separator: ", "))
@@ -85,17 +93,14 @@ final class BrowserHostMemorySaverQA {
               "processes \(before.processes) → \(after.processes), footprint \(before.footprint >> 20) → \(after.footprint >> 20) MiB")
         await phase("saver-2-discarded")
 
-        // The agent uses a discarded tab: its page loads again before the tool reads it, with its history.
+        // The agent uses a discarded tab: its page loads again before the tool reads it.
         let agentTabs = BrowserAgentTabs { MacBrowserHost.shared.client }
         if let page = try? agentTabs.page(for: session, tabID: String(first.id)) {
             await page.untilRestored()
         }
-        let state = await value(first, "document.title + '|' + history.length + '|' + (window.held ? window.held.length : 0)")
-        check("the agent's tool finds the page loaded again, with its history", !first.isDiscarded
-              && state == .string("Saver 2|2|40") && first.canGoBack, "\(Self.describe(state)), back \(first.canGoBack)")
-        first.send(.navigation(tab: first.id, action: .back))
-        let wentBack = await waitUntil(.seconds(15)) { first.title == "Saver 1" && !first.isLoading }
-        check("Back goes to the page before the discard", wentBack, first.title)
+        let state = await value(first, "document.title + '|' + (window.held ? window.held.length : 0)")
+        check("the agent's tool finds the page at its saved address", !first.isDiscarded
+              && state == .string("Saver 2|40") && !first.canGoBack, Self.describe(state))
 
         // A panel shows a discarded tab: it loads again.
         client.attachPanel(to: second)
@@ -182,6 +187,8 @@ final class BrowserHostMemorySaverQA {
               let seen = await agentTab(agentTabs, session, "saver/page?n=7", title: "Saver 7"),
               let persons = await tab(session, "saver/page?n=8", title: "Saver 8")
         else { return }
+        let filled = await value(unseen, "var field = document.createElement('input'); document.body.append(field); field.value = 'preview'; field.value")
+        check("the agent changed a form in its unseen tab", filled == .string("preview"), Self.describe(filled))
         client.attachPanel(to: offScreen, occluded: true)
         client.detachPanel(from: offScreen, occluded: true)
         client.attachPanel(to: seen)

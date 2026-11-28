@@ -108,18 +108,18 @@ final class BrowserHostVisibilityTests: XCTestCase {
             id: 1, state: .inProgress, fileName: "a.zip", path: "/tmp/a.zip", receivedBytes: 1, totalBytes: 2)))
         client.isMemorySaverOn = true
         try await wait(.milliseconds(500))
-        let asked = connection.sent.compactMap { if case .discard(let id, false) = $0 { id } else { nil } }
+        let asked = connection.sent.compactMap { if case .prepareDemotion(let id, false, _) = $0 { id } else { nil } }
         XCTAssertEqual(asked.sorted(), [first.id, second.id], "only the long-hidden web pages, each asked once")
         XCTAssertFalse(asked.contains(blank.id))
 
-        connection.eventHandler?(.discarded(tab: first.id))
-        connection.eventHandler?(.discarded(tab: second.id))
+        connection.eventHandler?(.demotionReady(tab: first.id))
+        connection.eventHandler?(.demotionReady(tab: second.id))
         XCTAssertTrue(first.isDiscarded && second.isDiscarded)
         client.attachPanel(to: first)
-        XCTAssertEqual(connection.sent.last, .navigation(tab: first.id, action: .reload), "a shown tab loads its page again")
+        XCTAssertTrue(connection.sent.contains(.open(tab: first.id, url: "https://a.test/\(first.id)", viewport: .offscreenDefault)))
         XCTAssertFalse(first.isDiscarded)
         client.isMemorySaverOn = false
-        XCTAssertEqual(connection.sent.last, .navigation(tab: second.id, action: .reload), "turned off, the tabs are as before")
+        XCTAssertTrue(connection.sent.contains(.open(tab: second.id, url: "https://a.test/\(second.id)", viewport: .offscreenDefault)))
         XCTAssertFalse(second.isDiscarded)
 
         // Chrome's levels (MemorySaverModePolicy): 6, 4 and 2 hours hidden, and a tab the person brought in front more
@@ -135,6 +135,10 @@ final class BrowserHostVisibilityTests: XCTestCase {
             XCTAssertEqual(BrowserMemorySaver.picks(hidden(hours * 3600, revisits: revisits + 1), urgent: false, level: level), [],
                            "\(level)")
         }
+        var inactive = hidden(45 * 60, revisits: 99)
+        XCTAssertEqual(BrowserMemorySaver.picks(inactive, urgent: false), [])
+        inactive[0].inactiveTask = true
+        XCTAssertEqual(BrowserMemorySaver.picks(inactive, urgent: false), [1])
         XCTAssertEqual(BrowserMemorySaver.picks(hidden(600, revisits: 99), urgent: true, level: .moderate), [1])
 
         // A tab the agent opened that no panel showed on screen goes once the agent let it go for the unseen time,
@@ -163,7 +167,7 @@ final class BrowserHostVisibilityTests: XCTestCase {
         client.show(seen)
         XCTAssertEqual([seen.revisits, persons.revisits], [1, 1])
         func agentTabsAsked() -> Set<BrowserTabID> {
-            Set(connection.sent.compactMap { if case .discard(let id, false) = $0 { id } else { nil } })
+            Set(connection.sent.compactMap { if case .prepareDemotion(let id, false, _) = $0 { id } else { nil } })
                 .intersection([unseen.id, offScreen.id, seen.id, persons.id])
         }
         client.isMemorySaverOn = true
@@ -174,6 +178,81 @@ final class BrowserHostVisibilityTests: XCTestCase {
         try await wait(.milliseconds(200))
         XCTAssertEqual(agentTabsAsked(), [unseen.id, offScreen.id], "a tab the person saw, or opened, waits for the level")
         client.isMemorySaverOn = false
+    }
+
+    func testHiddenBudgetReleasesTheOldestEligibleBrowserAndReopensItsTab() throws {
+        let client = BrowserHostClient(agentVisibleWindow: .zero, maxLiveHiddenTabs: 3) { self.connection }
+        let session = UUID()
+        func tab(_ address: String, task: UUID = UUID()) throws -> BrowserTab {
+            let tab = try client.openTab(forSession: task, url: address, viewport: .offscreenDefault, byAgent: true)
+            connection.eventHandler?(.address(tab: tab.id, url: address))
+            return tab
+        }
+        let visible = try tab("https://same.test/visible")
+        client.attachPanel(to: visible)
+        let working = try tab("https://same.test/working")
+        working.noteAgentActivity()
+        let edited = try tab("https://same.test/form")
+        edited.notePersonInput(edits: true)
+        let url = "file:///tmp/preview.html"
+        let oldest = try tab(url, task: session)
+        let icon = Data([1])
+        connection.eventHandler?(.title(tab: oldest.id, title: "Local preview"))
+        connection.eventHandler?(.favicon(tab: oldest.id, url: url, png: icon))
+        let newest = try tab("https://same.test/new")
+        let asked = connection.sent.compactMap { if case .prepareDemotion(let id, _, _) = $0 { id } else { nil } }
+        XCTAssertEqual(asked, [oldest.id])
+        connection.eventHandler?(.demotionReady(tab: oldest.id))
+        XCTAssertTrue(connection.sent.contains(.releaseBrowser(tab: oldest.id)))
+        XCTAssertEqual(oldest.pendingAddress, url)
+        XCTAssertEqual(oldest.title, "Local preview")
+        XCTAssertEqual(oldest.favicon, icon)
+        XCTAssertTrue(oldest.openedByAgent)
+        XCTAssertTrue(client.tab(key: oldest.key, forSession: session) === oldest)
+        XCTAssertTrue([visible, working, edited, newest].allSatisfy { $0.pendingAddress == nil })
+
+        // An immediate selection can precede CEF's close acknowledgement.
+        client.select(oldest)
+        XCTAssertNil(oldest.pendingAddress)
+        connection.eventHandler?(.closed(tab: oldest.id))
+        XCTAssertFalse(oldest.isClosed)
+        XCTAssertTrue(client.tab(forSession: session) === oldest)
+        XCTAssertEqual(connection.sent.filter { $0 == .open(tab: oldest.id, url: url, viewport: .offscreenDefault) }.count, 2)
+    }
+
+    func testFinishedScheduledRunChecksOnlyIdleAgentTabsAndRechecksUseBeforeRelease() async throws {
+        let client = makeClient()
+        let task = UUID()
+        let url = "https://same.test/form"
+        let agent = try client.openTab(forSession: task, url: url, viewport: .offscreenDefault, byAgent: true)
+        let person = try client.newTab(forSession: task, url: url, viewport: .offscreenDefault, select: false)
+        for tab in [agent, person] { connection.eventHandler?(.address(tab: tab.id, url: url)) }
+        agent.noteAgentActivity()
+        client.scheduledRunEnded(forSession: task)
+        let check = BrowserHostCommand.prepareDemotion(tab: agent.id, urgent: false, allowAgentForm: true)
+        XCTAssertFalse(connection.sent.contains(check))
+        await agent.endAgentEmulation()
+        XCTAssertTrue(connection.sent.contains(check))
+        XCTAssertFalse(connection.sent.contains(.prepareDemotion(tab: person.id, urgent: false, allowAgentForm: false)))
+        client.attachPanel(to: agent)
+        connection.eventHandler?(.demotionReady(tab: agent.id))
+        XCTAssertNil(agent.pendingAddress)
+        XCTAssertFalse(connection.sent.contains(.releaseBrowser(tab: agent.id)))
+    }
+
+    func testRepeatedFaviconDoesNotExtendBackgroundActivity() throws {
+        let client = makeClient(visibleWindow: .zero)
+        client.memorySaverTiming.backgroundActivityGrace = .zero
+        let url = "https://same.test/icon"
+        let tab = try client.openTab(forSession: UUID(), url: url, viewport: .offscreenDefault)
+        func icon(_ byte: UInt8) { connection.eventHandler?(.favicon(tab: tab.id, url: url, png: Data([byte]))) }
+        client.attachPanel(to: tab)
+        icon(1)
+        client.detachPanel(from: tab)
+        icon(1)
+        XCTAssertNil(tab.backgroundActivityAt)
+        icon(2)
+        XCTAssertNotNil(tab.backgroundActivityAt)
     }
 
     func testAnOccludedPanelHidesTheTabUntilItIsOnScreenAgain() async throws {

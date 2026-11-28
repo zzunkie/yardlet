@@ -556,6 +556,7 @@ final class AppModel {
         self.modelCatalogs = modelCatalogs ?? HarnessModelCatalogStore()
         self.composerDrafts = ComposerDrafts(repository: composerDraftRepository)
         // Each task's side-panel browser tabs open in the browser engine, when the build has one.
+        browserClient()?.currentTask = { [weak store] in store?.selectedSessionID }
         self.taskWorkspaces = TaskWorkspaceStore(repository: taskWorkspaceRepository, browserClient: browserClient)
         self.taskSuggestions = TaskSuggestionStore(repository: taskSuggestionRepository)
         self.splits = SplitStore(repository: splitRepository)
@@ -1139,7 +1140,7 @@ final class AppModel {
                 connection: parent.connection, isTemporary: true
             )
             guard store.sessions.contains(where: { $0.id == parent.id }) else {
-                try? await store.discardSession(id: child.id)
+                try? await discardSession(id: child.id)
                 return nil
             }
             workspace.sideChatSessionID = child.id
@@ -3339,6 +3340,11 @@ final class AppModel {
         case discard
     }
 
+    func discardSession(id: UUID) async throws {
+        try await store.discardSession(id: id)
+        taskWorkspaces.remove(for: id)
+    }
+
     private func removeSessionState(for session: SessionRecord, removal: SessionRemoval) async {
         // The task's side chat goes with it.
         if let side = taskWorkspaces.loadedState(for: session.id)?.sideChatSessionID, store.isTemporary(side),
@@ -3364,11 +3370,11 @@ final class AppModel {
             switch removal {
             case let .archive(providerArchived):
                 try await store.archiveSession(id: session.id, providerArchived: providerArchived)
+                taskWorkspaces.remove(for: session.id)
             case .discard:
-                try await store.discardSession(id: session.id)
+                try await discardSession(id: session.id)
             }
             composerDrafts.remove(for: session.id)
-            taskWorkspaces.remove(for: session.id)
             simulators.taskRemoved(session.id)
             simulatorTools.taskRemoved(session.id)
             pullRequestDetails.forget(session.id)
@@ -3813,7 +3819,7 @@ final class AppModel {
                 parentTaskID: selectsSession ? current.id : nil, isTemporary: !selectsSession
             )
             guard matchingSession(current) != nil else {
-                try? await store.discardSession(id: child.id)
+                try? await discardSession(id: child.id)
                 return nil
             }
             transcriptBuilders[child.id] = TranscriptBuilder(entries: snapshot.transcript.entries)
@@ -3856,7 +3862,7 @@ final class AppModel {
                 connection: source.connection, projectID: source.projectID, additionalRoots: source.additionalRoots,
                 isMovedToChats: source.isMovedToChats)
             guard matchingSession(source) != nil else {
-                try? await store.discardSession(id: next.id)
+                try? await discardSession(id: next.id)
                 return nil
             }
             if selects, store.selectedSessionID == selectedAtStart { store.selectedSessionID = next.id }
@@ -4349,7 +4355,7 @@ final class AppModel {
                 additionalRoots: current.isMovedToChats ? [] : origin.additionalRoots,
                 isMovedToChats: current.isMovedToChats, parentTaskID: current.id)
             guard matchingSession(current)?.inheritedContext?.nativeConversationOrigin == origin else {
-                try? await store.discardSession(id: original.id)
+                try? await discardSession(id: original.id)
                 return nil
             }
             transcriptBuilders[original.id] = TranscriptBuilder(entries: snapshot.entries)
@@ -4402,7 +4408,7 @@ final class AppModel {
             )
             do {
                 guard matchingSession(session) != nil else {
-                    try? await store.discardSession(id: forkedSession.id)
+                    try? await discardSession(id: forkedSession.id)
                     return nil
                 }
                 // The fork is a task of its own, so its thread gets its own tool token and tab.
@@ -4424,7 +4430,7 @@ final class AppModel {
                 guard matchingSession(session) != nil,
                       store.sessions.contains(where: { $0.id == forkedSession.id }) else {
                     await adapter.close(forkedHandle)
-                    try? await store.discardSession(id: forkedSession.id)
+                    try? await discardSession(id: forkedSession.id)
                     return nil
                 }
                 adaptersBySessionID[forkedSession.id] = adapter
@@ -4474,7 +4480,7 @@ final class AppModel {
                 }
                 return store.sessions.first { $0.id == forkedSession.id }
             } catch {
-                try? await store.discardSession(id: forkedSession.id)
+                try? await discardSession(id: forkedSession.id)
                 throw error
             }
         } catch {
@@ -5289,7 +5295,7 @@ final class AppModel {
                     isMovedToChats: sourceSession.isMovedToChats, parentTaskID: sourceSession.id
                 )
                 guard matchingSession(sourceSession) != nil else {
-                    try? await store.discardSession(id: child.id)
+                    try? await discardSession(id: child.id)
                     return
                 }
                 let parentThreadID = codexPresentationBySessionID[sourceSession.id]?.thread?.id
@@ -5344,7 +5350,7 @@ final class AppModel {
             )
             do {
                 guard matchingSession(sourceSession) != nil else {
-                    try? await store.discardSession(id: child.id)
+                    try? await discardSession(id: child.id)
                     return
                 }
                 try await attach(child, resumesExistingSession: true)
@@ -5354,7 +5360,7 @@ final class AppModel {
                 }
                 store.selectedSessionID = child.id
             } catch {
-                try? await store.discardSession(id: child.id)
+                try? await discardSession(id: child.id)
                 throw error
             }
         } catch {
@@ -7211,7 +7217,9 @@ final class AppModel {
                                          harness: store.sessions.first { $0.id == id }?.harness.rawValue,
                                          reason: cause.rawValue, status: status.rawValue))
             // A schedule's run whose turn this was keeps when it ended, which its token count goes up to.
-            scheduledTasks.turnEnded(in: id, at: timestamp)
+            if scheduledTasks.turnEnded(in: id, at: timestamp) {
+                taskWorkspaces.browserClient()?.scheduledRunEnded(forSession: id)
+            }
         }
         if follows.contains(.routingEvaluation), endsTurn, !isIdleCompaction {
             recordTurnForRoutingEvaluation(id, status: status, at: timestamp)

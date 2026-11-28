@@ -108,7 +108,7 @@ typedef enum {
 
 /// What a frame's renderer says of its page (YardletCEFHelper's PageState.c names the same flags).
 enum {
-    /// Media plays out loud in the frame.
+    /// Media is playing in the frame, including muted video.
     YardletPageStatePlaying = 1,
     /// A form field's value differs from the one the page loaded with.
     YardletPageStateEdited = 2,

@@ -217,6 +217,16 @@ final class BrowserDevToolsClient {
         return nil
     }
 
+    func browserReleased() {
+        failPending()
+        events.removeAll()
+        mainFrameID = nil
+        attachesFrames = false
+        let waiters = eventWaiters
+        eventWaiters = []
+        waiters.forEach { $0.continuation.resume(returning: nil) }
+    }
+
     func failPending() {
         let waiting = pending
         pending = [:]
