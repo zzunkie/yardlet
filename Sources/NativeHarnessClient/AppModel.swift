@@ -3167,6 +3167,31 @@ final class AppModel {
         return outcomes
     }
 
+    /// Whether something holds the task back from being archived now (`archiveRefusal(for:)`); a task
+    /// no longer listed is held too.
+    func isArchiveHeld(_ taskID: UUID) -> Bool {
+        guard let session = store.sessions.first(where: { $0.id == taskID }) else { return true }
+        return archiveRefusal(for: session) != nil
+    }
+
+    /// Archives the tasks "Archive N tasks with merged pull requests…" asked about, checking each again
+    /// as `archive_task` does (`archiveRefusal(for:)`, then a Codex thread's background terminals): one
+    /// may have started a turn or gained a draft while the confirmation was open, and it stays.
+    func archiveUnlessHeld(_ sessions: [SessionRecord]) async {
+        var free: [SessionRecord] = []
+        for session in sessions {
+            guard let listed = store.sessions.first(where: { $0.id == session.id }),
+                  archiveRefusal(for: listed) == nil,
+                  await codexBackgroundTerminals(of: listed)?.isEmpty != false,
+                  // Asking Codex took a moment: look again at the task as it is now.
+                  let current = store.sessions.first(where: { $0.id == session.id }),
+                  archiveRefusal(for: current) == nil else { continue }
+            free.append(current)
+        }
+        guard !free.isEmpty else { return }
+        await archive(free)
+    }
+
     func togglePinned(_ session: SessionRecord) async {
         do {
             try await store.togglePinned(id: session.id)
@@ -3504,6 +3529,12 @@ final class AppModel {
 
     func isAttached(_ sessionID: UUID) -> Bool {
         handlesBySessionID[sessionID] != nil
+    }
+
+    /// Whether one of `sessions` is a Codex task attached now, which an archive confirmation names
+    /// ("Archive attached Codex tasks confirmation"), so the windows need not compare harnesses.
+    func containsAttachedCodexTask(_ sessions: [SessionRecord]) -> Bool {
+        sessions.contains { $0.harness == .codex && isAttached($0.id) }
     }
 
     /// A harness's CLI changed under Yardlet (updated, back to an earlier version, or another chosen in

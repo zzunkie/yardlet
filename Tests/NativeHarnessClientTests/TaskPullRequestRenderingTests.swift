@@ -140,6 +140,103 @@ final class TaskPullRequestRenderingTests: XCTestCase {
         }
     }
 
+    /// The menu of a task with tasks nested under it offers to archive those whose pull request
+    /// merged, saying how many, and hands them to the window, which asks first. A nested task's menu
+    /// offers nothing, and neither does a window that cannot archive them (another Mac's). The family
+    /// and its top task's menu items are drawn side by side, light and dark.
+    func testAFamilysTopTaskOffersToArchiveItsTasksWithMergedPullRequests() throws {
+        let directory = try WindowlessRender.directory("pr-badge-qa")
+        let home = URL(filePath: "/tmp/pr-badge-qa/home", directoryHint: .isDirectory)
+        let projects = ProjectStore(chatWorkspaceHome: home)
+        _ = projects.ensureProject(forRoot: Self.workspace)
+        let now = Date()
+        var top = Self.session(title: "Coordinate the release")
+        top.updatedAt = now
+        let monitor = TaskPullRequestMonitor()
+        let children: [(title: String, state: TaskPullRequest.State?)] = [
+            ("Fix the login", .merged), ("Add the export", .open), ("Update the docs", .merged),
+            ("Try the cache", .closed), ("Read the logs", nil)
+        ]
+        var sessions = [top]
+        for (index, child) in children.enumerated() {
+            var session = Self.session(title: child.title, harness: index.isMultiple(of: 2) ? .claudeCode : .codex)
+            session.parentTaskID = top.id
+            session.updatedAt = now.addingTimeInterval(Double(-(index + 1)) * 60)
+            sessions.append(session)
+            if let state = child.state {
+                monitor.setPullRequest(.init(number: 201 + index, url: Self.url, repository: nil, state: state),
+                                       for: session.id)
+            }
+        }
+        let groups = projects.visibleGroups(sessions: sessions)
+        let layout = SidebarProjection.layout(visibleGroups: groups, allGroups: groups, chats: [], splits: [],
+                                              isFiltering: false, selection: .session(top.id))
+        let family = try XCTUnwrap(layout.sections.first?.rows.first)
+        XCTAssertEqual(family.children.count, children.count)
+        var asked: [[UUID]] = []
+        // The row as the sidebar makes it (`TaskSidebar.rowEntry`).
+        func entry(_ row: SidebarRow, archive: (([UUID]) -> Void)?) throws -> SidebarTaskEntry {
+            let session = try XCTUnwrap(row.sessions.first)
+            return SidebarTaskEntry(
+                session: session, title: session.title, familyPlace: row.familyPlace,
+                familyToggle: row.hasFamily ? SidebarFamilyToggle(isCollapsed: false, action: {}) : nil,
+                nestedTaskIDs: row.nestedSessions.map(\.id), isSelected: false, onSelect: {},
+                onTogglePinned: { _ in }, onArchive: { _ in }, onDelete: { _ in }, onRename: { _ in },
+                onMarkRead: { _ in }, onMarkUnread: { _ in }, projectMove: .none, onMoveToProject: { _ in },
+                onDropTask: nil,
+                mergedNestedArchive: archive.map { confirm in SidebarMergedNestedArchive(isHeld: { _ in false }, confirm: confirm) })
+        }
+        let menu = try entry(family) { asked.append($0) }
+        let title = L10n.format("Archive %lld tasks with merged pull requests…", 2)
+        let size = NSSize(width: ParityTheme.sidebarWidth + 1 + 320, height: 372)
+        for appearance in WindowlessRender.Appearance.allCases {
+            let view = HStack(alignment: .top, spacing: 0) {
+                TaskSidebar(
+                    layout: layout, allGroups: groups, isRestoring: false, selection: .session(top.id),
+                    searchText: .constant(""), onNewTask: {}, onActivate: { _ in }, onNewTaskInProject: { _ in },
+                    projects: projects, onEditProject: { _ in }, onArchiveProjectChats: { _ in },
+                    onRemoveProject: { _ in }, onTogglePinned: { _ in }, onArchive: { _ in }, onDelete: { _ in },
+                    onRename: { _ in }, onMarkRead: { _ in },
+                    mergedNestedArchive: SidebarMergedNestedArchive(isHeld: { _ in false }, confirm: { _ in }))
+                    .frame(width: ParityTheme.sidebarWidth)
+                    .background(ParityTheme.sidebar)
+                ParityTheme.separator.frame(width: 1)
+                // Borderless items dim when disabled, as the menu's do.
+                VStack(alignment: .leading, spacing: 8) { menu.menuContents }
+                    .buttonStyle(.borderless).font(.system(size: 13))
+                    .padding(12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .background(ParityTheme.canvas)
+            }
+            .environment(monitor)
+            .environment(\.colorScheme, appearance.colorScheme)
+            .frame(width: size.width, height: size.height, alignment: .top)
+            let host = WindowlessRender.Host(view, size: size, appearance: appearance)
+            defer { host.close() }
+            host.settle(passes: 6)
+            try WindowlessRender.writePNG(try host.capture().bitmap,
+                                          to: directory.appending(path: "merged-nested-archive-\(appearance.suffix).png"))
+            guard appearance == .light else { continue }
+            let labels = host.accessibilityElements().map(\.label)
+            XCTAssertTrue(labels.contains(title), "\(labels)")
+            XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: title))
+            XCTAssertEqual(asked, [[sessions[1].id, sessions[3].id]], "The merged ones, in the list's order")
+        }
+
+        // A nested task's menu, and a window that cannot archive them, offer no such item.
+        let single = L10n.string("Archive 1 task with a merged pull request…")
+        let others = try family.children.map { try entry($0) { _ in } } + [try entry(family, archive: nil)]
+        for other in others {
+            let host = WindowlessRender.Host(VStack { other.menuContents }.environment(monitor),
+                                             size: NSSize(width: 320, height: 400))
+            host.settle()
+            let labels = host.accessibilityElements().map(\.label)
+            host.close()
+            XCTAssertTrue(labels.contains(L10n.string("Archive")), "\(labels)")
+            XCTAssertFalse(labels.contains { $0 == title || $0 == single }, "\(labels)")
+        }
+    }
+
     func testTheNewTaskWarningRendersBesideARunningTaskInTheChosenFolder() throws {
         let directory = try WindowlessRender.directory("pr-badge-qa")
         let root = FileManager.default.temporaryDirectory.appending(path: "pr-badge-qa-\(UUID().uuidString)")

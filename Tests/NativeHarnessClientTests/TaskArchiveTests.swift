@@ -345,6 +345,46 @@ final class TaskArchiveTests: XCTestCase {
         XCTAssertEqual(persisted.map(\.id), [archived.id])
     }
 
+    /// "Archive N tasks with merged pull requests…" leaves out a nested task that something holds back,
+    /// by the rule `archive_task` refuses another task by (`archiveRefusal(for:)`): one that runs, waits
+    /// for the person, has messages waiting or holds an unsent draft. The confirmation checks again when
+    /// the person confirms, so a task that gained a draft while it was open stays.
+    func testArchivingMergedNestedTasksLeavesOutWhatWorksWaitsOrHoldsADraft() async throws {
+        func task(_ title: String, status: SessionStatus = .completed) -> SessionRecord {
+            SessionRecord(harness: .claudeCode, workspaceURL: URL(filePath: "/tmp/merged-family"),
+                          runtimeExecutableURL: URL(filePath: "/tmp/claude"), title: title, status: status,
+                          providerSessionID: UUID().uuidString.lowercased())
+        }
+        let done = task("Fix the login")
+        let running = task("Add the export", status: .running)
+        let waiting = task("Update the docs", status: .waitingForApproval)
+        let drafted = task("Try the cache")
+        let queued = task("Read the logs")
+        let later = task("Bump the version")
+        let sessions = [done, running, waiting, drafted, queued, later]
+        let model = AppModel(
+            store: SessionStore(sessions: sessions, repository: InMemorySessionRepository(sessions: sessions)),
+            runtimeSelections: RuntimeSelectionStore(defaults: try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("MergedArchive")))),
+            restoresIndexOnLaunch: false
+        )
+        model.composerDrafts.tasks.draft(for: drafted.id).text = "Half a thought"
+        model.followUps.append(QueuedFollowUp(draft: CodexComposerDraft(inputs: [.text("Then rebase.")])), to: queued.id)
+        let merged = TaskPullRequest(number: 1, url: URL(string: "https://github.com/example-org/yardlet/pull/1")!,
+                                     repository: nil, state: .merged)
+
+        let offered = SidebarMergedNestedTasks(nested: sessions.map(\.id), pullRequest: { _ in merged },
+                                               isHeld: { model.isArchiveHeld($0) })
+        XCTAssertEqual(offered?.taskIDs, [done.id, later.id], "Only what nothing holds back")
+        XCTAssertNil(SidebarMergedNestedTasks(nested: [running.id, drafted.id], pullRequest: { _ in merged },
+                                              isHeld: { model.isArchiveHeld($0) }), "No item when all are held")
+
+        // While the confirmation is open, one of them gains a draft: it stays, and the other goes.
+        model.composerDrafts.tasks.draft(for: later.id).text = "One more thing"
+        await model.archiveUnlessHeld([done, later])
+        XCTAssertEqual(Set(model.store.sessions.map(\.id)), Set([running, waiting, drafted, queued, later].map(\.id)))
+        XCTAssertEqual(model.composerDrafts.tasks.existingDraft(for: later.id)?.text, "One more thing")
+    }
+
     // MARK: - Reading an archived task
 
     /// An archived Codex task's thread opens from the archived list as a detached task's does, through

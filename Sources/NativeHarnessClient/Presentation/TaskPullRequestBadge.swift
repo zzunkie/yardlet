@@ -162,6 +162,52 @@ struct TaskPullRequestRowMark: Equatable, Sendable {
     }
 }
 
+/// "Archive N tasks with merged pull requests…" in the menu of a task with tasks nested under it:
+/// those of them, shown or hidden, whose pull request GitHub said has merged, which the person
+/// archives in one step after confirming, as a project's "Archive chats" archives its tasks. Only
+/// what Yardlet already knows counts: a task whose pull request GitHub was not asked about (its row
+/// has not been in view, `TaskPullRequestMonitor`) or did not answer for is left out, and the menu
+/// asks nothing. A task something holds back is left out too (`isHeld`, `AppModel.isArchiveHeld(_:)`):
+/// it works or waits for the person, or archiving would drop its queued messages or unsent draft,
+/// which a collapsed family hides from view.
+///
+/// A task whose transcript names no pull request takes the one of its folder's current branch
+/// (`TaskPullRequestSources.branchToAsk`). Nested tasks that share one checkout, rather than a
+/// worktree each, therefore all show that branch's pull request, and all count once it merges.
+struct SidebarMergedNestedTasks: Equatable, Sendable {
+    /// In the order the sidebar lists them.
+    let taskIDs: [UUID]
+
+    /// Nil when none of `nested` has a merged pull request and nothing holding it back.
+    init?(nested: [UUID], pullRequest: (UUID) -> TaskPullRequest?, isHeld: (UUID) -> Bool) {
+        let merged = nested.filter { pullRequest($0)?.state == .merged && !isHeld($0) }
+        guard !merged.isEmpty else { return nil }
+        taskIDs = merged
+    }
+
+    /// The menu item, which says how many tasks it archives.
+    var title: String {
+        taskIDs.count == 1 ? L10n.string("Archive 1 task with a merged pull request…")
+            : L10n.format("Archive %lld tasks with merged pull requests…", Int64(taskIDs.count))
+    }
+
+    /// How many titles the confirmation lists before "and N more".
+    static let listedTitleLimit = 8
+
+    /// The confirmation's list of the tasks it archives, a title a line: the first `listedTitleLimit`
+    /// and then "and N more", so a standard alert stays readable for a family with many merged tasks.
+    /// When only one would be left out it is listed too, as a list shows the one row "Show more"
+    /// would leave behind (`SidebarProjection.visibleRows`).
+    static func confirmationList(_ titles: [String]) -> String {
+        let listed = titles.count > listedTitleLimit + 1 ? Array(titles.prefix(listedTitleLimit)) : titles
+        var lines = listed.map { "• " + $0 }
+        if listed.count < titles.count {
+            lines.append(L10n.format("and %lld more", Int64(titles.count - listed.count)))
+        }
+        return lines.joined(separator: "\n")
+    }
+}
+
 /// The new-task screen's warning, from the Claude app: the folder chosen for a new task already has
 /// a task running in it, and a worktree would keep their changes apart. A warning only: the task
 /// still starts locally if the person wants.

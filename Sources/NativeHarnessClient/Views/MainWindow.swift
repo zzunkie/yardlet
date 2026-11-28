@@ -90,6 +90,8 @@ struct MainWindow: View {
     /// A chat about to be made a project, asked about first (`NewProjectSheet`).
     @State private var newProjectRequest: NewProjectRequest?
     @State private var projectToArchive: WorkspaceGroup?
+    /// The tasks nested under a task whose pull requests merged, about to be archived, asked about first.
+    @State private var mergedTasksToArchive: [SessionRecord]?
     @State private var projectToRemove: WorkspaceGroup?
     @State private var renameTitle = ""
     @State private var taskRenamePresentationID = UUID()
@@ -430,7 +432,7 @@ struct MainWindow: View {
 
     private var hasManagementAlert: Bool {
         sessionToRename != nil || sessionToDelete != nil
-            || projectToArchive != nil || projectToRemove != nil
+            || projectToArchive != nil || mergedTasksToArchive != nil || projectToRemove != nil
             || splitToRename != nil || splitToArchive != nil
     }
 
@@ -2164,6 +2166,14 @@ struct MainWindow: View {
                             newTaskDraft.startNested(under: session, project: project, isChat: isChat)
                             showNewTask()
                         },
+                        mergedNestedArchive: SidebarMergedNestedArchive(
+                            isHeld: { model.isArchiveHeld($0) },
+                            confirm: { ids in
+                                let tasks = ids.compactMap { sessionRecord($0) }
+                                guard !tasks.isEmpty else { return }
+                                rememberShellFocus()
+                                mergedTasksToArchive = tasks
+                            }),
                         splitActions: SidebarSplitActions(
                             togglePinned: { model.splits.togglePinned($0.id) },
                             rename: presentSplitRename,
@@ -2903,7 +2913,26 @@ struct MainWindow: View {
             if let group = projectToArchive {
                 Text(L10n.format("Archive project chats confirmation",
                                  group.displayName, group.sessions.count))
-                if group.sessions.contains(where: { $0.harness == .codex && model.isAttached($0.id) }) {
+                if model.containsAttachedCodexTask(group.sessions) {
+                    Text(L10n.string("Archive attached Codex tasks confirmation"))
+                }
+            }
+        }
+        .alert(L10n.string("Archive tasks with merged pull requests?"), isPresented: Binding(
+            get: { mergedTasksToArchive != nil },
+            set: { if !$0 { mergedTasksToArchive = nil } }
+        )) {
+            Button(L10n.string("Cancel"), role: .cancel) { mergedTasksToArchive = nil }
+            Button(L10n.string("Archive tasks"), role: .destructive) {
+                guard let tasks = mergedTasksToArchive else { return }
+                mergedTasksToArchive = nil
+                Task { await model.archiveUnlessHeld(tasks) }
+            }
+        } message: {
+            if let tasks = mergedTasksToArchive {
+                // Which tasks go, by name, as the agents' archive card lists them.
+                Text(SidebarMergedNestedTasks.confirmationList(tasks.map(\.title)))
+                if model.containsAttachedCodexTask(tasks) {
                     Text(L10n.string("Archive attached Codex tasks confirmation"))
                 }
             }
