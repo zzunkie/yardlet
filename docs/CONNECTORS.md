@@ -8,9 +8,9 @@ section of this document by its title.
 
 - A connector is a remote MCP server (Streamable HTTP) that an outside service runs. Yardlet signs in once, keeps the
   credentials in Keychain, and offers that server's tools to Claude Code, Codex and ACP harnesses through the Yardlet
-  MCP server (`yardlet`). The exceptions are Gmail, Google Calendar, Google Drive, Google Analytics and Google Ads,
-  which are servers Yardlet runs inside the app. They sign in once per Google account and call Google's public REST APIs
-  (the "Google" section). Outlook Mail, Outlook Calendar, OneDrive and Microsoft Teams are servers inside the app as
+  MCP server (`yardlet`). Gmail, Calendar and Drive use Google's remote Workspace MCP servers. Google Analytics
+  and Google Ads run inside Yardlet and call Google's REST APIs (the "Google" section).
+  Outlook Mail, Outlook Calendar, OneDrive and Microsoft Teams are servers inside the app as
   well: they sign in once per Microsoft account and call Microsoft Graph (the "Microsoft 365" section). The Apple
   connectors (App Store Connect, the Mac's calendars, reminders and contacts, and Xcode) are also servers inside
   the app. App Store Connect calls Apple's REST API with the person's API key, the three Mac connectors use the Mac's
@@ -62,7 +62,7 @@ OAuth steps (the MCP authorization spec):
    host and port, and the server's path at or under the resource's, as the MCP SDKs compare them (many servers name
    their origin). Metadata naming anything else is not used, and the sign-in stops with "The server asked to sign in
    for another address" (RFC 9728 §3.3). For a server without the metadata (Atlassian), the server's origin is taken
-   as the authorization server (the fallback in the 2025-03-26 spec).
+   as the authorization server (the legacy fallback).
 3. Authorization server metadata (RFC 8414, OpenID): with an issuer path, the two path-inserted forms and OpenID after
    the path; without one, the two root forms. A trailing `/` on the issuer (for example `https://accounts.google.com/`)
    is not a path. When the authorization page is on another site than the server (`mcp.example.com` sending the
@@ -152,7 +152,7 @@ registration, the connection error shows the reason the service gave.
 | Key in the address | Browserbase (`https://mcp.browserbase.com/mcp`, key in Keychain) |
 
 - Sign-in on another site: most entries sign in on their server's own site. Nine send the person to another domain
-  of the same service, read from their public protected resource and authorization server metadata on 2026-11-11 and
+  of the same service, read from their public protected resource and authorization server metadata and
   kept on the entry (`ConnectorPreset.signInHosts`), so connecting them does not ask (the "Connection types" section,
   OAuth step 3): Todoist (`todoist.com`), Fathom (`fathom.video`), GitHub with your own OAuth app (`github.com`), Mobbin
   (its Supabase project's host, not all of `supabase.co`), BugSnag (`oauth.bugsnag.com`), Aiven (`console.aiven.io`),
@@ -176,7 +176,7 @@ registration, the connection error shows the reason the service gave.
   resource metadata only at the root (`/.well-known/oauth-protected-resource`).
 - Pipedream (`https://mcp.pipedream.net/v2`), Composio (`https://connect.composio.dev/mcp`) and Make
   (`https://mcp.make.com/v2`) reach many apps through one sign-in, as Zapier does. Each runs its own server and answered an
-  unauthenticated GET on 2026-10-27 with 401 and OAuth metadata that has a registration endpoint and PKCE `S256`.
+  unauthenticated GET with 401 and OAuth metadata that has a registration endpoint and PKCE `S256`.
   Pipedream keeps its protected resource metadata only at the root; Make takes `client_secret_post` alone, which
   dynamic registration already handles. IFTTT (`https://ifttt.com/mcp`, GET 200) and Activepieces
   (`https://cloud.activepieces.com/mcp`, GET 405) also publish registration metadata, but a GET could not show whether they
@@ -186,13 +186,13 @@ registration, the connection error shows the reason the service gave.
 - Zoom (`https://mcp.zoom.us/mcp/{meeting,chat,canvas}/streamable`, developers.zoom.us/docs/mcp/servers) has one server
   per product. Its servers answer an unauthenticated `initialize` with 401 and protected resource metadata that names
   `https://zoom.us` as the authorization server, which has no registration endpoint and takes the secret only as Basic
-  (`client_secret_basic`) with PKCE `S256` (2026-10-27). So each product signs in with a Zoom app of the person's own (a
+  (`client_secret_basic`) with PKCE `S256`. So each product signs in with a Zoom app of the person's own (a
   General app, user-managed) and the fixed loopback redirect, which Zoom accepts for native clients. The three entries
   ask only for the read scopes of their server's `scopes_supported`: meetings, their assets and recordings; Team Chat
   messages, channels, contacts and files; and Docs files, exports and comments (`canvas:write:file_search` searches and
   writes nothing). The Zoom page in Add connector takes the client once, adds the products picked, and signs each in
   in turn. A product the account's plan lacks still connects, and its tools answer with Zoom's reason.
-- Forty services were added on 2026-10-29 after the same unauthenticated checks: each server answered `initialize`
+- Forty services pass the same unauthenticated checks: each server answered `initialize`
   without a token with 401 (Teamwork answers it and refuses a GET with 401), and its protected resource metadata,
   authorization server metadata, registration endpoint and PKCE `S256` were all public. No registration POST, sign-in
   or tool call was made, so whether each service accepts Yardlet's registration and loopback redirect is learned on the
@@ -254,7 +254,7 @@ Registry (`https://registry.modelcontextprotocol.io/v0.1/servers`). Yardlet keep
   after typing stops. The official registry asks host apps to read it through a subregistry and to scrape it rarely,
   so Yardlet asks it only with a search. Answers stay in memory for 6 hours; nothing is written to disk. Requests are
   GETs with the search words alone.
-- Counts on 2026-10-27: the GitHub registry lists 648 servers; 481 have a Streamable HTTP remote (410 with no key, 60
+- Counts: the GitHub registry lists 648 servers; 481 have a Streamable HTTP remote (410 with no key, 60
   with one key, 11 with an address per account) and 156 only a package. The official registry lists 50,910 latest
   entries (50,243 active): 32,575 with a Streamable HTTP remote (29,266 with no key, 3,020 with a key, 289 with an
   address per account) and 16,334 with only a package; across all its packages, npm 12,078, PyPI 4,729, Docker 1,264 and MCP bundles
@@ -360,8 +360,7 @@ registry package, or a server that another app or harness starts (the "Harnesses
 - Injection: harnesses with an injection path always get the Yardlet MCP server. A task started with the browser tools
   off gets only the other tools, and a call to a browser tool returns an error that points to the setting.
 - Tool lists are kept in `connectors.json`, so a session start does not wait for the network. A list older than 12 hours
-  is read again in the background when a session asks for the list. Google and Apple services, whose tools are built
-  into the app, do not ask a server, and Xcode's list is not read again, so that a re-read alone never launches Xcode
+  is read again in the background when a session asks for the list. Workspace services refresh their remote catalogs. Services with built-in tools, including Analytics and Ads, do not ask a server, and Xcode's list is not read again, so that a re-read alone never launches Xcode
   (the "Apple" section).
 - A call to a connector turned off in this task becomes an "off for this task" tool error at once. A call to a connector
   that needs sign-in returns an error saying that signing in again in Yardlet Settings → Connectors makes the same tool
@@ -617,8 +616,7 @@ it.
     an access token or with your own OAuth client is there only when the service accepts it (the directory's token and
     client services, or servers outside the directory). For Google services, "Google accounts and services…" opens
     the Google page instead of Disconnect. For App Store Connect, "App Store Connect keys…" opens the keys page, and for
-    the three Mac services, "Open Privacy & Security…" opens that pane of System Settings. Google and Apple services,
-    whose tools are built into the app, have no Reload tools (Xcode has it).
+    the three Mac services, "Open Privacy & Security…" opens that pane of System Settings. Xcode also offers Reload tools.
   - A connected connector keeps its place while it signs in again or reloads its tools. If that attempt fails, it stays
     "Connected", and the reason is one gray line (`ConnectorSettingsState.note`, with a help tooltip when it does not
     fit). The Codex app and the Claude app also leave the row as it is in this case. The account rows on the Google page
@@ -635,11 +633,8 @@ it.
   - A program's page (`ConnectorProgramPage`): "Run … on this Mac?", where it comes from with a link to its source,
     a warning that it runs with the person's access, the command line in monospace, the values it needs, when it runs
     and what removing leaves, Cancel and "Run on this Mac" (enabled once required values are filled).
-  - When the build includes a Google app, the Google line comes first in "Connect in one click", and only Slack remains
-    under "Needs an OAuth app of your own". Without one, Google and Slack are both under it, and the Google hint offers
-    the claude.ai switch as an alternative.
   - When the build has a GitHub client ID, GitHub moves to "Connect in one click" and shows "Sign in with GitHub".
-- **Set up in one go pages (`GoogleSetupPage`, `SlackSetupPage`):** the header shows "m of n done" or "All set", and
+- **Slack setup page (`SlackSetupPage`):** the header shows "m of n done" or "All set", and
   each step has a numbered circle (clicking it turns the done mark on and off), a title, a one-line description, a
   console page button and copy buttons. Fields in the client step are checked as you type (a red reason line, or a green
   check when valid). A console step is done once its page has been opened or it has been marked by hand; saving the app
@@ -725,265 +720,43 @@ What the person does (per service):
 
 ## 9. Google
 
-Gmail, Google Calendar, Google Drive, Google Analytics and Google Ads are not remote MCP servers but servers that Yardlet
-runs inside the app.
-Harnesses get them through the `yardlet` MCP server (`yardlet-mcp` → socket → app) like other connectors, so tokens do
-not leave Yardlet, and injection and the per-task switch are the same. Tool names and
-arguments follow Google's official MCP servers (the ones claude.ai's Google connectors use). The Google Drive connector
-also provides tools that read and edit the structure inside Docs, Sheets and Slides files (see "Tools" below).
+### Connectors that run in Yardlet
+
+| Connector | Tools | Where a call goes from your Mac |
+|---|---:|---|
+| Gmail | 30 | Gmail MCP (`gmailmcp`) |
+| Google Calendar | 9 | Calendar MCP (`calendarmcp`) |
+| Google Drive | 30 | Drive (15), Docs (2), Sheets (9) and Slides (4), through `drivemcp`, `docsmcp`, `sheetsmcp` and `slidesmcp` |
+| Google Analytics | 6 | Local REST runner for the Analytics Admin and Data APIs |
+| Google Ads | 3 | Local REST runner for the Google Ads API |
+
+Each Workspace endpoint uses `https://<service>mcp.googleapis.com/mcp/v1`. Yardlet discovers tools with
+`tools/list`, so the Workspace counts can change with Google's catalog. It sends each call to the endpoint
+that lists the tool. Each authenticated POST carries the bearer token, `MCP-Protocol-Version`, `Mcp-Method` and
+`Accept-Language`. A tool call also carries `Mcp-Name`.
 
 ### Google app
 
-- **App in the build:** `scripts/build-app.sh` reads `YARDLET_GOOGLE_CLIENT_ID` and `YARDLET_GOOGLE_CLIENT_SECRET` from
-  the environment, or else `Packaging/GoogleOAuthClient.json` (the `{"installed": {...}}` shape Google lets you
-  download, or `{"client_id", "client_secret"}`; an example is `Packaging/GoogleOAuthClient.example.json`), and puts
-  `YardletGoogleOAuthClientID` and `YardletGoogleOAuthClientSecret` into the bundle's Info.plist. The file is in
-  `.gitignore`, and the values are not printed to the log (only whether they were added). A desktop client's secret
-  ships inside an installed app, so Google does not treat it as a secret either, but it is kept out of the repository.
-  This lets others build with their own client.
-- `GoogleOAuth.BuiltInApp.from(info:)` reads it from Info.plist (trimming whitespace; none without an ID), and it comes
-  in through `ConnectorCenter.Environment.googleBuiltInApp`. Without an Info.plist, as with `swift run` or tests, there
-  is none.
-- **App used for sign-in:** the app the user saved (Keychain `appCredentialID`) if there is one, else the app in the
-  build, else none (`noApp`). `canSignInWithGoogle` turns on the sign-in, add-account and connect buttons. An account's
-  credentials keep the client it signed in with, so after the app changes, accounts already signed in keep refreshing
-  with their own client (if the old client is deleted in Google Cloud, they become "Needs sign-in").
-- **What the app in the build signs in for:** Gmail, Calendar and Drive only (`GoogleOAuth.BuiltInApp.services`), so
-  its sign-ins ask for the six scopes of those services and nothing else. Google Analytics and Google Ads need an app of
-  the user's own. The rule follows the client ID (`GoogleOAuth.services(_:clientID:builtIn:)`): an app saved under the
-  same client ID as the build's counts as the build's. `ConnectorCenter.signInServices(.google)` is what a new sign-in
-  can turn on, and `addAccount` keeps to it.
-- **Google page:** when the build has an app and the user has none, there is one step, "Sign in with each Google
-  account", with service checkboxes and "Sign in with Google". The Analytics and Ads checkboxes and chips cannot be
-  turned on there. Below it are a note about the warning shown for an app Google has not verified, a line saying that
-  Google Analytics and Google Ads connect only with a Google OAuth app of your own, and a "Use a Google OAuth app of
-  your own…" link, which opens the seven steps (see "Your own Google app"). Once the user saves an app, that app is
-  used; removing it brings back the app in the build. When an app is saved, the steps fold into one line ("Google OAuth
-  app saved in your keychain · client ID", with Setup steps and Change…).
-- **Google's policies (official docs):** an app that requests sensitive or restricted scopes shows the "Google hasn't
-  verified this app" screen on each account's first sign-in until Google verifies it, and is limited to 100 new users.
-  Refresh tokens of an external app whose publishing status is "Testing" expire after 7 days. "In production" has no
-  fixed expiry; instead a token becomes invalid when the user revokes access, after 6 months without use, when the
-  password changes (for tokens with Gmail scopes), and when one account and one client have more than 100 refresh tokens
-  (oldest first).
+In Settings › Connectors › Google, **Sign in to Google for Yardlet Calendar** uses Yardlet's built-in
+OAuth app for the native Calendar screen. Its grant covers `calendar.calendarlist.readonly`,
+`calendar.events`, `calendar.events.freebusy`, `openid` and `userinfo.email`.
+
+Agent tools use your own OAuth client. Choose **Create a Personal Mode client** and open Google's one-page
+setup with the account you want to connect. Paste its client ID and secret into Yardlet, select the services
+and choose **Sign in with Google**. Personal Mode authorizes only the account that creates the client. It
+requires no app verification, shows no unverified-app warning and avoids the seven-day testing token expiry.
+A Workspace organization can also use an Internal app. Under **Shared app for Workspace, Analytics, or Ads**, save your custom client. Use a dedicated desktop
+client with **Use this client for an AI-powered agent** enabled for Workspace MCP calls.
 
 ### Accounts and services
 
-- The Google services are five of `LocalConnectorService`: `gmail`, `googleCalendar` (`google-calendar`),
-  `googleDrive` (`google-drive`), `googleAnalytics` (`google-analytics`) and `googleAds` (`google-ads`)
-  (`LocalConnectorService.google`, `isGoogle`, `accountProvider` `.google`). Their directory entries use
-  `SignIn.googleAccount`, and their addresses are `https://gmail.googleapis.com/gmail/v1/`,
-  `https://www.googleapis.com/calendar/v3/`, `…/drive/v3/`, `https://analyticsadmin.googleapis.com/v1beta/` and
-  `https://googleads.googleapis.com/v26/`.
-- A new account starts with Gmail, Calendar and Drive (`LocalConnectorService.googleDefaults`). Analytics and Ads ask for
-  more, so their scopes are asked for only when the person turns them on for an account, and only with an app of the
-  person's own (see "Google app").
-- **Analytics and Ads on an account signed in with the app in the build** (turned on before that app was kept to
-  Gmail, Calendar and Drive): the account's Gmail, Calendar and Drive stay as they are. Analytics and Ads become
-  "Needs sign-in" with the reason "Yardlet's Google app does not sign in for Google Analytics. Save a Google OAuth app of
-  your own, then reconnect this account.", and their tools leave the list. The center checks this when it starts,
-  reading the sign-in only of accounts that have either service on, and again after every sign-in
-  (`settleAccount`), whatever scopes Google lists as granted from before (`include_granted_scopes`). Once an app of the
-  person's own is saved, Reconnect signs the account in with it, and Analytics and Ads connect. Turning Analytics or
-  Ads on for such an account while no such app is saved opens no sign-in and leaves the same reason.
-- **One account, one connector per service:** each service of a Google account is its own `ConnectorRecord` (the
-  per-task switch, tool rows and reconnect are per service), and they share one sign-in:
-  `ConnectorRecord.accountSignInID` (the Keychain item of that account's sign-in; saved as `googleAccountID`, its name
-  from when only Google accounts had one), `credentialID = accountSignInID ?? id`. The account's first service is stored
-  under its own ID. `ConnectorCenter.accounts(.google)` (`googleAccounts`) groups them by `credentialID`. Microsoft
-  accounts use the same machinery (the "Microsoft 365" section).
-- **One sign-in:** the fixed loopback `127.0.0.1:47823/callback` → `accounts.google.com/o/oauth2/v2/auth` in the default
-  browser. It requests the scopes of all services turned on for that account at once (in directory order) and sends
-  `include_granted_scopes=true`, `access_type=offline`, `prompt=select_account consent` for a new account,
-  `prompt=consent` and `login_hint=<address>` for a sign-in again, PKCE S256 and `state` (`resource` is not sent).
-  Tokens come from `oauth2.googleapis.com/token`, with the secret sent in the form. A missing refresh token is reported
-  as a failure.
-- **Account address:** taken from the Gmail profile's `emailAddress`, else the primary calendar (the `id` of
-  `users/me/calendarList/primary`), else Drive `about`'s `user.emailAddress`, else the OpenID user info's `email` (for an
-  account with only Analytics or Ads, whose scopes include `userinfo.email` for this). An address
-  that already exists joins that account (for a service it already has, the new row is dropped). A new sign-in is stored
-  only after its address has been read with a separate session. So when a reconnect brings a different account, that
-  sign-in is not stored and only the reason is kept, and the account's previous sign-in, state and tools stay as they
-  are (a connected account shows "Connected" and a reason line). If the user cancels the first sign-in in Yardlet or on
-  Google's page, that row is deleted; cancelling a reconnect changes nothing. Other failures stay, with their reason.
-- **Partial grants:** when granular consent leaves out one service, only that service gets "Needs sign-in" with a reason
-  such as "Google did not grant access to Google Drive", and its tools drop out. Granting nothing is not a sign-in.
-- **Turning on and off:** turning on connects at once when the sign-in already has the scopes; otherwise only that
-  account consents again (incremental authorization). Turning off deletes that service's connector, and the sign-in
-  stays while another service uses it (even when the first service is turned off). The Keychain item is deleted with the
-  last service. Yardlet does not revoke scopes at Google (the user revokes them under third-party access in their Google
-  Account).
-- **Names:** the services' tools are `gmail_…`, `calendar_…`, `drive_…`, `analytics_…` and `google_ads_…`, which every
-  account shares, each call naming its account in `account` (section 4, "A service with several accounts has one set of
-  tools"). Tool titles and descriptions are `Gmail: …` and `[Gmail] …`. An account's own slug (`gmail` for the first,
-  `gmail_<prefix>` for a later one, the first part of its address) names only its tools from before. The tool list is
-  built into the app, so no server is asked.
-- **Refresh (`OAuthAPISession`):** before a call when the token expires within 1 minute, and on a 401 it refreshes once
-  and sends again. One refresh runs at a time per account. When Google refuses a refresh with `invalid_grant` (access
-  revoked, 6 months unused, password changed, 7 days in Testing status), that account becomes "Needs sign-in", settings
-  and the composer show "Reconnect", and calls return a tool error saying to sign in again. A network failure is only
-  that call's error and does not change the state.
-- **Reconnect and remove:** reconnecting a Google service signs in the whole account again. Remove removes only that
-  service, and "Remove this Google account…" removes the whole account after asking. Yardlet does not ask Google to
-  revoke tokens.
-- The mailbox (docs/MAILBOX.md) shows the inbox of each connected Gmail account with the same sign-in and session,
-  and asks for no other scope.
-- The calendar (docs/CALENDAR.md) shows each connected Google Calendar account's calendars and answers its invitations
-  with the same sign-in, session and requests as the Calendar tools (`GoogleCalendarAPI`), and asks for no other scope.
-- Google account row: the address, five service chips (on or off, and state), and Reconnect and `…` when needed. Below
-  them is "What Yardlet asks Google for" (the scopes and their classes, and "your own app only" on the Analytics and
-  Ads scopes while new sign-ins use the app in the build).
-
-### Scopes
-
-| Service | Scope | Class | Why |
-|---|---|---|---|
-| Gmail | `gmail.modify` | restricted | Read, draft, send and label. Changing labels (`threads.modify`, `messages.modify`) accepts only `mail.google.com` and `gmail.modify`. There is no permanent delete |
-| Calendar | `calendar.calendarlist.readonly` | sensitive | `list_calendars` (calendarList.list) |
-| Calendar | `calendar.events` | sensitive | Read, create, change, delete and respond to events in all calendars |
-| Calendar | `calendar.events.freebusy` | sensitive | `suggest_time` (freeBusy.query) |
-| Drive | `drive.readonly` | restricted | Read and export all files, and read the structure inside Docs, Sheets and Slides |
-| Drive | `drive.file` | non-sensitive | Create and copy, and change only files Yardlet created (including editing Docs, Sheets and Slides) |
-| Analytics | `analytics.readonly` | sensitive (see below) | Read accounts, properties, Ads links, custom definitions and reports |
-| Analytics, Ads | `userinfo.email` | non-sensitive | The address of an account that has none of Gmail, Calendar and Drive |
-| Ads | `adwords` | restricted | Google Ads has no narrower scope; Yardlet only lists customers and runs GAQL `SELECT`s |
-
-- The app in the build asks for the first six only. The last three are asked for only with an app of the person's own;
-  "What Yardlet asks Google for" marks them "your own app only" while new sign-ins use the app in the build.
-- Google's public lists do not name the class of `analytics.readonly`; the table follows the Cloud console's Data Access
-  page, which is where to check it. Google's Ads guide lists `adwords` as restricted
-  (developers.google.com/google-ads/api/docs/productionize/secure-credentials). It also covers changing campaigns and
-  budgets, so reading only is the code's to keep: the Ads tools reach only `customers:listAccessibleCustomers`,
-  `googleAds:search` with a query checked to be a `SELECT`, and `googleAdsFields:search`.
-- Scopes are prefixed with `https://www.googleapis.com/auth/`. The full `drive`, `calendar` and
-  `https://mail.google.com/` scopes are not requested. So Yardlet cannot change or delete the person's other Drive
-  files, and the Drive tools have no delete.
-- **Docs, Sheets and Slides are called with the two Drive scopes too.** The reading methods (Docs `documents.get`,
-  Sheets `spreadsheets.get` and `spreadsheets.values.get`, Slides `presentations.get`, `presentations.pages.get` and
-  `presentations.pages.getThumbnail`) accept `drive.readonly`, and the editing methods (Docs `documents.batchUpdate`,
-  Sheets `spreadsheets.values.update` and `spreadsheets.batchUpdate`, Slides `presentations.batchUpdate`) accept
-  `drive.file` (each method's "Authorization scopes"). So the `documents`, `spreadsheets` and `presentations` scopes
-  (sensitive) are not requested, and these tools add no scopes to the consent screen.
-- **Docs, Sheets and Slides that can be edited:** `drive.file` reaches only files created or opened with the app, or
-  shared with the app through Google Picker or the app's file picker. Yardlet has no Picker, so what it can edit is
-  files that Yardlet created or copied. For other files, Google's 403 ("The caller does not have permission") becomes
-  the tool error as is. Such a file is edited by making a copy with `copy_file`.
-- **Enabling APIs:** apart from the scopes, the Docs API (`docs.googleapis.com`), Sheets API (`sheets.googleapis.com`)
-  and Slides API (`slides.googleapis.com`) must be enabled in the Cloud project the OAuth client belongs to. When one is
-  off, Google's 403 ("… API has not been used in project … before or it is disabled") becomes that tool's error.
-  Enabling an API does not change the scopes or the consent screen. The API step in "Your own Google app" enables six
-  APIs on one page (`ConnectorSetupAssistant.googleAPIs`).
-- Sources: the restricted scope list support.google.com/cloud/answer/13464325, Gmail scopes
-  developers.google.com/workspace/gmail/api/auth/scopes, Drive scopes
-  developers.google.com/workspace/drive/api/guides/api-specific-auth, Calendar scopes
-  developers.google.com/workspace/calendar/api/auth (it has no class column; they are not on the restricted list, and
-  the Cloud console marks them sensitive), the Docs, Sheets and Slides methods
-  developers.google.com/workspace/docs/api/reference/rest/v1/documents, …/sheets/api/reference/rest/v4/spreadsheets,
-  …/slides/api/reference/rest/v1/presentations, and the classes of their scopes …/docs/api/auth, …/sheets/api/scopes,
-  …/slides/api/scopes.
+Yardlet keeps the agent and native screen grants separately. Each service has its own per-task switch.
+Accounts share the service's tool names. The `account` argument selects the address. Gmail tools request
+`gmail.modify` and `gmail.settings.basic`. Calendar uses the three calendar scopes above. Drive requests
+`drive`, `documents`, `spreadsheets` and `presentations` to read and edit files the account can access.
+Analytics uses `analytics.readonly` and Ads uses `adwords` for reporting.
 
 ### Tools
-
-Gmail (`GmailToolCatalog`, `GmailToolRunner`, Gmail API v1):
-
-| Tool | Gmail API | What it does |
-|---|---|---|
-| `search_threads` | `GET users/me/threads?q&maxResults&pageToken&includeSpamTrash` + `threads/{id}?format=metadata` for each thread | Gmail search syntax, 1–50 per page (default 20). Thread ID, message count, and for the latest 10 messages the sender, recipients, date, subject, snippet, labels and unread state. No body. Threads are fetched 5 at a time in parallel |
-| `get_thread` | `GET users/me/threads/{id}?format=full` or `metadata` | `messageFormat`: `PLAIN_TEXT` (default: body text and attachment names), `FULL_CONTENT` (+HTML), `MINIMAL`, `METADATA_ONLY` |
-| `get_message` | `GET users/me/messages/{id}` | The same formats |
-| `list_labels` | `GET users/me/labels` | id, name, type |
-| `create_draft` | `POST users/me/drafts`; with attachments, `POST upload/gmail/v1/users/me/drafts?uploadType=multipart` | to, cc, bcc, subject, body, htmlBody, replyToMessageId, attachments. For a reply: that thread, `In-Reply-To` and `References`, a "Re:" subject, and Reply-To or From when there are no recipients |
-| `send_draft` | `POST users/me/drafts/send` | Draft ID |
-| `send_message` | `POST users/me/messages/send`; with attachments, `upload/…/messages/send` | The same fields as create_draft, recipients required |
-| `modify_labels` | `POST users/me/threads/{id}/modify` or `messages/{id}/modify` | One of `threadId` or `messageId` + `addLabelIds` and `removeLabelIds`. Removing INBOX = archive, removing or adding UNREAD = read or unread |
-| `delete_draft` | `DELETE users/me/drafts/{id}` (for a `messageId`, `GET users/me/drafts` first, 500 at a time) | One of `draftId` or `messageId` (a message `get_thread` shows with the DRAFT label). Deletes it for good, not to the trash |
-
-- Body: decoded by the part's charset (EUC-KR and others), HTML-only converted to text, 40,000 characters per message.
-  Outgoing mail has a UTF-8 base64 body, non-ASCII subjects and display names in RFC 2047, and HTML together with a text
-  part in `multipart/alternative`. Addresses with a line break or a comma are refused before sending (header injection).
-  Gmail fills in From.
-- Attachments (`GmailAttachmentFiles`, shared by the Outlook Mail and Mail (IMAP) tools): the agent gives absolute
-  paths of local files (`~/` works), and the connector reads them and attaches them after the body in
-  `multipart/mixed`. Files come only from the task's folders
-  (`ConnectorToolContext.workspaceRoots`, the same list browser uploads use), the temporary folders (`/tmp` and
-  `$TMPDIR`, where agents keep files they make, such as Claude Code's scratchpad) and the person's Desktop, Documents
-  and Downloads, never from a hidden file or folder below them (`.env`, `.ssh`, `.git`). `..` and symbolic links are
-  resolved with `realpath` before the check. Only regular files, up to 25 MB in all (Gmail's attachment limit, kept for
-  every mailbox); more is refused before anything is read. The MIME type comes from the extension (`UTType`, else
-  `application/octet-stream`), and UTF-8 text gets `charset="UTF-8"`. File names are composed to NFC (macOS keeps
-  Korean names decomposed) without control characters, and a non-ASCII name goes in `name` and `filename` as RFC 2047
-  encoded words, as Gmail's web client sends it. A message with attachments goes through the upload endpoint (up to
-  35 MB) as a JSON metadata part and a `message/rfc822` part instead of JSON `raw`. The result lists each attached
-  file's name, type and size.
-- Labels use one `modify_labels` instead of the five tools on the claude.ai side.
-
-Calendar (`GoogleCalendarToolRunner`, Calendar API v3):
-
-| Tool | API | Notes |
-|---|---|---|
-| `list_calendars` | `GET users/me/calendarList` | id, name (the user's own name for it first), time zone, access role, primary |
-| `list_events` | `GET calendars/{id}/events` | `singleEvents=true`, by default the next 7 days, `orderBy` startTime or updated (startTimeDesc reverses that order), `q`=fullText, `eventTypes`, at most 250 |
-| `search_events` | `GET calendars/primary/events?q=` | One year before and after, by start time. Google's MCP does semantic search, but the public API does word search |
-| `get_event` | `GET calendars/{id}/events/{id}` | |
-| `suggest_time` | `POST freeBusy` | Merges the busy times of the account (`primary`) and the attendees, and within working hours and excluding weekends, suggests times on 15-minute steps, an hour apart, 5 by default. Calendars it cannot see are in `unavailableCalendars` |
-| `create_event` | `POST calendars/{id}/events` | Time zone, all-day (end date included), attendees, Meet (`conferenceDataVersion=1`), recurrence, reminders, busy or free, visibility; `sendUpdates` defaults to all |
-| `update_event` | `PATCH …/events/{id}` | Only the changed fields. Moving only the start keeps the length; attendees are added and removed by email (with a GET first in that case) |
-| `delete_event` | `DELETE …/events/{id}` | |
-| `respond_to_event` | `PATCH attendees` after a GET | Changes only the account's own attendee entry. An event the account was not invited to is an error |
-
-- Times: a time without an offset (`2026-04-30T10:00:00`) is read in the `timeZone` argument, or this Mac's time zone
-  when there is none, and Google gets both the offset and `timeZone`. Argument names are Google MCP's (`calendarId`,
-  `startTime`, `attendeeEmails`, `addGoogleMeetUrl`, `notificationLevel` and others).
-
-Drive (`GoogleDriveToolRunner`, Drive API v3, `supportsAllDrives`):
-
-| Tool | API | Notes |
-|---|---|---|
-| `search_files` | `GET files?q=` | Turns Google MCP's query terms into Drive's: `title`→`name`, `parentId = 'x'`→`'x' in parents`, `owner = 'x'`→`'x' in owners`, `!=` to `not`. Words without an operator become `fullText contains`. Trash excluded |
-| `list_recent_files` | `GET files?orderBy=` | recency, lastModified (`modifiedTime desc`), lastModifiedByMe |
-| `get_file_metadata` | `GET files/{id}` | Google MCP names (`title`, `fileSize`, `owner`, `parentId`, `viewUrl`) |
-| `get_file_permissions` | `GET files/{id}/permissions` | |
-| `read_file_content` | Export or `alt=media` | Docs as Markdown (text if that fails), Sheets as CSV of the first sheet, Slides as text, text files as they are, cut at 100,000 characters, comment threads with `includeComments`. PDF, Office and images return an error saying to use download_file_content (Google MCP reads them, but the public API does not offer this) |
-| `download_file_content` | Export, `alt=media` or revisions | base64, up to 5 MB (checks the size first and refuses) |
-| `create_file` | Multipart upload or metadata only | Converts text, CSV and Office to Google formats (`disableConversionToGoogleType`); without content, an empty Docs, Sheets or Slides file, or a folder |
-| `copy_file` | `POST files/{id}/copy` | |
-| `update_file` | `PATCH` (multipart) | A tool Yardlet adds: name, description, folder, content. Because of `drive.file`, only files Yardlet created or copied change, and for other files Google's 403 text becomes the error as is |
-
-Docs, Sheets and Slides (`GoogleEditorsToolCatalog`, `GoogleEditorsToolRunner`, Docs API v1, Sheets API v4, Slides API
-v1):
-
-- **They are tools of the Drive connector.** Their scopes are the same as Drive's and their files are Drive files, so
-  they have no service row, chip, sign-in or per-task switch of their own. The Drive connector provides the nine above
-  and these twelve, 21 in all (`drive_*`), which every account shares (`drive_read_doc` with `account`).
-- **Names and arguments:** they follow the tool names and argument names of Google's official Docs, Sheets and Slides
-  MCP servers (`docsmcp`, `sheetsmcp` and `slidesmcp.googleapis.com`): `documentId`, `requests`, `writeControl`,
-  `spreadsheetId`, `range`, `values`, `formulas`, `sheetId`, `presentationId`, `pageId`, `fields`, `commentsIncluded`
-  and `thumbnailProperties`. The paging arguments and `valueRenderOption` are Yardlet's additions.
-
-| Tool | API | Notes |
-|---|---|---|
-| `read_doc` | `GET documents/{id}?includeTabsContent=true` | For each paragraph, the start and end index (UTF-16), text, style (`HEADING_1`…; omitted for normal text), list (`listId`, `nestingLevel`) and web links. Tables give each cell's text and its indexes. Objects such as images and footnote marks are one U+FFFC per index, so the text length equals the index length. With several tabs, a `tabs` list and selection by `tabId` (child tabs included). `revisionId`, and Drive comments with `commentsIncluded` |
-| `update_doc` | `POST documents/{id}:batchUpdate` | The request list as is (`insertText`, `deleteContentRange`, `replaceAllText`, `updateParagraphStyle`, `createParagraphBullets`, `insertTable` and others), all or nothing. `writeControl` (`requiredRevisionId`, `writeMode: SUGGEST`) is passed as is too |
-| `get_spreadsheet` | `GET spreadsheets/{id}` | By default a field mask for the title, locale and time zone, each sheet's ID, name, size, frozen rows and columns, hidden state and type, and named ranges. With `fields` or `includeGridData`, the Sheets API JSON as is (over 100,000 characters, an error saying to narrow the range) |
-| `get_values` | `GET spreadsheets/{id}/values/{range}` | By row. `valueRenderOption` `FORMATTED_VALUE` (default), `UNFORMATTED_VALUE` or `FORMULA` (reads formulas) |
-| `update_values` | `PUT …/values/{range}?valueInputOption=RAW` | Values as they are: numbers are numbers, and text starting with `=` is text. null leaves the cell as it is, and `""` clears it |
-| `update_formulas` | `PUT …/values/{range}?valueInputOption=USER_ENTERED` | Formulas, and values read as if a person typed them |
-| `insert_dimension` | `POST spreadsheets/{id}:batchUpdate` (`insertDimension`) | Inserts empty rows or columns (from 0, end excluded) |
-| `update_spreadsheet` | `POST spreadsheets/{id}:batchUpdate` | The request list as is (`addSheet`, `deleteSheet`, `updateSheetProperties`, `repeatCell`, `mergeCells`, `sortRange` and others). The reply's `replies` (new sheet IDs and others) |
-| `read_presentation` | `GET presentations/{id}?fields=…` | For each slide, the ID, order, layout name and whether it is skipped; for each element, the ID, kind (shape, table, image, group, sheetsChart, wordArt…), placeholder (`TITLE`, `BODY`) and text; cell text for tables; speaker notes and their object ID. With `fields`, the Slides API JSON as is |
-| `read_slide_page` | `GET presentations/{id}/pages/{pageId}` | The elements of one page (slide, layout or master), with size and position (`size`, `transform`) |
-| `read_slide_page_thumbnail` | `GET …/pages/{pageId}/thumbnail` | PNG, `thumbnailProperties.thumbnailSize` (SMALL, MEDIUM or LARGE, default MEDIUM). The size and address, and the PNG itself as image content (up to 5 MB). The image address is a 30-minute address Google signed for the account, so it is fetched without the Google token |
-| `update_presentation` | `POST presentations/{id}:batchUpdate` | The request list as is (`createSlide`, `insertText`, `deleteText`, `replaceAllText`, `createShape`, `updateTextStyle`, `deleteObject` and others), `writeControl` |
-
-- **Paging:** replies are cut so they stay within 100,000 characters (the same limit as `read_file_content`). Documents
-  are cut by element, with a `nextStartIndex` (call again with `startIndex`; tables continue by row, with `firstRow`
-  when not from the first). Sheets are cut by row, with `rowsReturned` and a `nextRange` computed from the range Google
-  returned (for example, when `Data!A1:D3000` gives 1,850 rows, `Data!A1851:D3000`). Slides are cut by slide, with
-  `nextStartSlide` (call again with `startSlide`).
-- **IDs:** when given a link (`…/document/d/<ID>/edit`), only the ID is used. Arguments are checked before the request
-  (empty `requests`, a row whose cells are not an array, an end that is not past the start or a wrong
-  `valueRenderOption` is an error without a request).
-- Which files the editing tools can reach, and which APIs must be enabled, are in "Scopes".
 
 Google Analytics (`GoogleAnalyticsToolCatalog`, `GoogleAnalyticsToolRunner`, Analytics Admin and Data APIs v1beta). Names
 and arguments follow Google's own Analytics MCP server (github.com/googleanalytics/google-analytics-mcp), whose
@@ -999,8 +772,7 @@ arguments are snake case:
 | `run_realtime_report` | Data `POST properties/{id}:runRealtimeReport` | The same without dates |
 
 Google Ads (`GoogleAdsToolCatalog`, `GoogleAdsToolRunner`, Google Ads API v26). Names follow Google's own Google Ads MCP
-server (developers.google.com/google-ads/api/docs/developer-toolkit/mcp-server). Developer tokens ended on 2026-09-09, so
-none is sent:
+server (developers.google.com/google-ads/api/docs/developer-toolkit/mcp-server). The runner sends no developer token.
 
 | Tool | API | Notes |
 |---|---|---|
@@ -1009,82 +781,33 @@ none is sent:
 | `get_resource_metadata` | `POST googleAdsFields:search` | The fields under a resource name, with whether each can be selected, filtered and sorted |
 
 - Analytics and Ads answers over 100,000 characters become an error that says how to narrow the request.
-- Descriptions say only what the tool does, in under 260 characters. Annotations: reading tools have
-  `readOnlyHint: true` and `openWorldHint: false`, sending and writing tools `openWorldHint: true`, and `modify_labels`,
-  `delete_draft`, `delete_event`, `update_file` and the Docs, Sheets and Slides writes other than `insert_dimension`
-  have `destructiveHint: true`.
-- Bodies, requests and responses are not written to the log. Errors show only Google's `error.message` and the HTTP
-  status ("Gmail: Requested entity was not found. (HTTP 404)").
 
-### When the harness asks
+### Approval
 
-- Tools that ask follow the harness's approval settings, and Yardlet puts annotations (`destructiveHint` and others) on
-  write tools. Yardlet also weighs each call where it runs (docs/AGENT_BROWSER_TOOLS.md, "Approvals"): in a task that
-  asks, a connector's first read of a service asks once for the task, and each write asks on Yardlet's card unless
-  Claude Code's CLI just asked for that direct call; a read-only task runs only read-only tools.
-- Claude Code: connector tools are not in `--allowedTools`, so the CLI asks according to the task's permission mode. The
-  request cards for write tools (Gmail `send_draft`, `send_message`, `modify_labels` and `delete_draft`, Calendar `create_event`,
-  `update_event`, `delete_event` and `respond_to_event`, Drive `create_file`, `copy_file`, `update_file`, `update_doc`,
-  `update_values`, `update_formulas`, `insert_dimension`, `update_spreadsheet` and `update_presentation`;
-  `LocalConnectorService.approvalRequiredTools`) use Yardlet's text and have no "Always allow" (`GmailToolApproval`,
-  `GoogleToolApproval`): mail shows the recipients, cc, bcc, subject, attachments (the total, then each file's name
-  and size, up to 20, or "not found" when it is not on disk) and the first 1,200 characters of the body; a card that
-  sends or deletes a draft first reads the draft from Gmail (`MailDraftReader`, up to 5 seconds, while that session's
-  next frames wait) and shows its recipients, subject, last saved time, attachments and body instead of an ID, or the
-  ID and "could not read" when Gmail did not answer (an Outlook or Mail (IMAP) `send_draft` card reads its draft the
-  same way, and shows the ID alone when it could not); labels
-  show the thread, what is added and removed, and archive, read or unread; events show the title, date and time,
-  invitees, Meet, and whether Google sends mail; Drive shows the title, type, folder and the first 600 characters of the
-  content. Docs, Sheets and Slides show "Allow Claude to change a document (a spreadsheet, a presentation) in
-  {address}'s Drive?" with the file ID, the range, what changes ("insertText ×2, updateParagraphStyle") and the first
-  600 characters of the inserted text or cell values, and inserting rows or columns states the count, as in "Inserts 2
-  rows." Other tools get the CLI's usual card. In bypass permissions mode nothing is asked (the harness's own behavior).
-- Codex: Yardlet's server has `default_tools_approval_mode` `approve`, so Codex asks about no connector's tool, and
-  Yardlet's own card asks before each write and before a task's first read of a service, as in every harness but Claude
-  Code (docs/AGENT_BROWSER_TOOLS.md, "Approvals").
-- Antigravity: its own card for a connector's tool is answered at once when its title and input match that tool, and
-  Yardlet's card asks as for Codex. Its card offers no "always allow" for a tool that changes something. The other ACP
-  agents use their own MCP approval, as is.
+The first read of each connector service asks once per task. A direct call that the harness already asks
+about counts as that approval. For sensitive actions such as sending mail, editing a file or moving it to
+trash, Google decides when to ask. Yardlet shows Google's Form Elicitation card in the conversation and
+returns your choice. Depending on the action, Google may offer Allow once, Deny, or a 90-day permission
+for a recipient, file, owner or tool.
 
-### Your own Google app
+#### Prompt injection and external content
 
-Someone whose build has no Google app, who wants Google Analytics or Google Ads, or who wants to use their own app,
-creates one OAuth app in Google Cloud. Google under "Set up in one go" in Settings → Connectors opens the steps below in
-order.
+Mail, invitations and shared documents can contain instructions designed to mislead an agent. Yardlet
+limits each task to its enabled connectors, blocks writes in Plan mode and checks the first read.
+These controls and Google's approval cards limit what the agent can do. Read the action, recipients,
+target file and duration on the card before approving. Yardlet keeps the content out of third-party
+cloud scanning services to avoid sharing the original mail or document with another provider.
 
-1. **New Project** (console.cloud.google.com/projectcreate): create a project.
-2. **Enable APIs**: on one page
-   (`flows/enableapi?apiid=gmail.googleapis.com,calendar-json.googleapis.com,drive.googleapis.com,analyticsadmin.googleapis.com,analyticsdata.googleapis.com,googleads.googleapis.com,docs.googleapis.com,sheets.googleapis.com,slides.googleapis.com`),
-   enable the nine APIs. The Drive connector's Docs, Sheets and Slides tools use the last three.
-3. **Google Auth Platform**: app name (copy button), user support email, audience, contact information. To use personal
-   Gmail accounts, the audience is **External**. If only accounts of one Workspace organization are used and the project
-   is inside that organization, **Internal** works too (no verification screen and no 100-user limit).
-4. **Audience** → Publish app → "In production" (for External). Left at "Testing", it needs a new sign-in every 7 days.
-5. **Data Access** → Add or remove scopes → paste the nine scopes (copy button) into Manually add scopes, then Update and
-   Save. Analytics' and Ads' scopes are asked for only on accounts that turn those services on.
-6. **Create client**: type Desktop app → paste the client ID and client secret into Yardlet's fields (the format is
-   checked) and **Save**. If you create a Web application instead, add `http://127.0.0.1:47823/callback` to the
-   authorized redirect URIs.
-7. Choose the services and **Sign in with Google** → choose the account → in "Google hasn't verified this app", Advanced
-   → go to the app → allow the services. For a second account, **Add another Google account**. Turn services on and off
-   per account with the service chips.
+### Disconnecting
 
-If the Workspace Admin console blocks Gmail access by unverified third-party apps, the sign-in is refused. In that case,
-add this app's client ID to the trusted list in the Admin console (Security → API controls), or use an internal app for
-that organization only.
-
-### Not included
-
-- Gmail: downloading attachments, trash and spam, creating and editing labels, and listing, editing and deleting drafts.
-- Drive: reading the body of PDF, Office and image files (download them and read them separately), deleting files, and
-  changing sharing.
-- Docs, Sheets and Slides: editing in place a file Yardlet did not create or copy. That would need requesting the
-  `documents`, `spreadsheets` and `presentations` scopes (sensitive) or the full `drive` scope (restricted), or a Google
-  Picker screen where the person picks the file. For now, Yardlet edits a copy.
-- Calendar: `search_events` is word search, not semantic search. The time zone is this Mac's (reading the time zone in
-  the calendar settings needs another scope).
-- Analytics: annotations, audiences, funnel reports (v1alpha) and any change to a property. Ads: anything that changes
-  an account (mutates), and keyword planning.
+Disconnecting the agent grant clears its Keychain tokens. A separate Calendar or Mailbox sign-in can
+still serve the native screen. Removing the whole Google account deletes its Keychain credentials.
+When a mailbox or calendar account leaves its screen, Yardlet clears that account's in-memory data,
+open window state, mailbox sync cursor (`Yardlet.mailboxCursors`) and calendar selections
+(`Yardlet.calendarChoices`) as applicable. It removes delivered mail notifications for that account.
+A separate Mail (IMAP) connection has its own credentials and removal. Quoted tool results stay in
+the local task conversation and agent history until you delete that history. The agent provider's
+own retention terms apply to results it receives.
 
 ## 10. Apple
 
@@ -1235,7 +958,7 @@ server, and the per-task switch and tool row labels work as for other connectors
   `remove_beta_tester`, `add_build_to_group`, `reply_to_review` and `submit_for_review`; Apple Calendar `create_event`,
   `update_event` and `delete_event`; Apple Reminders `create_reminder` and `complete_reminder`. Apple Contacts only
   reads. Xcode has no tools that Yardlet marks as asking.
-- Claude Code: as with Google, connector tools are not in the allow list, so the CLI asks on every call. The request
+- Claude Code: connector tools are not in the allow list, so the CLI asks on every call. The request
   cards for the writes above use Yardlet's text and have no "Always allow" (`AppleToolApproval`): inviting a tester
   (saying Apple sends an invitation email) and removing one, distributing a build (saying the group's testers can
   install it), replying to a review (saying it shows on the App Store and replaces an earlier reply, with the first
@@ -1371,8 +1094,7 @@ registered OAuth app can offer a sign-in button. Yardlet signs in with the devic
 
 - Another process of the same user that gets a task token for `yardlet-mcp` can call connector tools too. This is the
   same boundary as for the browser tools ([AGENT_BROWSER_TOOLS](AGENT_BROWSER_TOOLS.md) section 6).
-- Tool approval belongs to the harness. Yardlet does not ask on its own. Only Claude Code's request cards for Google and
-  Apple writes show Yardlet's text and leave out "Always allow" (the "Google" section and the "Apple" section).
+- Connector reads and writes follow the task permissions described under "Approval".
 - Content read through a connector goes through that task's harness to its provider. The same goes for data from the
   Mac's calendars, reminders and contacts and from App Store Connect. Yardlet does not write the bodies, requests and
   responses it gets from services to the log.
@@ -1380,7 +1102,7 @@ registered OAuth app can offer a sign-in button. Yardlet signs in with the devic
   What an agent can do with the key is set by the key's type and role (the "Apple" section).
 - The Browserbase key goes in the request address, as Browserbase specifies (it may stay in server logs). It is not in
   Yardlet's files, UI or error text.
-- Not supported: the old HTTP+SSE transport (2024-11-05), Client ID Metadata Document (Yardlet has no https document
+- Not supported: the old HTTP+SSE transport, Client ID Metadata Document (Yardlet has no https document
   address), resources and prompts (other than reading a tool's view, the "MCP Apps" section), requests the server sends inside a stream (elicitation, sampling, roots), showing
   progress notifications, blocking individual tools and `notifications/tools/list_changed` sent by connector servers
   (remote MCP) themselves (server lists are read again when connecting and every 12 hours).
@@ -1399,7 +1121,7 @@ registered OAuth app can offer a sign-in button. Yardlet signs in with the devic
 
 | Location | Contents | Layer |
 |---|---|---|
-| `Sources/NativeHarnessClient/Connectors/ConnectorModels.swift` | Records, credentials (including the `client` and `signingKey` kinds), the store contract, naming rules (`ConnectorToolNaming`), services inside the app (`LocalConnectorService`: the three Google and five Apple services) | engine |
+| `Sources/NativeHarnessClient/Connectors/ConnectorModels.swift` | Records, credentials (including the `client` and `signingKey` kinds), the store contract, naming rules (`ConnectorToolNaming`), services inside the app (`LocalConnectorService`: the Google and Apple services) | engine |
 | `Sources/NativeHarnessClient/Connectors/ConnectorDirectory.swift` | The directory (`ConnectorPreset`), import suggestions, task state (`ConnectorTaskState`, `ConnectorTaskScope`), tool row labels | engine |
 | `Sources/NativeHarnessClient/Connectors/NativeMCPConfigs.swift` | Reading harnesses' own settings (Claude `.claude.json` and `.mcp.json`, Codex `config.toml`, Antigravity `mcp_config.json`) and other apps' (`NativeMCPApp`: the Claude app, Cursor, VS Code), the servers a task loads on its own, one program's launch (`NativeMCPLaunch`) | engine |
 | `Sources/NativeHarnessClient/Connectors/MCPRegistry.swift`, `MCPRegistryDirectory.swift` | Reading and checking registry answers (`MCPRegistryFormat`, `MCPRegistryCheck`), what connecting asks (`Reach`), order and merging, the registry client, what Add connector shows | engine |
@@ -1410,11 +1132,7 @@ registered OAuth app can offer a sign-in button. Yardlet signs in with the devic
 | `Sources/NativeHarnessClient/Connectors/GoogleOAuth.swift` | Google endpoints, the app in the build (`BuiltInApp`), the Keychain item ID of the Google app, authorization parameters, scope checks | engine |
 | `Sources/NativeHarnessClient/Connectors/OAuthAPISession.swift` | One account's bearer token for a REST API Yardlet calls itself (Google's, Microsoft Graph): refresh a minute before expiry and once after a 401, one at a time | engine |
 | `Sources/NativeHarnessClient/Connectors/ConnectorToolSupport.swift` | Argument reading (`ConnectorToolArguments`) and schema pieces (`ConnectorToolSchema`) shared by Yardlet's own servers | engine |
-| `Sources/NativeHarnessClient/Connectors/GmailToolCatalog.swift`, `GmailAPI.swift`, `GmailToolRunner.swift` | Gmail tool definitions, annotations and tools that ask; REST calls, reading messages (charset, HTML→text) and building MIME; requests and responses per tool | engine |
-| `Sources/NativeHarnessClient/Connectors/GoogleREST.swift` | REST client of the Google APIs other than Gmail (JSON, extra headers, downloads, multipart uploads) | engine |
-| `Sources/NativeHarnessClient/Connectors/GoogleCalendarToolCatalog.swift`, `GoogleCalendarToolRunner.swift`, `GoogleCalendarTransport.swift` | Calendar tools, scopes and tools that ask; Calendar API v3 requests and responses (`GoogleCalendarAPI`, shared with the calendar); `CalendarTime` (time zones, free time) | engine |
-| `Sources/NativeHarnessClient/Connectors/GoogleDriveToolCatalog.swift`, `GoogleDriveToolRunner.swift` | Drive tools, scopes and tools that ask; Drive API v3 requests and responses (export, multipart); `DriveQuery` | engine |
-| `Sources/NativeHarnessClient/Connectors/GoogleEditorsToolCatalog.swift`, `GoogleEditorsToolRunner.swift` | The Drive connector's Docs, Sheets and Slides tools, tools that ask and APIs that must be enabled; Docs, Sheets and Slides API requests and responses; paging | engine |
+| `GoogleWorkspaceEndpoint.swift`, `GoogleWorkspaceMCPClient.swift`, `GoogleWorkspaceMCPBridge.swift`, `GoogleWorkspaceForm.swift` | Workspace discovery, calls, tool arguments and approval cards | engine |
 | `Sources/NativeHarnessClient/Connectors/GoogleAnalyticsToolCatalog.swift`, `GoogleAnalyticsToolRunner.swift`, `GoogleAdsToolCatalog.swift`, `GoogleAdsToolRunner.swift` | Analytics and Ads tools and scopes; Admin, Data and Google Ads API requests, report rows, the `SELECT` check | engine |
 | `Sources/NativeHarnessClient/Connectors/MicrosoftOAuth.swift`, `GraphAPI.swift` | Microsoft's endpoints per tenant, the app in the build, the person's app, permissions and grant checks, sign-in errors; the Graph client (headers, page links only into Graph, uploads) and shared shapes (`GraphShape`) | engine |
 | `Sources/NativeHarnessClient/Connectors/OutlookMailToolCatalog.swift`, `OutlookMailToolRunner.swift`, `OutlookCalendarToolCatalog.swift`, `OutlookCalendarToolRunner.swift`, `OutlookCalendarTransport.swift`, `OneDriveToolCatalog.swift`, `OneDriveToolRunner.swift`, `TeamsToolCatalog.swift`, `TeamsToolRunner.swift` | The Microsoft 365 tools, permissions and tools that ask; Graph requests and answers | engine |
@@ -1428,7 +1146,6 @@ registered OAuth app can offer a sign-in button. Yardlet signs in with the devic
 | `Sources/NativeHarnessClient/Connectors/MCPAppViews.swift`, `MCPAppBridge.swift`, `ConnectorViewHost.swift` | MCP Apps: a tool's view and who may call it (`MCPAppTool`), the checked view (`MCPAppView`) and its policy (`MCPAppCSP`), the kept results (`ConnectorAppCalls`), a row's view (`ConversationConnectorView`), the JSON-RPC a view speaks (`MCPAppBridge`, `MCPAppHostContext`), one task's views (`ConnectorViewHost`) | engine |
 | `Sources/NativeHarnessClient/AgentTools/AgentToolBroker.swift` | `tools/list` and the connector call path, per-task scope, injection conditions, `tools/watch` | engine |
 | `Sources/NativeHarnessClient/AgentTools/AgentToolInjection.swift` | Injection documents, the `deniedMcpServers` setting, `ClaudeAIConnectorPreference` | engine |
-| `Sources/NativeHarnessClient/AgentTools/GmailToolApproval.swift`, `GoogleToolApproval.swift`, `MicrosoftToolApproval.swift`, `AppleToolApproval.swift` | Text of Claude Code request cards for Gmail, Calendar and Drive writes (Docs, Sheets and Slides included), for Outlook, OneDrive and Teams writes, and for App Store Connect and Mac calendar and reminder writes | engine |
 | `Sources/YardletAgentTools/MCPServer.swift` | `listChanged: true`, the list the client got (`MCPToolListing`), watching the list and `notifications/tools/list_changed` (`watchToolList`) | engine |
 | `Sources/NativeHarnessClient/Adapters/Claude/ClaudeProcessTransport.swift` | `ENABLE_CLAUDEAI_MCP_SERVERS=false` | engine |
 | `Sources/NativeHarnessClient/Presentation/ConnectorSetupAssistant.swift` | "Set up in one go" step state, console links, values to copy, field checks | presentation |
@@ -1450,7 +1167,7 @@ Tests:
 | `Tests/NativeHarnessClientTests/ConnectorTests.swift` | The whole flow with fake authorization and MCP servers, names, the broker, loopback, refresh (retrying temporary failures, refresh token rotation, refresh by another copy), a call's time limit and what goes again, Keychain (opt-in `NHC_KEYCHAIN_LIVE=1`) |
 | `Tests/NativeHarnessClientTests/ConnectorDirectoryTests.swift` | The directory, discovery with real metadata shapes, your own client, public clients and the key in the address, the per-task switch, duplicate exclusion and standing in for Claude harness servers (`--settings`), settings parsing (fake values), import, the claude.ai environment, injection documents, tool rows |
 | `Tests/NativeHarnessClientTests/ConnectorLiveToolsTests.swift` | `list_changed` and list refresh with a fake MCP client, `tools/watch` over the socket, per-task changes in a real `ConnectorCenter`, clients that re-read and clients that do not, notification at the end of a turn, per-harness text |
-| `Tests/NativeHarnessClientTests/GmailConnectorTests.swift`, `GoogleCalendarDriveConnectorTests.swift`, `GoogleBuiltInAppTests.swift`, `GoogleAnalyticsAdsConnectorTests.swift` | With a fake Google (`FakeGoogle`, `FakeGoogleWorkspace`, `FakeAnalyticsAds`): sign-in, scopes, accounts, and the requests and asking for each tool; the app in the build and the six scopes it asks for; Analytics reports and Ads reading only |
+| `Tests/NativeHarnessClientTests/GmailConnectorTests.swift`, `GoogleCalendarDriveConnectorTests.swift`, `GoogleBuiltInAppTests.swift`, `GoogleAnalyticsAdsConnectorTests.swift` | With a fake Google (`FakeGoogle`, `FakeGoogleWorkspace`, `FakeAnalyticsAds`): sign-in, scopes, accounts, and the requests and asking for each tool; Calendar UI grants; Analytics reports and Ads reading only |
 | `Tests/NativeHarnessClientTests/MicrosoftConnectorTests.swift` | With a fake identity platform and Graph (`FakeMicrosoft`): the public-client sign-in, a tenant of the person's app, rotated refresh tokens, the requests of mail, calendar, OneDrive and Teams tools, and a request card |
 | `Tests/NativeHarnessClientTests/AppleConnectorTests.swift` | The whole flow with a fake App Store Connect (checking the token signature on every request), a fake Mac store and a fake `mcpbridge`: team key and individual key tokens, the key only in Keychain, the request and reply for each tool, refused keys, asking only for writes and the card text, Mac permissions and calendars, reminders and contacts, finding, connecting, restarting and removing Xcode, stdio with a real shell process |
 | `Tests/NativeHarnessClientTests/GitHubDeviceSignInTests.swift` | Device code request, waiting, refusal and expiry, sending it to MCP as a bearer token |
@@ -1616,13 +1333,12 @@ Microsoft Teams (`TeamsToolCatalog`, `TeamsToolRunner`):
 
 - Tools that ask (`LocalConnectorService.approvalRequiredTools`): Outlook Mail `send_draft`, `send_message` and
   `update_message`; Outlook Calendar `create_event`, `update_event`, `delete_event` and `respond_to_event`; OneDrive
-  `upload_file` and `create_folder`; Teams `send_chat_message` and `send_channel_message`. Drafts are not asked about, as
-  for Gmail.
+  `upload_file` and `create_folder`; Teams `send_chat_message` and `send_channel_message`. Drafts are not asked about.
 - Claude Code: the request cards use Yardlet's text and have no "Always allow" (`MicrosoftToolApproval`): mail shows the
   recipients, subject and the first 1,200 characters of the body; a message change shows read state, flag, categories and
   where it moves; events show the title, time, invitees, a Teams link and what Outlook sends; OneDrive shows the name,
   folder and what happens when the name is taken; Teams shows the chat or the team and channel, and the message.
-- Codex and ACP: as for Google, from the annotations (`destructiveHint` on `update_message`, `update_event` and
+- Codex and ACP: from the annotations (`destructiveHint` on `update_message`, `update_event` and
   `delete_event`).
 
 - The mailbox (docs/MAILBOX.md) shows the inbox of each connected Outlook Mail account with the same sign-in
@@ -1668,7 +1384,9 @@ Microsoft Entra. The Microsoft page opens the steps in order (`ConnectorSetupAss
 
 ## 18. Mail over IMAP
 
-An account at a mail service Yardlet has no API for is a **Mail (IMAP)** connector, one per address. How it is added,
+Gmail addresses at `gmail.com` and `googlemail.com` can connect directly with a Google App Password through
+`imap.gmail.com` and `smtp.gmail.com` for the Mailbox and the basic `mail_*` tools. Outlook.com, Hotmail,
+Live and MSN addresses use the Microsoft 365 connector. Each Mail (IMAP) connector serves one address. How it is added,
 read and sent, and its servers per service, are in docs/MAILBOX.md ("Mail accounts over IMAP"); this section covers
 what belongs to connectors.
 
@@ -1692,8 +1410,7 @@ what belongs to connectors.
 
 ## 19. MCP Apps
 
-A connector's tool may name an HTML view for its results (MCP Apps, extension `io.modelcontextprotocol/ui`, spec
-`2026-01-26`): `_meta.ui.resourceUri`, a `ui://` resource. Yardlet draws it in the conversation under the call, the same
+A connector's tool may name an HTML view for its results (MCP Apps, extension `io.modelcontextprotocol/ui`): `_meta.ui.resourceUri`, a `ui://` resource. Yardlet draws it in the conversation under the call, the same
 way in every harness, for connectors it reaches as an MCP client (remote servers and programs; Yardlet's own Google,
 Microsoft and Apple servers name no views). Servers a harness loads itself, and a harness's own MCP Apps support, are
 not part of this. The design record is [MCP_APPS_CONNECTORS](design/MCP_APPS_CONNECTORS.md).
@@ -1740,7 +1457,7 @@ not part of this. The design record is [MCP_APPS_CONNECTORS](design/MCP_APPS_CON
   is cancelled; `window.open` makes nothing, downloads are cancelled, camera and microphone are refused, and dialogs
   answer at once. A link the person clicks in a view opens as the view's `ui/open-link` does. A web process that ends,
   or a view that does not send `ui/initialize` within ten seconds, leaves the row's text with "Show view again".
-- **The bridge** (`MCPAppBridge`). `ui/initialize` answers protocol `2026-01-26`, `hostInfo` Yardlet, the capabilities
+- **The bridge** (`MCPAppBridge`). `ui/initialize` answers with the supported protocol version, `hostInfo` Yardlet, the capabilities
   `openLinks`, `serverTools`, `serverResources` and `logging`, and `hostContext`: the tool as its server listed it,
   `theme`, style variables as `light-dark()` pairs, `displayMode` `inline`, `maxHeight` 600, locale, time zone and
   `desktop`. Only after `ui/notifications/initialized` does Yardlet send `tool-input` and `tool-result`. A theme change
