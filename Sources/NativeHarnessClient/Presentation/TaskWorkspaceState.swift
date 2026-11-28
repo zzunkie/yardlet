@@ -686,7 +686,7 @@ final class TaskWorkspaceStore {
 
     /// The browser engine the tasks' browser tabs open in, when this build has one; a store without it
     /// keeps each browser tab as a WebKit preview page.
-    private let browserClient: @MainActor () -> BrowserHostClient?
+    let browserClient: @MainActor () -> BrowserHostClient?
 
     init(repository: any TaskWorkspaceRepository = InMemoryTaskWorkspaceRepository(),
          browserClient: @escaping @MainActor () -> BrowserHostClient? = { nil }) {
@@ -771,6 +771,7 @@ final class TaskWorkspaceStore {
             state.detachBrowser()
             state.browserTabs.terminateForApplicationShutdown()
         }
+        browserClient()?.closeTabs(forSession: id)
         dirtyIDs.remove(id)
         repository.remove(for: id)
     }

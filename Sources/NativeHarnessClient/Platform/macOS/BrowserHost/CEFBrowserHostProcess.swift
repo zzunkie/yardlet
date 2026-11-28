@@ -162,7 +162,7 @@ final class CEFBrowserHostProcess: BrowserHostConnection {
                         // not leave the host's surface messages queued.
                         guard let surface = surfaces.surface(for: frame, tab: tab), frame.layer == .view else { continue }
                         router.route(frame, surface: surface, of: tab)
-                    case .hidden(let tab), .closed(let tab):
+                    case .hidden(let tab), .closed(let tab), .browserReleased(let tab):
                         // The host released the tab's rings; the frames written before this are in.
                         surfaces.evict(tab: tab)
                         router.forgetLatestFrame(of: tab)

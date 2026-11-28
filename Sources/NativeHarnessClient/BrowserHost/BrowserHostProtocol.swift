@@ -455,10 +455,11 @@ enum BrowserHostCommand: Codable, Equatable, Sendable {
     /// Answers Chromium's hang monitor for a tab it found unresponsive (`responsiveness`): wait another
     /// 15 seconds, or end the renderer (the page then reports `pageCrashed`).
     case unresponsive(tab: BrowserTabID, action: BrowserUnresponsiveAction)
-    /// The memory saver: discards a hidden tab as Chrome's Memory Saver does, unless its page is one Chrome keeps
-    /// (docs/BROWSER_HOST.md §3 "Memory saver"). The page's renderer ends and the tab keeps its address, title and
-    /// history; `discarded` follows, or `discardRefused`. A reload (`navigation`) loads the page again. `urgent`: the
-    /// Mac is short of memory, when Chrome does not keep a page for its notification permission.
+    /// Check browser signals and every frame before releasing an individual browser. The app rechecks
+    /// visibility and input ownership on demotionReady before committing the release.
+    case prepareDemotion(tab: BrowserTabID, urgent: Bool, allowAgentForm: Bool)
+    case releaseBrowser(tab: BrowserTabID)
+    /// Discard only the renderer, keeping the browser and navigation entries. Refused for shared renderers.
     case discard(tab: BrowserTabID, urgent: Bool)
     case close(tab: BrowserTabID)
     /// Closes a tab as a person closes it: a page that asks before it is left (beforeunload) asks first, as a
@@ -579,7 +580,11 @@ enum BrowserHostEvent: Codable, Equatable, Sendable {
     /// Chromium's hang monitor: the tab's renderer has not handled input for 15 seconds (false), or
     /// answers again (true).
     case responsiveness(tab: BrowserTabID, isResponsive: Bool)
-    /// The tab was discarded (`discard`): its page is gone until a reload.
+    /// All frames answered the eligibility check. The browser is still live.
+    case demotionReady(tab: BrowserTabID)
+    /// Acknowledges releaseBrowser even when the old page already closed itself.
+    case browserReleased(tab: BrowserTabID)
+    /// The page is gone until the tab is used again.
     case discarded(tab: BrowserTabID)
     /// The host kept the tab `discard` named: its page is one Chrome would keep (`reason`: loading, capturing,
     /// audible, post, pdf, notifications, media, form, shared, unread, unanswered, shown, gone …).
@@ -620,7 +625,7 @@ enum BrowserHostEvent: Codable, Equatable, Sendable {
              .javaScriptDialogReset(let tab), .fileDialog(let tab, _), .dialogClosed(let tab, _), .permissionPrompt(let tab, _),
              .permissionPromptDismissed(let tab, _), .download(let tab, _),
              .findResult(let tab, _), .dragOperation(let tab, _), .passwordField(let tab, _), .editableField(let tab, _, _), .pageCrashed(let tab, _, _, _), .responsiveness(let tab, _),
-             .discarded(let tab), .discardRefused(let tab, _),
+             .demotionReady(let tab), .browserReleased(let tab), .discarded(let tab), .discardRefused(let tab, _),
              .accessibilityTree(let tab, _), .accessibilityLocations(let tab, _), .scrollOffset(let tab, _, _),
              .devTools(let tab, _), .hidden(let tab), .closed(let tab):
             tab

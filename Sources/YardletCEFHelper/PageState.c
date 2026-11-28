@@ -25,7 +25,7 @@ enum {
     kPageStateUnknown = 32
 };
 
-// Media that plays out loud (not paused, ended or muted), whether the frame has media at all, and fields whose
+// Audible media playback, whether the frame has media at all, and fields whose
 // value differs from the one the page loaded with (Chrome's "partially filled forms"): typed or picked text,
 // a changed choice or check box, a chosen file. Read only; the page is not changed.
 static const char kPageStateScript[] =

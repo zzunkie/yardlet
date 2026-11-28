@@ -333,6 +333,29 @@ final class BrowserPanelTabsTests: XCTestCase {
         XCTAssertNotNil(repository.snapshots[task]?.browser?.pages, "the tabs themselves stay")
     }
 
+    func testDiscardingASessionRemovesItsSavedAndLiveBrowserTabs() async throws {
+        let client = makeClient()
+        let repository = InMemoryTaskWorkspaceRepository()
+        let task = SessionRecord(harness: .codex, workspaceURL: URL(filePath: "/tmp/browser"),
+                                 runtimeExecutableURL: URL(filePath: "/usr/bin/true"), title: "Preview")
+        let model = AppModel(store: SessionStore(sessions: [task], repository: InMemorySessionRepository(sessions: [task])),
+                             runtimeSelections: RuntimeSelectionStore(defaults: UserDefaults(suiteName: testDefaultsSuite("BrowserDiscard"))!,
+                                                                      discoversRuntimes: false),
+                             taskWorkspaceRepository: repository, restoresIndexOnLaunch: false, browserClient: { client })
+        let state = model.taskWorkspaces.state(for: task.id)
+        let key = try XCTUnwrap(state.openBrowserTab(address: "https://preview.test/"))
+        let tab = try XCTUnwrap(try state.openBrowserEngineTab(key, viewport: .offscreenDefault))
+        model.taskWorkspaces.persistNow()
+        XCTAssertNotNil(repository.load(for: task.id))
+        try await model.discardSession(id: task.id)
+        model.taskWorkspaces.persistNow()
+        XCTAssertTrue(tab.isClosed)
+        XCTAssertNil(repository.load(for: task.id))
+        XCTAssertTrue(client.tabs(forSession: task.id).isEmpty)
+        XCTAssertNil(client.rememberedTabs(forSession: task.id))
+        await model.shutdown()
+    }
+
     func testTabsLostWithTheHostStayAsTabsAndComeBackTogether() throws {
         let client = makeClient()
         let task = UUID()

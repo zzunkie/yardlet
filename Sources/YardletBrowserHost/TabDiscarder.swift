@@ -1,17 +1,19 @@
 import Foundation
 import YardletCEFBridge
 
-/// The host's side of the memory saver (docs/BROWSER_HOST.md §3 "Memory saver"): Yardlet picks a hidden tab nobody has
-/// used for a while, as Chrome's Memory Saver does, and the host discards it unless the page is one Chrome would not
-/// discard. What the browser process knows comes first (`yardlet_cef_page_signals`); then every frame's renderer is
-/// asked (YardletCEFHelper's PageState.c), and once all of them answered, the main frame's renderer is asked once more
-/// whether it holds another tab's frame, right before it ends: Chromium may put a same-site page, pop-up or iframe of
-/// another tab there meanwhile. A tab that is not discarded says why (`discardRefused`), so Yardlet can try it later.
+/// Checks browser signals and queries every frame before releasing a hidden tab's browser. A renderer-only
+/// discard also confirms that the process holds no other browser's frames before terminating it.
 @MainActor
 final class TabDiscarder {
+    enum Action {
+        case discardRenderer
+        case releaseBrowser(allowAgentForm: Bool)
+    }
+
     private struct Asking {
         let query: Int32
         let urgent: Bool
+        let action: Action
         let asked: Int
         var answers: [Int32] = []
         /// Every frame answered and nothing kept the page: the main frame's last answer ends it.
@@ -33,7 +35,7 @@ final class TabDiscarder {
 
     /// `urgent`: the Mac is short of memory (Chrome's urgent discarding, which does not keep a tab for its notification
     /// permission).
-    func discard(tab: Int, urgent: Bool) {
+    func discard(tab: Int, urgent: Bool, action: Action = .discardRenderer) {
         guard asking[tab] == nil else { return }
         guard !ending.contains(tab) else { return refuse(tab, "ending") }
         var signals = YardletCEFPageSignals()
@@ -42,7 +44,7 @@ final class TabDiscarder {
         let query = takeQuery()
         let asked = Int(yardlet_cef_ask_page_state(Int32(tab), query))
         guard asked > 0 else { return refuse(tab, asked < 0 ? "gone" : "no frames") }
-        asking[tab] = Asking(query: query, urgent: urgent, asked: asked)
+        asking[tab] = Asking(query: query, urgent: urgent, action: action, asked: asked)
         expire(tab: tab, query: query)
     }
 
@@ -56,12 +58,17 @@ final class TabDiscarder {
         // What the browser process knows may have changed while the frames answered (a load began).
         var signals = YardletCEFPageSignals()
         guard yardlet_cef_page_signals(Int32(tab), &signals) == 1 else { return drop(tab, "gone") }
-        if let reason = Self.refusal(signals, urgent: state.urgent) ?? Self.refusal(state.answers) {
+        if let reason = Self.refusal(signals, urgent: state.urgent) ?? Self.refusal(state.answers, action: state.action) {
             return drop(tab, reason)
+        }
+        if case .releaseBrowser = state.action {
+            asking[tab] = nil
+            send(["demotionReady": ["tab": tab]])
+            return
         }
         let last = takeQuery()
         guard yardlet_cef_ask_main_frame(Int32(tab), last) == 1 else { return drop(tab, "gone") }
-        asking[tab] = Asking(query: last, urgent: state.urgent, asked: 1, confirming: true)
+        asking[tab] = Asking(query: last, urgent: state.urgent, action: .discardRenderer, asked: 1, confirming: true)
         expire(tab: tab, query: last)
     }
 
@@ -139,15 +146,20 @@ final class TabDiscarder {
         return nil
     }
 
-    /// What the page's renderers said that keeps it: media playing out loud (also where no sound began, as a muted page
+    /// What the page's renderers said that keeps it: playing media (also where no sound began, as a muted page
     /// unmuted), a form field changed, or a frame that could not be read.
-    static func refusal(_ answers: [Int32]) -> String? {
+    static func refusal(_ answers: [Int32], action: Action) -> String? {
         func any(_ flag: Int) -> Bool { answers.contains { Int($0) & flag != 0 } }
         if any(Int(YardletPageStateUnknown)) { return "unread" }
         if any(Int(YardletPageStatePlaying)) { return "media" }
-        if any(Int(YardletPageStateEdited)) { return "form" }
         guard let main = answers.first(where: { Int($0) & Int(YardletPageStateMain) != 0 }) else { return "unanswered" }
         // Ending the renderer would end another tab's page or frame too.
-        return Int(main) & Int(YardletPageStateShared) != 0 ? "shared" : nil
+        switch action {
+        case .discardRenderer:
+            if any(Int(YardletPageStateEdited)) { return "form" }
+            return Int(main) & Int(YardletPageStateShared) != 0 ? "shared" : nil
+        case .releaseBrowser(let allowAgentForm):
+            return !allowAgentForm && any(Int(YardletPageStateEdited)) ? "form" : nil
+        }
     }
 }

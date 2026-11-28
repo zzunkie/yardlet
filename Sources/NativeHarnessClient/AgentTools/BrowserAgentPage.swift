@@ -290,6 +290,11 @@ final class BrowserAgentPage {
         case .externalAppHandled(_, let url, let app, let outcome):
             externalApps.append((url, app, outcome))
             if externalApps.count > 25 { externalApps.removeFirst() }
+        case .discarded:
+            domainsEnabled = false
+            clearRefs()
+            frameOwners = [:]
+            armedPasskey = nil
         case .closed, .terminated, .pageCrashed:
             dialog = nil
             fileDialog = nil

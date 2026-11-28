@@ -1,11 +1,7 @@
 import Foundation
 
-/// Chrome's Memory Saver for the tasks' browser tabs (docs/BROWSER_HOST.md §3 "Memory saver"): a tab no one has seen
-/// for a while is discarded, keeping its address, title, icon, place and history, and its page loads again when the
-/// tab is shown or the agent uses it. The levels, times and the pages kept are Chrome's (Chromium's
-/// MemorySaverModePolicy, DiscardEligibilityPolicy and UrgentPageDiscardingPolicy); the host checks what only the
-/// engine knows (`BrowserHostCommand.discard`). A tab the agent opened that no one has seen goes sooner
-/// (`Timing.unseenAgentTabIdle`).
+/// Idle-release policy for task browsers (docs/BROWSER_HOST.md, "Memory saver"). The current task uses
+/// Chrome's level and revisit thresholds. Unseen agent tabs and tabs in other tasks have shorter idle times.
 enum BrowserMemorySaver {
     /// Chrome's Memory Saver levels (Settings › Performance "Moderate", "Balanced", "Maximum"; Chromium's
     /// MemorySaverModeAggressiveness kConservative, kMedium and kAggressive). Balanced is Chrome's default.
@@ -61,6 +57,8 @@ enum BrowserMemorySaver {
         /// A tab the agent opened that no panel has shown on screen is discarded once the agent has let it go this long
         /// (Chrome's kNonVisiblePagesUrgentProtectionTime: how long it keeps a hidden tab even while memory is critical).
         var unseenAgentTabIdle: Duration = .seconds(10 * 60)
+        /// Ignore changes associated with the initial load when watching hidden tabs for background activity.
+        var backgroundActivityGrace: Duration = .seconds(5)
         /// How often Yardlet looks for tabs past their time.
         var sweepInterval: Duration = .seconds(60)
         /// A tab the host kept (its page was one Chrome keeps) is not asked about again before this.
@@ -73,9 +71,6 @@ enum BrowserMemorySaver {
 
     /// How many tabs one sweep asks the host about.
     static let discardsPerSweep = 4
-    /// A page's title or icon that changes while it is hidden, later than this after its document began, is the
-    /// page working in the background (a chat's unread count), which Chrome keeps.
-    static let backgroundActivityGrace: Duration = .seconds(5)
     /// How long the agent's tools wait for a discarded page to load again before they go on.
     static let restoreWait: Duration = .seconds(30)
 
@@ -92,6 +87,7 @@ enum BrowserMemorySaver {
         var refusedRecently: Bool
         /// How many times the person brought the tab in front of its task (Chrome's TabRevisitTracker num_revisits).
         var revisits = 0
+        var inactiveTask = false
         /// For a tab the agent opened that no panel has shown on screen, how long since the agent let it go: since it
         /// was hidden or since the agent's turn that used it ended, whichever came later. Nil for any other tab.
         var unseenAgentIdle: Duration?
@@ -107,16 +103,16 @@ enum BrowserMemorySaver {
             if urgent { return candidate.hidden >= timing.urgentProtection }
             guard !candidate.isProtectedFromProactive else { return false }
             if let idle = candidate.unseenAgentIdle, idle >= timing.unseenAgentTabIdle { return true }
+            if candidate.inactiveTask, candidate.hidden >= (timing.hiddenBeforeDiscard ?? .seconds(45 * 60)) { return true }
             return candidate.hidden >= timing.hiddenBeforeDiscard(at: level) && candidate.revisits <= level.maxRevisits
         }
         let order = eligible.sorted { $0.hidden > $1.hidden }.map(\.tab)
         return Array(order.prefix(urgent ? 1 : discardsPerSweep))
     }
 
-    /// Chrome keeps pages that are not on the web: an empty address, about:, file:, the PDF viewer … (kNotWebOrInternal
-    /// and kInvalidURL: Chrome discards http, https, data and its own chrome: pages, which Yardlet's tabs never show).
-    static func isWebPage(_ address: String?) -> Bool {
+    /// Addresses a new browser can load directly, including local previews.
+    static func canReopen(_ address: String?) -> Bool {
         guard let address, let scheme = URL(string: address)?.scheme?.lowercased() else { return false }
-        return ["http", "https", "data"].contains(scheme)
+        return ["http", "https", "data", "file"].contains(scheme)
     }
 }

@@ -35,6 +35,10 @@ final class BrowserHostClient {
     /// Yardlet asked the running host to end (`shutdown`); it closes every tab on its way out.
     private var isHostEnding = false
     private var tabs: [BrowserTabID: BrowserTab] = [:]
+    private let maxLiveHiddenTabs: Int
+    var currentTask: () -> UUID? = { nil }
+    /// Ignore events from a released browser up to its close acknowledgement, even after an immediate reselect.
+    private var releasingBrowsers = Set<BrowserTabID>()
     private var nextTabID = 1
     private var idleTask: Task<Void, Never>?
     private var retentionTask: Task<Void, Never>?
@@ -104,12 +108,14 @@ final class BrowserHostClient {
         agentVisibleWindow: Duration = .seconds(60),
         shutdownTimeout: Duration = .seconds(5),
         personUseWindow: Duration = .seconds(30),
+        maxLiveHiddenTabs: Int = 16,
         launcher: @escaping Launcher
     ) {
         self.idleGrace = idleGrace
         self.agentVisibleWindow = agentVisibleWindow
         self.shutdownTimeout = shutdownTimeout
         self.personUseWindow = personUseWindow
+        self.maxLiveHiddenTabs = max(0, maxLiveHiddenTabs)
         self.launcher = launcher
     }
 
@@ -242,7 +248,9 @@ final class BrowserHostClient {
 
     /// Fronts a session tab.
     func select(_ tab: BrowserTab) {
-        guard let session = tab.session, tabs[tab.id] === tab, frontedTabs[session] != tab.id else { return }
+        guard let session = tab.session, tabs[tab.id] === tab else { return }
+        openIfPending(tab)
+        guard frontedTabs[session] != tab.id else { return }
         frontedTabs[session] = tab.id
         notifySession(session)
     }
@@ -351,7 +359,11 @@ final class BrowserHostClient {
     /// The session's agent turn ended: its own tab and the mark on the tab it used go.
     /// The agent holds none of its tabs from here, before what it set on them goes (`BrowserTab.endAgentEmulation`).
     func endAgentTurn(forSession session: UUID) {
-        for tab in tabs(forSession: session) where tab.isInAgentTurn { tab.leaveAgentTurn() }
+        let held = tabs(forSession: session).filter(\.isInAgentTurn)
+        if !held.isEmpty {
+            for tab in held { tab.leaveAgentTurn() }
+            enforceHiddenBudget()
+        }
         guard agentFronts[session] != nil || agentUsedTabs[session] != nil else { return }
         agentFronts[session] = nil
         agentUsedTabs[session] = nil
@@ -595,7 +607,7 @@ final class BrowserHostClient {
         tab.wasPanelAttached = true
         if occluded {
             tab.occludedPanelCount += 1
-            wake(tab)
+            if tab.pendingAddress == nil { wake(tab) }
         } else {
             panelComesOnScreen(tab)
         }
@@ -629,6 +641,7 @@ final class BrowserHostClient {
     /// a discarded page loads again.
     private func panelComesOnScreen(_ tab: BrowserTab) {
         tab.settleMetrics()
+        tab.releaseAfterScheduledRun = false
         tab.wasOnScreen = true
         tab.isShown = true
         connection?.send(.visibility(tab: tab.id, isHidden: false))
@@ -652,7 +665,10 @@ final class BrowserHostClient {
     func setRemotelyWatched(_ watched: Bool, tab: BrowserTab) {
         guard tabs[tab.id] === tab, tab.isRemotelyWatched != watched else { return }
         tab.isRemotelyWatched = watched
-        if watched { wake(tab) }
+        if watched {
+            tab.releaseAfterScheduledRun = false
+            wake(tab)
+        }
         reschedule()
     }
 
@@ -666,11 +682,14 @@ final class BrowserHostClient {
 
     func noteAgentActivity(on tab: BrowserTab) {
         guard tabs[tab.id] === tab else { return }
+        tab.releaseAfterScheduledRun = false
+        tab.demotionNavigation = nil
         tab.lastAgentActivity = .now
         tab.isInAgentTurn = true
         tab.settleMetrics()
         // Shown before the agent's next command, which follows on the same connection.
         updateVisibility(of: tab, now: .now)
+        openIfPending(tab)
         tab.onAgentActivity?()
         if let session = tab.session {
             onAgentActivity?(session, tab.id)
@@ -819,7 +838,11 @@ final class BrowserHostClient {
             memorySaverTask?.cancel()
             memorySaverTask = nil
             // A restored tab not shown yet is not the saver's: it loads when shown or used either way.
-            if isMemorySaverOn { runMemorySaver() } else { tabs.values.filter { $0.pendingAddress == nil }.forEach(wake) }
+            if isMemorySaverOn {
+                runMemorySaver()
+            } else {
+                tabs.values.filter { $0.pendingAddress == nil || $0.demotedByIdleSweep }.forEach(wake)
+            }
         }
     }
     /// Whether this Mac's memory is critical now (macOS's memory pressure), when Chrome discards a tab every few
@@ -852,30 +875,78 @@ final class BrowserHostClient {
     private func sweepForMemory() -> Duration {
         let urgent = isMemoryCritical()
         let pause = urgent ? memorySaverTiming.urgentInterval : memorySaverTiming.sweepInterval
-        guard isMemorySaverOn, let connection else { return pause }
-        let now = SuspendingClock.now
-        let windowed = Set(chromiumWindows.compactMap(\.tab))
-        let candidates = tabs.values.compactMap {
-            $0.memorySaverCandidate(now: now, hasChromiumWindow: windowed.contains($0.id), retryAfter: memorySaverTiming.retryAfter)
-        }
+        guard isMemorySaverOn else { return pause }
+        enforceHiddenBudget()
+        let candidates = demotionCandidates()
         for id in BrowserMemorySaver.picks(candidates, urgent: urgent, level: memorySaverLevel, timing: memorySaverTiming) {
-            guard let tab = tabs[id] else { continue }
-            tab.isDiscardAsked = true
-            connection.send(.discard(tab: id, urgent: urgent))
+            if let tab = tabs[id] { requestDemotion(tab, urgent: urgent, idleSweep: true) }
         }
         return pause
     }
 
+    private func demotionCandidates() -> [BrowserMemorySaver.Candidate] {
+        let now = SuspendingClock.now
+        let windowed = Set(chromiumWindows.compactMap(\.tab))
+        let current = currentTask()
+        return tabs.values.compactMap { tab in
+            guard var candidate = tab.memorySaverCandidate(now: now, hasChromiumWindow: windowed.contains(tab.id),
+                                                           retryAfter: memorySaverTiming.retryAfter) else { return nil }
+            candidate.inactiveTask = current != tab.session
+            return candidate
+        }
+    }
+
+    private func enforceHiddenBudget() {
+        guard tabs.count > maxLiveHiddenTabs else { return }
+        let hidden = tabs.values.filter { !$0.isShown && $0.pendingAddress == nil && !$0.isDiscardAsked }
+        let excess = hidden.count - maxLiveHiddenTabs
+        guard excess > 0 else { return }
+        let oldest = demotionCandidates().filter { !$0.isProtected && !$0.refusedRecently }.sorted {
+            $0.hidden == $1.hidden ? $0.tab < $1.tab : $0.hidden > $1.hidden
+        }
+        for candidate in oldest.prefix(excess) {
+            if let tab = tabs[candidate.tab] { requestDemotion(tab, urgent: false) }
+        }
+    }
+
+    private func requestDemotion(_ tab: BrowserTab, urgent: Bool, idleSweep: Bool = false) {
+        tab.isDiscardAsked = true
+        tab.demotedByIdleSweep = idleSweep
+        tab.demotionNavigation = tab.navigations
+        connection?.send(.prepareDemotion(tab: tab.id, urgent: urgent, allowAgentForm: tab.openedByAgent && tab.lastPersonUse == nil))
+    }
+
+    func scheduledRunEnded(forSession session: UUID) {
+        let sessionTabs = tabs(forSession: session)
+        guard !sessionTabs.contains(where: { $0.visiblePanelCount > 0 || $0.isRemotelyWatched }) else { return }
+        for tab in sessionTabs where tab.openedByAgent && tab.pendingAddress == nil {
+            tab.releaseAfterScheduledRun = true
+            updateVisibility(of: tab, now: .now)
+            releaseScheduledTabIfIdle(tab)
+        }
+    }
+
+    fileprivate func releaseScheduledTabIfIdle(_ tab: BrowserTab) {
+        guard tab.releaseAfterScheduledRun, let candidate = tab.memorySaverCandidate(now: .now,
+            hasChromiumWindow: chromiumWindows.contains { $0.tab == tab.id }, retryAfter: memorySaverTiming.retryAfter),
+            !candidate.isProtected, !candidate.refusedRecently else { return }
+        requestDemotion(tab, urgent: false)
+    }
+
     /// Loads a discarded tab's page again, as Chrome reloads a discarded tab it shows: a panel shows it, the agent uses
-    /// it, or the saver was turned off. The tab keeps its history; the page's state is what a reload keeps.
+    /// it, or the saver was turned off. Released browsers open at their saved address.
     private func wake(_ tab: BrowserTab) {
         guard tab.isDiscarded, let connection else { return }
         tab.beginRestore()
         if let address = tab.takePendingAddress() {
+            tab.demotedByIdleSweep = false
+            tab.releaseAfterScheduledRun = false
             // A restored tab loads its page for the first time: the host opens it now, hidden if it is.
             let profile = tab.session.flatMap { (openingProfileForSession ?? profileForSession)?($0) }
             connection.send(.open(tab: tab.id, url: address, viewport: tab.viewport ?? .offscreenDefault, profile: profile))
+            tab.restoreBrowserSettings()
             if !tab.isShown { connection.send(.visibility(tab: tab.id, isHidden: true)) }
+            enforceHiddenBudget()
         } else {
             connection.send(.navigation(tab: tab.id, action: .reload))
         }
@@ -1107,7 +1178,7 @@ final class BrowserHostClient {
 
     /// Until when a session tab without a visible panel stays shown for the agent (nil: no longer).
     private func agentVisibleUntil(_ tab: BrowserTab) -> ContinuousClock.Instant? {
-        guard tab.session != nil, tab.visiblePanelCount == 0 else { return nil }
+        guard !tab.releaseAfterScheduledRun, tab.session != nil, tab.visiblePanelCount == 0 else { return nil }
         // A tab the agent opened without a panel is shown from its opening; once a panel has shown
         // the tab, only the agent's use does (a panel's own tab hides as soon as the panel is off screen).
         // A restored tab that waits to be shown is shown by neither: only the agent's use or a panel loads it.
@@ -1137,6 +1208,7 @@ final class BrowserHostClient {
                 earliest = earliest.map { min($0, hideAt) } ?? hideAt
             }
         }
+        enforceHiddenBudget()
         guard let earliest else { return }
         retentionTask = Task { [weak self] in
             try? await Task.sleep(until: earliest, clock: .continuous)
@@ -1146,7 +1218,31 @@ final class BrowserHostClient {
     }
 
     private func handle(_ event: BrowserHostEvent) {
+        if !releasingBrowsers.isEmpty, let id = event.tab, releasingBrowsers.contains(id) {
+            if case .browserReleased = event { releasingBrowsers.remove(id) }
+            return
+        }
         switch event {
+        case .demotionReady(let id):
+            guard let tab = tabs[id], tab.isDiscardAsked else { return }
+            tab.isDiscardAsked = false
+            guard (!tab.demotedByIdleSweep || isMemorySaverOn), tab.demotionNavigation == tab.navigations, let address = tab.currentURL,
+                  !carriesFilledValue(address),
+                  let candidate = tab.memorySaverCandidate(now: .now, hasChromiumWindow: chromiumWindows.contains { $0.tab == id },
+                                                           retryAfter: memorySaverTiming.retryAfter),
+                  !candidate.isProtected else {
+                enforceHiddenBudget()
+                return
+            }
+            releasingBrowsers.insert(id)
+            connection?.send(.releaseBrowser(tab: id))
+            tab.holdUntilShown(address, title: tab.title, favicon: tab.favicon)
+            tab.devTools.browserReleased()
+            tab.receive(.discarded(tab: id))
+            if let session = tab.session { notifySession(session) }
+        case .discardRefused(let id, _):
+            tabs[id]?.receive(event)
+            enforceHiddenBudget()
         case .ready(let processID, let engine, let accelerated):
             hostProcessID = processID
             hostEngine = engine
@@ -1171,6 +1267,7 @@ final class BrowserHostClient {
         case .terminated(let reason):
             for waiting in cookieImports.values { waiting.resume(returning: -1) }
             cookieImports.removeAll()
+            releasingBrowsers.removeAll()
             chromiumWindows = []
             onChromiumWindowsChange?()
             connection = nil
@@ -1242,6 +1339,10 @@ final class BrowserHostClient {
             let changed = tab.isLoading != isLoading
             tab.receive(event)
             // The side panel's tabs show which pages are loading; the rest of the state needs no notice.
+            if !isLoading {
+                releaseScheduledTabIfIdle(tab)
+                enforceHiddenBudget()
+            }
             if changed, let session = tab.session { notifySession(session) }
         case .newWindow(let id, let url, let background, let userGesture):
             guard let tab = tabs[id] else { return }
@@ -1521,6 +1622,9 @@ final class BrowserTab {
     private var agentInputBefore: ContinuousClock.Instant??
     /// Whether the host was last told to refuse the tab's downloads (`refuseDownloads`).
     private var refusesDownloads = false
+    private var restoringBrowserSettings = false
+    private var browserFocused = false
+    private var accessibilityEnabled = false
     /// Whether the host was last told the agent drives the tab (`drivenByAgent`); nil for a pop-up the host opened,
     /// which starts as its page's opener was.
     fileprivate var toldDrivenByAgent: Bool? = false
@@ -1557,11 +1661,15 @@ final class BrowserTab {
     private(set) var minimumValidFrameSequence: UInt64 = 0
     /// Whether the engine was last told the tab is shown (a new tab starts shown).
     fileprivate(set) var isShown = true {
-        didSet { if isShown != oldValue { hiddenSince = isShown ? nil : .now } }
+        didSet {
+            guard isShown != oldValue else { return }
+            hiddenSince = isShown ? nil : .now
+            if isShown { demotionNavigation = nil }
+        }
     }
 
     // Memory saver (BrowserMemorySaver)
-    /// The page was discarded (`BrowserHostEvent.discarded`): the tab keeps its address, title, icon and history, and
+    /// The page was discarded (`BrowserHostEvent.discarded`): the tab keeps its address, title and icon, and
     /// its page loads again when it is shown or the agent uses it. False once that reload begins.
     private(set) var isDiscarded = false
     /// Yardlet asked the host to discard the tab and waits for the answer; one the host has not given within
@@ -1585,7 +1693,10 @@ final class BrowserTab {
     /// The person typed, pasted or deleted text in the page since its document began (Chrome's kUserEdits).
     private var hadPersonEdits = false
     /// The page's title or icon changed while it was hidden (Chrome's kBackgroundActivity).
-    private var workedInBackground = false
+    private(set) var backgroundActivityAt: SuspendingClock.Instant?
+    fileprivate var demotedByIdleSweep = false
+    fileprivate var demotionNavigation: Int?
+    fileprivate var releaseAfterScheduledRun = false
     /// Downloads that have not ended.
     private var activeDownloads: Set<Int> = []
     /// The agent used the tab in its turn that is still going (`BrowserHostClient.noteAgentActivity`, until
@@ -1730,6 +1841,13 @@ final class BrowserTab {
         guard !isClosed else { return }
         var answered: BrowserHostEvent?
         switch command {
+        case .focus(_, let focused):
+            browserFocused = focused
+        case .accessibility(_, let enabled):
+            accessibilityEnabled = enabled
+        case .navigation(_, .reload) where pendingAddress != nil:
+            client?.openIfPending(self)
+            return
         case .resize(_, let viewport):
             self.viewport = viewport
             if emulation == nil { ownViewport = viewport }
@@ -1784,6 +1902,7 @@ final class BrowserTab {
     /// text).
     func notePersonInput(edits: Bool = false, remote: Bool = false) {
         let now = ContinuousClock.now
+        demotionNavigation = nil
         lastPersonInput = now
         lastPersonUse = now
         agentOpened = nil
@@ -1916,6 +2035,22 @@ final class BrowserTab {
         guard refuses != refusesDownloads else { return }
         refusesDownloads = refuses
         client?.send(.refuseDownloads(tab: id, isRefused: refuses))
+    }
+
+    /// Reapply the tab's current settings to a fresh CEF browser, including panel state set while it was hidden.
+    fileprivate func restoreBrowserSettings() {
+        if browserFocused { client?.send(.focus(tab: id, isFocused: true)) }
+        if accessibilityEnabled { client?.send(.accessibility(tab: id, isEnabled: true)) }
+        if refusesDownloads { client?.send(.refuseDownloads(tab: id, isRefused: true)) }
+        if isDrivenByAgent { client?.send(.drivenByAgent(tab: id, isDriven: true)) }
+        guard emulation != nil || emulatedColorScheme != nil else { return }
+        restoringBrowserSettings = true
+        _ = queueEmulationChange {
+            defer { self.restoringBrowserSettings = false }
+            guard !self.isClosed, self.pendingAddress == nil else { return }
+            if let emulation = self.emulation { try? await self.applyEmulation(emulation) }
+            if let scheme = self.emulatedColorScheme { try await self.emulateColorScheme(scheme) }
+        }
     }
 
     /// Tells the host whether the agent drives the tab (`isDrivenByAgent`), where a camera or microphone request asks the
@@ -2059,6 +2194,10 @@ final class BrowserTab {
     /// Runs one change of the emulation after those before it have done all their steps: the agent's, the panel's and a
     /// remote device's never interleave, so none comes back after a later one.
     private func inEmulationOrder(_ change: @escaping @MainActor () async throws -> Void) async throws {
+        try await queueEmulationChange(change).value
+    }
+
+    private func queueEmulationChange(_ change: @escaping @MainActor () async throws -> Void) -> Task<Void, Error> {
         let earlier = emulationChanges
         let work = Task { @MainActor in
             await earlier?.value
@@ -2070,7 +2209,7 @@ final class BrowserTab {
             _ = try? await work.value
             if let self, self.emulationRevision == revision { self.emulationChanges = nil }
         }
-        try await work.value
+        return work
     }
 
     /// Marks every view surface delivered so far as stale so direct IOSurface capture waits for a fresh post-change paint.
@@ -2268,6 +2407,7 @@ final class BrowserTab {
         // Under a phone's size, the agent's own goes with its turn: the phone's end takes the tab back to its own.
         if case .some(.some(let before)) = emulationBeforeRemote, before.owner == .agent { emulationBeforeRemote = .some(nil) }
         if emulatedColorScheme != nil { try? await emulateColorScheme(nil) }
+        client?.releaseScheduledTabIfIdle(self)
     }
 
     private func readBrowserIdentity() async throws -> (major: String, brands: [JSONValue]) {
@@ -2289,22 +2429,20 @@ final class BrowserTab {
     /// shown, outside a task, already discarded or asked about.
     fileprivate func memorySaverCandidate(now: SuspendingClock.Instant, hasChromiumWindow: Bool,
                                           retryAfter: Duration) -> BrowserMemorySaver.Candidate? {
-        guard session != nil, !isShown, let hiddenSince, !isDiscarded, !isDiscardAsked, !isClosed else { return nil }
-        // What Chrome keeps whatever the memory: the tab a window shows (here a panel, also one off screen), a page
-        // still loading, ended or stuck, a person's typing or a page asking the person something, a download, the
-        // agent's tab in its turn or handed to the person, and pages that are not on the web.
-        let isProtected = isPanelAttached || isLoading || crash != nil || openFailure != nil || unresponsive != nil
-            || isClosing || handoff != nil || isInAgentTurn || hasChromiumWindow || hadPersonEdits
+        guard session != nil, !isShown, let hiddenSince, restore == .none, !isDiscarded, !isDiscardAsked, !isClosed else { return nil }
+        // Keep live work, person input and pages that cannot safely reopen at their current address.
+        let isProtected = isLoading || emulationChanges != nil || holdsLayout || crash != nil || openFailure != nil || unresponsive != nil
+            || vaultSetupAsk != nil || isClosing || handoff != nil || isInAgentTurn || hasChromiumWindow || hadPersonEdits
             || permissionPrompt != nil || externalAppQuestion != nil || closeQuestion != nil || javaScriptDialog != nil
-            || fileDialog != nil || !activeDownloads.isEmpty || !BrowserMemorySaver.isWebPage(currentURL)
+            || fileDialog != nil || !activeDownloads.isEmpty || !BrowserMemorySaver.canReopen(currentURL)
+            || currentURL.map { client?.carriesFilledValue($0) == true } == true
         // A tab the agent opened that no one has seen: the agent let it go when it hid or its turn ended, the later.
-        let unseenAgentIdle = openedByAgent && !wasOnScreen
-            ? max(hiddenSince, agentTurnEndedAt ?? hiddenSince).duration(to: now) : nil
+        let idle = max(hiddenSince, agentTurnEndedAt ?? hiddenSince).duration(to: now)
         return BrowserMemorySaver.Candidate(
-            tab: id, hidden: hiddenSince.duration(to: now), isProtected: isProtected,
-            isProtectedFromProactive: workedInBackground,
+            tab: id, hidden: idle, isProtected: isProtected,
+            isProtectedFromProactive: backgroundActivityAt.map { $0.duration(to: now) < .seconds(10 * 60) } ?? false,
             refusedRecently: discardRefusedAt.map { $0.duration(to: now) < retryAfter } ?? false,
-            revisits: revisits, unseenAgentIdle: unseenAgentIdle)
+            revisits: revisits, unseenAgentIdle: openedByAgent && !wasOnScreen ? idle : nil)
     }
 
     /// A restored tab waits to be shown: hidden, its page not loaded, with the address, title and icon it had.
@@ -2316,6 +2454,9 @@ final class BrowserTab {
         titleAddress = address
         self.favicon = favicon
         faviconHost = URL(string: address)?.host()
+        canGoBack = false
+        canGoForward = false
+        lastViewFrameAt = nil
         isDiscarded = true
         isShown = false
     }
@@ -2329,6 +2470,7 @@ final class BrowserTab {
     /// The memory saver loads the discarded page again (`BrowserHostClient.wake`).
     fileprivate func beginRestore() {
         isDiscarded = false
+        hiddenSince = isShown ? nil : .now
         restore = .waiting
     }
 
@@ -2337,15 +2479,15 @@ final class BrowserTab {
     /// the page, the tool's use loads it again.
     func untilRestored() async {
         let deadline = ContinuousClock.now + BrowserMemorySaver.restoreWait
-        while restore != .none || isDiscardAsked, !isClosed, ContinuousClock.now < deadline {
+        while restore != .none || restoringBrowserSettings || isDiscardAsked, !isClosed, ContinuousClock.now < deadline {
             try? await Task.sleep(for: .milliseconds(100))
         }
     }
 
     /// The page's title or icon changed: while the tab is hidden and past its load, the page works in the background.
     private func noteChangeWhileHidden() {
-        guard !isShown, documentStartedAt.duration(to: .now) > BrowserMemorySaver.backgroundActivityGrace else { return }
-        workedInBackground = true
+        guard !isShown, let client, documentStartedAt.duration(to: .now) > client.memorySaverTiming.backgroundActivityGrace else { return }
+        backgroundActivityAt = .now
     }
 
     fileprivate func markClosed() {
@@ -2385,8 +2527,9 @@ final class BrowserTab {
             self.title = title
             titleAddress = currentURL
         case .favicon(_, let url, let png):
-            noteChangeWhileHidden()
-            favicon = png.isEmpty ? nil : png
+            let icon = png.isEmpty ? nil : png
+            if icon != favicon { noteChangeWhileHidden() }
+            favicon = icon
             faviconHost = URL(string: currentURL ?? url)?.host()
         case .loading(_, let isLoading, let canGoBack, let canGoForward):
             self.isLoading = isLoading
@@ -2400,6 +2543,7 @@ final class BrowserTab {
                 restore = .none
             }
         case .discarded:
+            requestMark = nil
             invalidateSurfaceSequence()
             blockedPopupRequests = []
             openingBlockedPopups = []
@@ -2483,7 +2627,7 @@ final class BrowserTab {
             externalAppQuestion = nil
             documentStartedAt = .now
             hadPersonEdits = false
-            workedInBackground = false
+            backgroundActivityAt = nil
             noteDocumentStarted()
             // The chooser was the document's that went, as Chrome's goes with its frame.
             if let chooser = fileDialog {
