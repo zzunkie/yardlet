@@ -81,6 +81,7 @@ binding nothing is counted, and a failed write never fails a request (`src/metri
 | `account.deleted` | | an account is deleted |
 | `update.check` | Yardlet version, `arm64` or `x86_64` | Sparkle reads an appcast (edge Worker) |
 | `download` | channel, `arm64` or `x86_64`, `latest` or `pinned` | someone follows a download link (edge Worker) |
+| `site.visit` | normalized page path, referring host (`utm:<tag>`, `internal`, or `direct`) | someone opens a `yardlet.app` HTML page (edge Worker) |
 
 Analytics Engine keeps points for 3 months. `scripts/metrics.mjs` prints the last week's tables (or
 `--days <n>`, `--json`) through the Analytics Engine SQL API:
@@ -97,6 +98,11 @@ the repository. A weekly report job can run the same command.
 `edge/` is a second Worker, `yardlet-edge`, deployed on its own from that folder; it shares this folder's
 toolchain, lock file, tests and CI, and the relay's counts dataset.
 
+- Site visits: HTML page routes on `yardlet.app` (`/`, `/index.html`, `/changelog.html`, `/privacy.html`,
+  `/support.html`, `/terms.html`, `/blog`, `/blog/*`) pass each request on to GitHub Pages unchanged. A `200`
+  `text/html` `GET` from a non-bot browser counts one `site.visit` under the normalized path and coarse traffic
+  source (sanitized `utm_source`, normalized referring host, `internal`, or `direct`), with no IP address, cookie,
+  full URL or identifier stored.
 - Update feeds: routes on `yardlet.app/appcast.xml` (Apple silicon) and `yardlet.app/appcast-x86_64.xml` (Intel)
   pass each request on to the site unchanged, so Sparkle gets the same feed, headers and caching as before. A
   `GET` from Sparkle counts one `update.check` under the Yardlet version in its user agent

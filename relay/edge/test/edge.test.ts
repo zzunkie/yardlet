@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import edge, { isBot, yardletVersion, type EdgeEnv } from "../src/index";
+import edge, { isBot, isSiteBot, normalizeSitePath, visitSource, yardletVersion, type EdgeEnv } from "../src/index";
 
 const RELEASES = "https://github.com/zzunkie/yardlet/releases/download";
 const SPARKLE = "Yardlet/0.11.16 Sparkle/2.10.1";
@@ -138,5 +138,49 @@ describe("downloads", () => {
     expect((await call({}, "https://dl.yardlet.app/site/ppc")).status).toBe(404);
     expect((await call({}, "https://dl.yardlet.app/site/arm64", { method: "POST" })).status).toBe(405);
     expect((await call({}, "https://dl.yardlet.app/")).headers.get("location")).toBe("https://yardlet.app/");
+  });
+});
+
+describe("site visits", () => {
+  it("normalizes paths and traffic sources without storing full URLs", () => {
+    expect(normalizeSitePath("/index.html")).toBe("/");
+    expect(normalizeSitePath("/blog/index.html")).toBe("/blog/");
+    expect(normalizeSitePath("/blog/post.html")).toBe("/blog/post.html");
+
+    expect(visitSource(new URL("https://yardlet.app/"), null, "yardlet.app")).toBe("direct");
+    expect(visitSource(new URL("https://yardlet.app/"), "https://t.co/abc123", "yardlet.app")).toBe("x.com");
+    expect(visitSource(new URL("https://yardlet.app/"), "https://www.google.co.kr/search?q=yardlet", "yardlet.app")).toBe("google.com");
+    expect(visitSource(new URL("https://yardlet.app/blog/"), "https://yardlet.app/", "yardlet.app")).toBe("internal");
+    expect(visitSource(new URL("https://yardlet.app/?utm_source=iOSDevWeekly"), "https://t.co/abc", "yardlet.app")).toBe("utm:iosdevweekly");
+    expect(visitSource(new URL("https://yardlet.app/?utm_source=bad%20tag"), "https://news.ycombinator.com/item?id=1", "yardlet.app")).toBe(
+      "news.ycombinator.com",
+    );
+    expect(isSiteBot("curl/8.7.1")).toBe(true);
+    expect(isSiteBot(SAFARI)).toBe(false);
+  });
+
+  it("passes HTML pages unchanged and counts human visits by path and source", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const req = new Request(input, init);
+      const path = new URL(req.url).pathname;
+      if (path === "/missing.html") return new Response("not found", { status: 404, headers: { "content-type": "text/html" } });
+      return new Response("<html>ok</html>", { status: 200, headers: { "content-type": "text/html; charset=utf-8", etag: '"home"' } });
+    });
+    const { points, dataset } = metrics();
+
+    const home = await call({ METRICS: dataset }, "https://yardlet.app/", {
+      headers: { "user-agent": SAFARI, referer: "https://news.ycombinator.com/item?id=42" },
+    });
+    expect(home.status).toBe(200);
+    expect(home.headers.get("etag")).toBe('"home"');
+    expect(await home.text()).toBe("<html>ok</html>");
+
+    // Bots, curl, HEAD, and 404s pass through without counting.
+    await call({ METRICS: dataset }, "https://yardlet.app/", { headers: { "user-agent": "Googlebot/2.1" } });
+    await call({ METRICS: dataset }, "https://yardlet.app/", { headers: { "user-agent": "curl/8.7.1" } });
+    await call({ METRICS: dataset }, "https://yardlet.app/", { method: "HEAD", headers: { "user-agent": SAFARI } });
+    await call({ METRICS: dataset }, "https://yardlet.app/missing.html", { headers: { "user-agent": SAFARI } });
+
+    expect(points).toEqual([{ indexes: ["site.visit"], blobs: ["site.visit", "/", "news.ycombinator.com"], doubles: [1] }]);
   });
 });
