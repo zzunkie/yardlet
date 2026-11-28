@@ -244,13 +244,13 @@ final class VaultSettingsRenderingTests: XCTestCase {
 
     /// Finding an item (design §16): Settings → Passwords narrows its codes and items to a search, and the key
     /// button's list shows the page's own items, a search over the rest, and the codes alone from the code bar.
-    func testSearchesAndTheKeyButtonsListDraw() throws {
+    func testSearchesAndTheKeyButtonsListDraw() async throws {
         let directory = try WindowlessRender.directory("vault-qa")
         let fabrikam = VaultItem(name: "Fabrikam", sites: [], username: "ada", hasOneTimeCode: true)
         let northwind = VaultItem(name: "Northwind", sites: ["northwind.test"], username: "ada@example.test", hasOneTimeCode: true)
         let key = OneTimeCodeSecret(key: Data("12345678901234567890".utf8))
         let vault = vault(items: [Self.github, Self.vercel, Self.bank, fabrikam, northwind])
-        for item in [fabrikam, northwind] { try vault.save(item, secret: VaultSecret(oneTimeCode: key)) }
+        for item in [fabrikam, northwind] { try await vault.save(item, secret: VaultSecret(oneTimeCode: key)) }
 
         let settingsSize = NSSize(width: 640, height: 560)
         let settings = VaultSettingsView(vault: vault, query: "ada git").padding(20)
@@ -385,27 +385,31 @@ final class VaultSettingsRenderingTests: XCTestCase {
         XCTAssertTrue(spoken.contains { $0.contains(L10n.string("Available in team-signed builds of Yardlet.")) }, "\(spoken)")
     }
 
-    func testTheItemSheetDraws() throws {
+    func testTheItemSheetDraws() async throws {
         let directory = try WindowlessRender.directory("vault-qa")
         let vault = vault()
         let size = NSSize(width: 520, height: 600)
         let sheet = VaultItemSheet(vault: vault, item: Self.github, onDone: {})
             .frame(width: size.width, height: size.height, alignment: .top)
-        let captures = try WindowlessRender.hostedInBothAppearances("vault-item", in: directory, size: size) { appearance in
-            sheet.environment(\.colorScheme, appearance.colorScheme).background(ParityTheme.canvas)
+        for appearance in WindowlessRender.Appearance.allCases {
+            let host = WindowlessRender.Host(sheet.environment(\.colorScheme, appearance.colorScheme)
+                .background(ParityTheme.canvas), size: size, appearance: appearance)
+            defer { host.close() }
+            await host.settle(until: {
+                host.accessibilityElements().contains { $0.label.contains(L10n.string("Copy Code")) }
+            })
+            let capture = try host.capture()
+            XCTAssertTrue(WindowlessRender.drawsContent(capture.bitmap, step: 6))
+            try WindowlessRender.writePNG(capture.bitmap, to: directory.appending(path: "vault-item-\(appearance.suffix).png"))
+            let spoken = host.accessibilityElements().map { "\($0.label) \($0.value)" }
+            for text in [L10n.string("Recent use"), L10n.string("Filled"), L10n.string("Refused"), "Fix the release CI",
+                         L10n.string("Show a saved password"), L10n.string("Copy Code"), L10n.string("Previous passwords"),
+                         L10n.format("%lld kept", Int64(2))] {
+                XCTAssertTrue(spoken.contains { $0.contains(text) }, "No \(text): \(spoken)")
+            }
+            XCTAssertFalse(spoken.contains { $0.contains("not-a-real-password") || $0.contains("an-older-password") },
+                           "A password showed unasked: \(spoken)")
         }
-        for capture in captures { XCTAssertTrue(WindowlessRender.drawsContent(capture.bitmap, step: 6)) }
-        let host = WindowlessRender.Host(sheet, size: size)
-        defer { host.close() }
-        host.settle()
-        let spoken = host.accessibilityElements().map { "\($0.label) \($0.value)" }
-        for text in [L10n.string("Recent use"), L10n.string("Filled"), L10n.string("Refused"), "Fix the release CI",
-                     L10n.string("Show a saved password"), L10n.string("Copy Code"), L10n.string("Previous passwords"),
-                     L10n.format("%lld kept", Int64(2))] {
-            XCTAssertTrue(spoken.contains { $0.contains(text) }, "No \(text): \(spoken)")
-        }
-        XCTAssertFalse(spoken.contains { $0.contains("not-a-real-password") || $0.contains("an-older-password") },
-                       "A password showed unasked: \(spoken)")
 
         let draft = VaultItemSheet(vault: vault, item: nil, draftSites: ["example.test"], draftUsername: "ada@example.test",
                                    onDone: {})
@@ -419,18 +423,22 @@ final class VaultSettingsRenderingTests: XCTestCase {
         // item keeps its password and passkey, and neither it nor its keychain secret holds a code. An item that holds
         // only its code points to Delete and saves nothing.
         let codeOnly = VaultItem(name: "Fabrikam", sites: [], username: "ada", hasOneTimeCode: true)
-        try vault.save(codeOnly, secret: VaultSecret(oneTimeCode: OneTimeCodeSecret(key: Data("12345678901234567890".utf8))))
+        try await vault.save(codeOnly, secret: VaultSecret(oneTimeCode: OneTimeCodeSecret(key: Data("12345678901234567890".utf8))))
         for (name, item, note) in [("vault-item-code-removed", Self.github, "Removed when you save"),
                                    ("vault-item-code-only-removed", codeOnly,
                                     "This item has only its code. Delete it instead.")] {
             for appearance in WindowlessRender.Appearance.allCases {
+                var finishedSaving = false
                 let removing = WindowlessRender.Host(
-                    VaultItemSheet(vault: vault, item: item, onDone: {})
+                    VaultItemSheet(vault: vault, item: item, onDone: { finishedSaving = true })
                         .frame(width: size.width, height: size.height, alignment: .top)
                         .environment(\.colorScheme, appearance.colorScheme).background(ParityTheme.canvas),
                     size: size, appearance: appearance)
                 defer { removing.close() }
                 removing.settle()
+                try await waitUntil {
+                    removing.accessibilityElements().contains { $0.label == L10n.string("Remove") }
+                }
                 XCTAssertTrue(removing.hosting.pressAccessibilityElement(labelled: L10n.string("Remove")), name)
                 removing.settle()
                 try WindowlessRender.writePNG(removing.capture().bitmap,
@@ -438,22 +446,27 @@ final class VaultSettingsRenderingTests: XCTestCase {
                 let shown = removing.accessibilityElements().map { "\($0.label) \($0.value)" }
                 XCTAssertTrue(shown.contains { $0.contains(L10n.string(note)) }, "\(name): \(shown)")
                 XCTAssertFalse(shown.contains { $0.contains(L10n.string("Copy Code")) }, "\(name): \(shown)")
-                if appearance == .dark { _ = removing.hosting.pressAccessibilityElement(labelled: L10n.string("Save")) }
+                if appearance == .dark {
+                    _ = removing.hosting.pressAccessibilityElement(labelled: L10n.string("Save"))
+                    if item.id == Self.github.id { try await waitUntil { finishedSaving } }
+                }
             }
         }
         let saved = try XCTUnwrap(vault.items.first { $0.id == Self.github.id })
         XCTAssertEqual([saved.hasPassword, saved.hasOneTimeCode, saved.hasPasskey], [true, false, true])
-        let secret = try XCTUnwrap(vault.secret(of: Self.github.id))
+        let stored = await vault.secret(of: Self.github.id)
+        let secret = try XCTUnwrap(stored)
         XCTAssertNil(secret.oneTimeCode)
         XCTAssertEqual(secret.password, "not-a-real-password")
         XCTAssertNotNil(secret.passkey)
         XCTAssertEqual(vault.items.first { $0.id == codeOnly.id }?.hasOneTimeCode, true)
-        XCTAssertNotNil(vault.secret(of: codeOnly.id)?.oneTimeCode)
+        let remaining = await vault.secret(of: codeOnly.id)
+        XCTAssertNotNil(remaining?.oneTimeCode)
     }
 
     /// Two AWS accounts with one IAM username (design §17): the list shows each one's username and account beside its
     /// name, and the item sheet shows the account field under the page's own label.
-    func testAccountsOfOneUsernameDraw() throws {
+    func testAccountsOfOneUsernameDraw() async throws {
         let directory = try WindowlessRender.directory("vault-qa")
         let account = { (value: String) in
             [VaultFormField(id: "account", name: "account", label: "Account ID (12 digits) or account alias", value: value)]
@@ -485,11 +498,12 @@ final class VaultSettingsRenderingTests: XCTestCase {
         // A sign-in that asks for an organization's ID and password in masked fields before the person's own: each is a
         // masked row under the page's label, like the password's, and one left blank keeps its value on Save.
         let business = VaultItem(name: "erp.example.test", sites: ["example.test"], username: "ada", hasPassword: true)
-        try vault.save(business, secret: VaultSecret(password: "not-a-real-password", fields: [
+        try await vault.save(business, secret: VaultSecret(password: "not-a-real-password", fields: [
             VaultFormField(id: "orgId", name: "orgId", label: "Organization ID", value: "org-id-not-real"),
             VaultFormField(id: "orgPw", name: "orgPw", label: "Organization password", value: "org-pw-not-real")]))
         let secretSize = NSSize(width: 520, height: 470)
-        let secretSheet = VaultItemSheet(vault: vault, item: business, onDone: {})
+        var finishedSaving = false
+        let secretSheet = VaultItemSheet(vault: vault, item: business, onDone: { finishedSaving = true })
             .frame(width: secretSize.width, height: secretSize.height, alignment: .top)
         try WindowlessRender.hostedInBothAppearances("vault-item-secret-fields", in: directory, size: secretSize) { appearance in
             secretSheet.environment(\.colorScheme, appearance.colorScheme).background(ParityTheme.canvas)
@@ -498,6 +512,9 @@ final class VaultSettingsRenderingTests: XCTestCase {
                                                size: secretSize)
         defer { secretHost.close() }
         secretHost.settle()
+        try await waitUntil {
+            secretHost.accessibilityElements().contains { "\($0.label) \($0.value)".contains("Organization password") }
+        }
         let shown = secretHost.accessibilityElements().map { "\($0.label) \($0.value)" }
         for text in ["Organization ID", "Organization password"] {
             XCTAssertTrue(shown.contains { $0.contains(text) }, "No \(text): \(shown)")
@@ -511,9 +528,11 @@ final class VaultSettingsRenderingTests: XCTestCase {
         let added = secretHost.accessibilityElements().map { "\($0.label) \($0.value)" }
         XCTAssertEqual(added.count, shown.count + 3, "The added row's name, value and minus: \(added)")
         XCTAssertTrue(secretHost.hosting.pressAccessibilityElement(labelled: L10n.string("Save")))
-        XCTAssertEqual(vault.secret(of: business.id)?.fields?.map(\.value), ["org-id-not-real", "org-pw-not-real"],
+        try await waitUntil { finishedSaving }
+        let savedSecret = await vault.secret(of: business.id)
+        XCTAssertEqual(savedSecret?.fields?.map(\.value), ["org-id-not-real", "org-pw-not-real"],
                        "Save without a change lost a secret field")
-        XCTAssertEqual(vault.secret(of: business.id)?.password, "not-a-real-password")
+        XCTAssertEqual(savedSecret?.password, "not-a-real-password")
     }
 
     /// The browser panel's save bar (design §15, §17): saving a sign-in, updating one of two accounts of one username (the
@@ -609,7 +628,7 @@ final class VaultSettingsRenderingTests: XCTestCase {
     /// Addresses and cards (design §18): the section in Settings → Passwords with its switch, an address, and cards by
     /// their network or nickname and last four digits, never the number; the card and address sheets; and the browser
     /// panel's bars to save a card or an address and to fill one, or choose among several.
-    func testAddressesAndCardsDraw() throws {
+    func testAddressesAndCardsDraw() async throws {
         let directory = try WindowlessRender.directory("vault-qa")
         let card = VaultCard(name: "Ada Lovelace", number: "4242424242424242", expiryMonth: 7, expiryYear: 2034)
         let work = VaultCard(number: "5555555555554444", expiryMonth: 1, expiryYear: 2031, nickname: "Work")
@@ -619,6 +638,7 @@ final class VaultSettingsRenderingTests: XCTestCase {
             secrets: InMemoryVaultSecretStore(wallet: VaultWallet(addresses: [address], cards: [card, work])),
             repository: InMemoryVaultRepository(items: [Self.github]), hmac: MacVault.hmac, isAllowedBuild: true,
             defaults: .vaultTests()))
+        _ = await vault.loadWallet()
         let size = NSSize(width: 640, height: 340)
         let section = VaultWalletSection(vault: vault).padding(20).frame(width: size.width, height: size.height, alignment: .top)
         try WindowlessRender.hostedInBothAppearances("settings-vault-wallet", in: directory, size: size) { appearance in
@@ -699,11 +719,13 @@ final class VaultSettingsRenderingTests: XCTestCase {
         ])
 
         let vault = vault(items: [Self.vercel])
-        XCTAssertEqual(vault.importSignIns(fromChrome + fromBitwarden), 4)
+        let imported = await vault.importSignIns(fromChrome + fromBitwarden)
+        XCTAssertEqual(imported, 4)
         XCTAssertEqual(vault.items.map(\.name), ["Vercel", "github.com", "Example, Inc.", "Code only"])
         XCTAssertEqual(vault.items.map(\.policy), [.whileUnlocked, .always, .always, .always])
         XCTAssertEqual(vault.items.last.map { [$0.hasPassword, $0.hasOneTimeCode] }, [false, true])
-        let vercel = try XCTUnwrap(vault.secret(of: Self.vercel.id))
+        let stored = await vault.secret(of: Self.vercel.id)
+        let vercel = try XCTUnwrap(stored)
         XCTAssertEqual(vercel.password, "not-a-real-password")
         XCTAssertEqual(vercel.oneTimeCode?.key, Data("12345678901234567890".utf8))
         XCTAssertEqual(vercel.passkey, Self.passkey, "The saved passkey stays")
@@ -782,13 +804,17 @@ final class VaultSettingsRenderingTests: XCTestCase {
         // sign-in apart from each other stay two items.
         let returned = self.vault(items: [])
         let entries = VaultCSVImport.entries(text)
-        XCTAssertEqual(returned.importSignIns(entries), 3)
+        let importedCount = await returned.importSignIns(entries)
+        XCTAssertEqual(importedCount, 3)
         XCTAssertEqual(returned.items.map(\.name), ["GitHub (work)", "Example, \"Bank\"", "Example Code"])
         XCTAssertEqual(returned.items.map(\.sites), [["github.com"], ["examplebank.test", "http://localhost:3000"], []])
         XCTAssertEqual(returned.items.map(\.username), ["ada@example.test", "+82 10-0000-0000", "grace"])
-        XCTAssertEqual(returned.items.map { returned.secret(of: $0.id)?.password }, ["not-a-real-password", bankPassword, nil])
-        XCTAssertEqual(returned.items.map { returned.secret(of: $0.id)?.oneTimeCode }, [githubCode, nil, eightDigits])
-        XCTAssertEqual(returned.importSignIns(entries), 2)
+        var secrets: [VaultSecret?] = []
+        for item in returned.items { secrets.append(await returned.secret(of: item.id)) }
+        XCTAssertEqual(secrets.map { $0?.password }, ["not-a-real-password", bankPassword, nil])
+        XCTAssertEqual(secrets.map { $0?.oneTimeCode }, [githubCode, nil, eightDigits])
+        let updatedCount = await returned.importSignIns(entries)
+        XCTAssertEqual(updatedCount, 2)
         XCTAssertEqual(returned.items.count, 3)
         let apart = "Title,URL,Username,Password\nLogin,https://a.example,ada,same\nOther,https://c.example,ada,x\n"
             + "Login,https://b.example,ada,same\n"
@@ -870,24 +896,29 @@ final class VaultSettingsRenderingTests: XCTestCase {
             secrets: InMemoryVaultSecretStore([saved.id: VaultSecret(password: "a-newer-password")]),
             repository: InMemoryVaultRepository(items: [saved]), hmac: MacVault.hmac, isAllowedBuild: true,
             defaults: .vaultTests()))
-        let restored = target.restoreBackup(contents)
+        let restored = await target.restoreBackup(contents)
         XCTAssertEqual(restored, VaultCenter.BackupRestore(count: 3, walletCount: 2,
                                                            passkeys: ["GitHub (work) · github.com", "Vercel · vercel.com"]))
         XCTAssertEqual(target.items.map(\.name), ["GitHub", "Example Bank", "Example Code"])
         XCTAssertEqual(target.items.map(\.policy), [.whileUnlocked, .everyTime, .always])
         XCTAssertEqual(target.items.map(\.sites), [["github.com"], ["examplebank.test", "http://localhost:3000"], []])
-        let github = try XCTUnwrap(target.secret(of: saved.id))
+        let stored = await target.secret(of: saved.id)
+        let github = try XCTUnwrap(stored)
         XCTAssertEqual(github.password, "a-newer-password")
         XCTAssertEqual(github.oneTimeCode, githubCode)
         XCTAssertEqual(github.previousPasswords?.map(\.password), ["not-a-real-password"])
         XCTAssertNil(github.passkey)
         let bank = try XCTUnwrap(target.items.first { $0.name == "Example Bank" })
-        XCTAssertEqual(target.secret(of: bank.id)?.password, "not-a-real-bank-password")
-        XCTAssertEqual(target.items.last.flatMap { target.secret(of: $0.id)?.oneTimeCode }, eightDigits)
+        let bankSecret = await target.secret(of: bank.id)
+        XCTAssertEqual(bankSecret?.password, "not-a-real-bank-password")
+        let lastID = try XCTUnwrap(target.items.last?.id)
+        let lastSecret = await target.secret(of: lastID)
+        XCTAssertEqual(lastSecret?.oneTimeCode, eightDigits)
         XCTAssertEqual(target.wallet.addresses.map(\.street), ["12 Example Street"])
         XCTAssertEqual(target.wallet.cards.map(\.number), ["4242424242424242"])
-        XCTAssertEqual(target.restoreBackup(contents).count, 0)
-        XCTAssertEqual(target.restoreBackup(contents).walletCount, 0)
+        let repeated = await target.restoreBackup(contents)
+        XCTAssertEqual(repeated.count, 0)
+        XCTAssertEqual(repeated.walletCount, 0)
         XCTAssertEqual(target.items.count, 3)
 
         // An item whose sites changed outside Yardlet takes nothing from a backup or a CSV, and keeps what the keychain
@@ -899,12 +930,16 @@ final class VaultSettingsRenderingTests: XCTestCase {
         let guarded = VaultCenter(environment: VaultCenter.Environment(
             secrets: InMemoryVaultSecretStore([tampered.id: kept]), repository: InMemoryVaultRepository(items: [tampered]),
             hmac: MacVault.hmac, isAllowedBuild: true, defaults: .vaultTests()))
-        XCTAssertEqual(guarded.restoreBackup(contents).count, 2)
-        XCTAssertEqual(guarded.importSignIns(VaultCSVImport.entries("name,url,username,password\nBank,https://examplebank.test,ada,new\n")), 0)
-        XCTAssertEqual(guarded.secret(of: tampered.id), kept)
+        let restoredCount = await guarded.restoreBackup(contents)
+        XCTAssertEqual(restoredCount.count, 2)
+        let importedCount = await guarded.importSignIns(VaultCSVImport.entries("name,url,username,password\nBank,https://examplebank.test,ada,new\n"))
+        XCTAssertEqual(importedCount, 0)
+        let retained = await guarded.secret(of: tampered.id)
+        XCTAssertEqual(retained, kept)
         let crafted = VaultBackup.Contents(items: [.init(name: "Wide", sites: ["com", "http://example.com"], username: "x",
                                                          policy: .always, createdAt: Date(), password: "p", hadPasskey: false)])
-        XCTAssertEqual(guarded.restoreBackup(crafted).count, 0)
+        let rejected = await guarded.restoreBackup(crafted)
+        XCTAssertEqual(rejected.count, 0)
         XCTAssertFalse(guarded.items.contains { $0.name == "Wide" })
 
         let directory = try WindowlessRender.directory("vault-qa")

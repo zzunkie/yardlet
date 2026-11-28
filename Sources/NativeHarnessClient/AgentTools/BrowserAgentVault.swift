@@ -1761,7 +1761,8 @@ extension BrowserAgentTools {
         let spellings = setups.flatMap { VaultPageScripts.spellings(ofSetupKey: $0.secret.key) }
         spellings.forEach { vaultScrub.add($0) }
         await VaultPageScripts.noteSecretsShown(spellings, on: page.cdp, fills: page.vaultFills, in: frame.recordedPlace)
-        let new = setups.filter { !vault.holds($0.secret) }
+        var new: [OneTimeCodeSetup] = []
+        for setup in setups where await !vault.holds(setup.secret) { new.append(setup) }
         return new.count == 1 ? new[0] : nil
     }
 
@@ -1821,7 +1822,7 @@ extension BrowserAgentTools {
                 case .newItem: into = nil
                 }
                 do {
-                    return try vault.saveOneTimeCode(setup, site: site, into: into)
+                    return try await vault.saveOneTimeCode(setup, site: site, into: into)
                 } catch {
                     throw BrowserAgentToolError("Yardlet could not save the two-factor code: \(error.localizedDescription)")
                 }
@@ -1923,7 +1924,7 @@ extension BrowserAgentTools {
         }
         let item: VaultItem
         do {
-            item = try vault.presaveMadePassword(password, origin: origin, username: username, name: itemName,
+            item = try await vault.presaveMadePassword(password, origin: origin, username: username, name: itemName,
                                                  taskID: sessionID)
         } catch {
             throw BrowserAgentToolError("Yardlet could not save a new password, so it filled none.")
@@ -1951,7 +1952,7 @@ extension BrowserAgentTools {
         let kinds = filled["kinds"]?.arrayValue?.compactMap(\.stringValue) ?? []
         if let failure = filled["error"]?.stringValue {
             page.vaultFills.withdraw(record)
-            try? vault.deleteMadePassword(item.id, origin: origin, taskID: sessionID,
+            try? await vault.deleteMadePassword(item.id, origin: origin, taskID: sessionID,
                                           "The page took nothing (\(failure)).")
             let message = Self.fillFailure(failure, ref: ref)
             vault.record(grant, for: request, filled: [], failure: message)

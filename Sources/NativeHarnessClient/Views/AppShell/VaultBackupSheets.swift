@@ -73,9 +73,10 @@ struct VaultRecoveryKeySheet: View {
 struct VaultBackupKeySheet: View {
     let fileName: String
     /// Imports with the key typed; the words to show when it did not.
-    let onImport: (String) -> String?
+    let onImport: (String) async -> String?
     let onCancel: () -> Void
     @State private var key = ""
+    @State private var importing = false
     @State private var failure: String?
 
     var body: some View {
@@ -113,14 +114,19 @@ struct VaultBackupKeySheet: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
         }
+        .disabled(importing)
         .frame(width: 480)
         .background(ParityTheme.canvas)
         .background(ScreenCaptureExclusion())
     }
 
     private func submit() {
-        guard VaultBackup.normalized(key) != nil else { return }
-        failure = onImport(key)
+        guard !importing, VaultBackup.normalized(key) != nil else { return }
+        importing = true
+        Task {
+            failure = await onImport(key)
+            importing = false
+        }
     }
 }
 

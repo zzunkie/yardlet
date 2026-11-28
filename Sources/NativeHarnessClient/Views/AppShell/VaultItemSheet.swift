@@ -26,6 +26,7 @@ struct VaultItemSheet: View {
     /// The sign-in's other secrets beside the password (design §17), as the keychain keeps them, with no value until the
     /// person shows or types one.
     @State private var secretFields: [SecretFieldRow] = []
+    @State private var originalFieldNames: [VaultFormField] = []
     @State private var setupKey = ""
     @State private var policy: VaultItem.Policy
     @State private var showsPassword = false
@@ -33,6 +34,9 @@ struct VaultItemSheet: View {
     /// Sites that held the deleted item's Yardlet passkey; the sheet closes once they are seen.
     @State private var deletedPasskeySites: [String] = []
     @State private var failure: String?
+    @State private var submitting = false
+    private enum SecretLoad { case loading, ready, failed }
+    @State private var secretLoad: SecretLoad
     /// The saved item's code secret, for its current code.
     @State private var savedCode: OneTimeCodeSecret?
     /// Whether Save takes the saved code out of the item; Cancel keeps it.
@@ -50,6 +54,7 @@ struct VaultItemSheet: View {
          onDone: @escaping () -> Void) {
         self.vault = vault
         original = item
+        _secretLoad = State(initialValue: item == nil ? .ready : .loading)
         self.onDone = onDone
         uses = item.map { vault.uses(of: $0.id, limit: 20) } ?? []
         _name = State(initialValue: item?.name ?? draftSites.first ?? "")
@@ -69,20 +74,30 @@ struct VaultItemSheet: View {
                 .padding(.vertical, 16)
             Divider()
             VStack(alignment: .leading, spacing: 18) {
-                fields
+                fields.disabled(secretLoad != .ready)
                 if !uses.isEmpty { recentUses }
             }
             .padding(20)
             Divider()
             footer
         }
+        .disabled(submitting)
         .frame(width: 520)
         .background(ParityTheme.canvas)
         .task {
-            guard let original, let secret = vault.secret(of: original.id) else { return }
+            guard let original, secretLoad == .loading else { return }
+            let loaded = await vault.secret(of: original.id)
+            guard !Task.isCancelled else { return }
+            guard let secret = loaded else {
+                secretLoad = .failed
+                failure = L10n.string("Yardlet could not read this sign-in from the keychain.")
+                return
+            }
+            secretLoad = .ready
             savedCode = secret.oneTimeCode
             previousCount = secret.previousPasswords?.count ?? 0
             secretFields = (secret.fields ?? []).enumerated().map { SecretFieldRow(saved: $0.offset, field: $0.element) }
+            originalFieldNames = secretFields.map(\.field)
         }
         // A password, a previous one or a setup key the person copies out of the sheet goes on the clipboard as the
         // vault's own copies do.
@@ -93,7 +108,7 @@ struct VaultItemSheet: View {
                 + (previousPasswords ?? []).map(\.password))
         }
         .alert(L10n.format("Delete “%@”?", original?.name ?? ""), isPresented: $confirmsDeleting) {
-            Button(L10n.string("Delete"), role: .destructive, action: delete)
+            Button(L10n.string("Delete"), role: .destructive, action: { submit(delete) })
             Button(L10n.string("Cancel"), role: .cancel) {}
         }
         .alert(L10n.string("Remove Yardlet's passkey on these sites too"), isPresented: Binding(
@@ -350,9 +365,9 @@ struct VaultItemSheet: View {
             Spacer(minLength: 8)
             Button(L10n.string("Cancel"), action: onDone)
                 .keyboardShortcut(MacShortcut.dismiss.binding)
-            Button(L10n.string("Save"), action: save)
+            Button(L10n.string("Save"), action: { submit(save) })
                 .keyboardShortcut(MacShortcut.confirmDialog.binding)
-                .disabled(!canSave)
+                .disabled(secretLoad != .ready || !canSave)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
@@ -407,7 +422,7 @@ struct VaultItemSheet: View {
         guard let id = original?.id else { return }
         Task { @MainActor in
             guard await vault.confirmPerson(L10n.string("show the saved password")) else { return }
-            if password.isEmpty, let saved = vault.secret(of: id)?.password { password = saved }
+            if let saved = await vault.secret(of: id)?.password, password.isEmpty { password = saved }
             showsPassword = true
         }
     }
@@ -422,8 +437,9 @@ struct VaultItemSheet: View {
         guard let id = original?.id, let saved = secretFields[index].saved else { return }
         Task { @MainActor in
             guard await vault.confirmPerson(L10n.string("show a saved secret field")),
+                  let fields = await vault.secret(of: id)?.fields,
                   let index = secretFields.firstIndex(where: { $0.id == row }) else { return }
-            if secretFields[index].field.value.isEmpty, let fields = vault.secret(of: id)?.fields, fields.indices.contains(saved) {
+            if secretFields[index].field.value.isEmpty, fields.indices.contains(saved) {
                 secretFields[index].field.value = fields[saved].value
             }
             secretFields[index].shows = true
@@ -453,22 +469,45 @@ struct VaultItemSheet: View {
         guard let id = original?.id else { return }
         Task { @MainActor in
             guard await vault.confirmPerson(L10n.string("show the previous passwords")) else { return }
-            previousPasswords = vault.secret(of: id)?.previousPasswords ?? []
+            previousPasswords = await vault.secret(of: id)?.previousPasswords ?? []
         }
     }
 
-    private func save() {
-        guard canSave, let sites, let code = oneTimeCode else { return }
+    private func submit(_ operation: @escaping () async -> Void) {
+        guard !submitting else { return }
+        submitting = true
+        Task {
+            await operation()
+            submitting = false
+        }
+    }
+
+    private func save() async {
+        guard secretLoad == .ready, canSave, let sites, let code = oneTimeCode else { return }
+        await vault.beginChange()
+        defer { vault.endChange() }
+        var item = original ?? VaultItem(name: trimmedName, sites: sites, username: "", policy: .always)
         var secret = VaultSecret()
-        if let original {
-            // The values left blank are kept, so they are read first; one the keychain will not give
-            // back is not overwritten.
-            if let saved = vault.secret(of: original.id) {
-                secret = saved
-            } else if original.hasPassword || original.hasOneTimeCode || original.hasPasskey || secretFields.contains(where: { $0.saved != nil }) {
+        if var original {
+            guard let current = vault.items.first(where: { $0.id == original.id }),
+                  let saved = await vault.secret(of: original.id) else {
                 failure = L10n.string("Yardlet could not read this sign-in from the keychain.")
                 return
             }
+            // A fill can update the usage date while the sheet is open. Edits to its fields
+            // or access rules need a fresh sheet, since the rows refer to their original indices.
+            original.lastUsedAt = current.lastUsedAt
+            let fieldNames = (saved.fields ?? []).map { field in
+                var name = field
+                name.value = ""
+                return name
+            }
+            guard current == original, fieldNames == originalFieldNames else {
+                failure = L10n.string("Nothing was changed.")
+                return
+            }
+            item = current
+            secret = saved
         }
         if !password.isEmpty { secret.password = password }
         secret.fields = keptSecretFields(from: secret.fields ?? [])
@@ -477,7 +516,6 @@ struct VaultItemSheet: View {
         } else if removesCode {
             secret.oneTimeCode = nil
         }
-        var item = original ?? VaultItem(name: trimmedName, sites: sites, username: "", policy: .always)
         item.name = trimmedName
         item.sites = sites
         item.username = username.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -489,17 +527,17 @@ struct VaultItemSheet: View {
         item.fields = kept.isEmpty ? nil : kept
         item.policy = policy
         do {
-            try vault.save(item, secret: secret)
+            try await vault.saveItem(item, secret: secret)
             onDone()
         } catch {
             failure = error.localizedDescription
         }
     }
 
-    private func delete() {
+    private func delete() async {
         guard let original else { return }
         do {
-            try vault.delete(original.id)
+            try await vault.delete(original.id)
         } catch {
             failure = error.localizedDescription
             return

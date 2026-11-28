@@ -55,7 +55,7 @@ final class BrowserHostVaultQA {
         let emptyList = await toolNames()
         check("an empty vault offers no fill tool", !emptyList.contains(VaultToolCatalog.fillCredential),
               "\(emptyList.count) tools")
-        try? vault.save(item, secret: VaultSecret(password: Self.password, oneTimeCode: codeKey))
+        try? await vault.save(item, secret: VaultSecret(password: Self.password, oneTimeCode: codeKey))
         let listed = await toolNames()
         check("a vault with an item offers browser_fill_credential", listed.contains(VaultToolCatalog.fillCredential),
               "\(listed.count) tools")
@@ -78,6 +78,11 @@ final class BrowserHostVaultQA {
 
     // MARK: Fills
 
+    private func savedSecret(_ item: VaultItem?) async -> VaultSecret? {
+        guard let item else { return nil }
+        return await vault.secret(of: item.id)
+    }
+
     /// An agent's new password for a sign-up (design §15): Yardlet makes one within the field's passwordrules,
     /// fills it and its confirmation, saves it as a new item with the form's username, and gives no value back;
     /// a page script cannot read it, and a username already saved for the site is refused.
@@ -94,11 +99,12 @@ final class BrowserHostVaultQA {
         let value = await pageValue("document.getElementById('pass').value")?.stringValue ?? ""
         let submitted = await pageValue("window.qa.submitted")
         let saved = vault.items.first { $0.username == "agent@example.test" }
+        let savedPassword = await savedSecret(saved)?.password
         check("an agent's new password meets the field's rules, fills its confirmation and is saved with the form's username, "
                 + "and the result has no value",
               !made.isError && !value.isEmpty && !made.text.contains(value) && submitted?["ok"]?.boolValue == true
                 && submitted?["user"]?.stringValue == "agent@example.test"
-                && saved.flatMap { vault.secret(of: $0.id)?.password } == value,
+                && savedPassword == value,
               made.text)
         let after = await call(AgentToolCatalog.snapshot)
         let read = await call(AgentToolCatalog.evaluate, ["function": .string("() => document.getElementById('pass').value")])
@@ -116,7 +122,7 @@ final class BrowserHostVaultQA {
                     && vault.items.filter { $0.username == "agent@example.test" }.count == 1, refused.text)
         }
         // The site's items stay as the later stages expect them (a passkey goes into the site's only item).
-        if let saved { try? vault.delete(saved.id) }
+        if let saved { try? await vault.delete(saved.id) }
     }
 
     private func exerciseLogin() async {
@@ -382,7 +388,7 @@ final class BrowserHostVaultQA {
         check("an item named on another site is refused and nothing is filled",
               named.isError && named.text.contains("not saved for") && leftEmpty == .string(""), named.text)
 
-        try? vault.save(strict, secret: VaultSecret(password: "qa-strict-not-real"))
+        try? await vault.save(strict, secret: VaultSecret(password: "qa-strict-not-real"))
         await navigate("vault/login")
         let again = await call(AgentToolCatalog.snapshot)
         let strictRef = Self.ref(in: again.text, role: "textbox", name: "Password") ?? "@e1"
@@ -407,7 +413,7 @@ final class BrowserHostVaultQA {
         check("turning the vault off refuses fills and takes the tool from the list",
               off.isError && !offList.contains(VaultToolCatalog.fillCredential), off.text)
         vault.isEnabled = true
-        try? vault.delete(strict.id)
+        try? await vault.delete(strict.id)
     }
 
     // MARK: Frames
@@ -430,8 +436,7 @@ final class BrowserHostVaultQA {
     private func exerciseFrames() async {
         guard let agentTab = client.tab(forSession: session) else { return check("frames: an agent's tab", false, "no tab") }
         let item = VaultItem(name: "QA Frames", sites: ["qa-frames.test"], username: "frames@example.test", policy: .always)
-        try? vault.save(item, secret: VaultSecret(password: Self.framesPassword))
-        defer { try? vault.delete(item.id) }
+        try? await vault.save(item, secret: VaultSecret(password: Self.framesPassword))
         let stopServing = await serve([Self.framesTop, Self.framesSignIn], on: agentTab)
         defer { stopServing() }
         func framed() async -> JSONValue? { await pageValue("window.qa ? window.qa.framed : null") }
@@ -445,6 +450,7 @@ final class BrowserHostVaultQA {
         }
 
         guard let field = await open(Self.framePage(Self.framesTop, Self.framesSignIn + "vault/frame-signin")) else {
+            try? await vault.delete(item.id)
             return check("frames: the snapshot reaches the sign-in frame's password field", false, "no field")
         }
         let filled = await call(VaultToolCatalog.fillCredential, ["ref": .string(field), "submit": .bool(true)])
@@ -464,8 +470,7 @@ final class BrowserHostVaultQA {
         let loopback = base.replacingOccurrences(of: "localhost", with: "127.0.0.1")
         let foreignItem = VaultItem(name: "QA Loopback", sites: [VaultSite.origin(of: loopback) ?? loopback],
                                     username: "loopback@example.test", policy: .always)
-        try? vault.save(foreignItem, secret: VaultSecret(password: "qa-loopback-not-real"))
-        defer { try? vault.delete(foreignItem.id) }
+        try? await vault.save(foreignItem, secret: VaultSecret(password: "qa-loopback-not-real"))
         if let foreign = await open(Self.framePage(base, loopback + "vault/frame-signin")) {
             let refused = await call(VaultToolCatalog.fillCredential, ["ref": .string(foreign), "item": .string("QA Loopback")])
             try? await Task.sleep(for: .milliseconds(500))
@@ -486,6 +491,8 @@ final class BrowserHostVaultQA {
         } else {
             check("frames: the snapshot reaches the field of a frame inside another site's frame", false, "no field")
         }
+        try? await vault.delete(foreignItem.id)
+        try? await vault.delete(item.id)
         await navigate("vault/login")
     }
 
@@ -496,8 +503,7 @@ final class BrowserHostVaultQA {
     private func exercisePanelFrames(_ controller: BrowserHostPaneController) async {
         guard let tab = controller.tab else { return check("panel frames: a tab", false, "no tab") }
         let item = VaultItem(name: "QA Frames", sites: ["qa-frames.test"], username: "frames@example.test")
-        try? vault.save(item, secret: VaultSecret(password: Self.framesPassword))
-        defer { try? vault.delete(item.id) }
+        try? await vault.save(item, secret: VaultSecret(password: Self.framesPassword))
         let stopServing = await serve([Self.framesTop, Self.framesSignIn], on: tab)
         defer { stopServing() }
         func page(_ expression: String) async -> JSONValue? {
@@ -537,6 +543,7 @@ final class BrowserHostVaultQA {
         let left = await page("window.qa.framed")
         check("panel frames: a frame from another site in the item's page takes nothing",
               foreign && left == .null, "loaded \(foreign), \(String(describing: left))")
+        try? await vault.delete(item.id)
     }
 
     // MARK: CDP's virtual authenticator in this CEF
@@ -627,15 +634,16 @@ final class BrowserHostVaultQA {
         check("the person's passkey registration goes into the vault", created?["ok"]?.boolValue == true
               && outcome == .saved(itemName: "QA sign-in") && item != nil, "create \(String(describing: created)), \(outcome)")
         guard let item else { return }
-        let countBefore = vault.secret(of: item.id)?.passkey?.signCount ?? -1
+        let countBefore = await vault.secret(of: item.id)?.passkey?.signCount ?? -1
 
         let armed = await call(VaultToolCatalog.fillCredential, ["kind": .string("passkey")])
         let signedIn = await pageValue(Self.getPasskey(abortAfter: 10_000), awaitPromise: true)
         _ = await waitUntilAsync(.seconds(3)) { tab.devTools.events.contains { $0.method == "WebAuthn.credentialAsserted" } }
         try? await Task.sleep(for: .seconds(1))
-        let countAfter = vault.secret(of: item.id)?.passkey?.signCount ?? -1
+        let countAfter = await vault.secret(of: item.id)?.passkey?.signCount ?? -1
+        let privateKey = await vault.secret(of: item.id)?.passkey?.privateKey
         check("the agent's passkey signs in without a dialog and the key is not in the result",
-              !armed.isError && signedIn?["ok"]?.boolValue == true && !armed.text.contains(vault.secret(of: item.id)?.passkey?.privateKey ?? "-"),
+              !armed.isError && signedIn?["ok"]?.boolValue == true && !armed.text.contains(privateKey ?? "-"),
               armed.text + " / \(String(describing: signedIn))")
         check("the signature count is kept after the sign-in", countAfter > countBefore, "\(countBefore) → \(countAfter)")
         let again = await pageValue(Self.getPasskey(abortAfter: 2_000), awaitPromise: true)
@@ -698,7 +706,7 @@ final class BrowserHostVaultQA {
         check("panel: signing in offers to save the typed password",
               offered && controller.vaultOffer?.username == "person@example.test" && controller.vaultOffer?.updates == nil,
               "offer \(controller.vaultOffer.map { "\($0.username) on \($0.site)" } ?? "none")")
-        controller.acceptVaultOffer()
+        await controller.acceptVaultOffer()
         let saved = vault.items.first { $0.username == "person@example.test" }
         check("panel: Save makes an item for the site", saved != nil && saved?.policy == .always,
               saved.map { "\($0.name): \($0.sites)" } ?? "none")
@@ -872,7 +880,7 @@ final class BrowserHostVaultQA {
               setupOffered && setupOffer?.setups.first?.account == "person@example.test" && setupOffer?.target?.id == person?.id
                 && setupOffer?.isImport == false && controller.vaultCodeOffer == nil,
               setupOffer.map { "\($0.setups.map(\.account)) → \($0.target?.name ?? "new")" } ?? "no offer")
-        controller.acceptSetupOffer()
+        await controller.acceptSetupOffer()
         let confirmFilled = await waitUntilAsync(.seconds(6)) {
             await page(setup, "document.getElementById('code').value.length")?.integerValue == 6
         }
@@ -897,9 +905,9 @@ final class BrowserHostVaultQA {
         let menu = controller.view?.extraContextMenuItems?() ?? []
         menu.first { $0.title == L10n.string("Add Two-Factor Code from QR Code") }?.action()
         let again = await waitUntilAsync(.seconds(8)) { controller.vaultSetupOffer != nil }
-        controller.acceptSetupOffer()
+        await controller.acceptSetupOffer()
         let imported = vault.items.filter { $0.sites.isEmpty && $0.hasOneTimeCode }
-        let second = imported.first { $0.name == "QA Second" }.flatMap { vault.secret(of: $0.id)?.oneTimeCode }
+        let second = await savedSecret(imported.first { $0.name == "QA Second" })?.oneTimeCode
         check("panel: the page menu's QR item reads it again and imports each account as an item of its own",
               again && imported.map(\.username).sorted() == ["export-one@example.test", "export-two@example.test"]
                 && imported.allSatisfy { !$0.hasPassword } && second?.algorithm == .sha256 && second?.digits == 8
@@ -945,10 +953,10 @@ final class BrowserHostVaultQA {
             if !asked { fill.cancel() }
             let offer = controller.vaultSetupOffer
             capture(controller, named: saves ? "vault-panel-agent-setup-bar.png" : "vault-panel-agent-setup-replace.png")
-            if saves { controller.acceptSetupOffer() } else { controller.dismissSetupOffer() }
+            if saves { await controller.acceptSetupOffer() } else { controller.dismissSetupOffer() }
             let result = await fill.value
             let kept = vault.items.first { $0.username == "agent@example.test" && $0.hasOneTimeCode }
-            let keptKey = kept.flatMap { vault.secret(of: $0.id)?.oneTimeCode?.key }
+            let keptKey = await savedSecret(kept)?.oneTimeCode?.key
             if saves {
                 var confirmed = await waitUntilAsync(.seconds(4)) { await page(tab, "window.qa.confirmed") == .bool(true) }
                 if !confirmed {
@@ -990,7 +998,7 @@ final class BrowserHostVaultQA {
         let host = "https://accounts.qa-vendor.test/"
         let partner = "https://accounts.qa-partner.test/"
         let vendor = VaultItem(name: "QA Vendor", sites: [], username: "vendor@example.test")
-        try? vault.save(vendor, secret: VaultSecret(oneTimeCode: OneTimeCodeSecret(key: Data("12345678901234567890".utf8))))
+        try? await vault.save(vendor, secret: VaultSecret(oneTimeCode: OneTimeCodeSecret(key: Data("12345678901234567890".utf8))))
 
         await navigate("vault/otp")
         let field = Self.refs(in: await call(AgentToolCatalog.snapshot).text, role: "textbox").first ?? "@e1"
@@ -1027,8 +1035,8 @@ final class BrowserHostVaultQA {
 
         let partnerKey = OneTimeCodeSecret(key: Data("qa-partner-key-00000".utf8))
         let partnerSignIn = VaultItem(name: "accounts.qa-partner.test", sites: ["qa-partner.test"], username: "partner@example.test")
-        try? vault.save(partnerSignIn, secret: VaultSecret(password: "qa-partner-not-real"))
-        let imported = vault.importOneTimeCodes([OneTimeCodeSetup(secret: partnerKey, issuer: "QA Partner",
+        try? await vault.save(partnerSignIn, secret: VaultSecret(password: "qa-partner-not-real"))
+        let imported = await vault.importOneTimeCodes([OneTimeCodeSetup(secret: partnerKey, issuer: "QA Partner",
                                                                   account: "partner@example.test")])
         let partnerCode = vault.items.first { $0.name == "QA Partner" }
         check("a code imported for an account whose sign-in is saved takes that sign-in's site",
@@ -1131,8 +1139,9 @@ final class BrowserHostVaultQA {
         let presaved = vault.items.first { $0.username == "newperson@example.test" }
         try? await Task.sleep(for: .milliseconds(300))
         capture(controller, named: "vault-panel-password-saved.png")
+        let presavedPassword = await savedSecret(presaved)?.password
         check("panel: Use Strong Password fills the field and its confirmation within the site's rules and saves an item at once",
-              filled && !value.isEmpty && presaved.flatMap { vault.secret(of: $0.id)?.password } == value
+              filled && !value.isEmpty && presavedPassword == value
                 && controller.vaultPasswordOffer == nil,
               "filled \(filled), saved \(presaved?.name ?? "none")")
         _ = await page(signup, "document.getElementById('go').click()")
@@ -1144,7 +1153,7 @@ final class BrowserHostVaultQA {
 
         guard let change = await open("vault/change"),
               let person = vault.items.first(where: { $0.username == "person@example.test" }),
-              let old = vault.secret(of: person.id)?.password else {
+              let old = await vault.secret(of: person.id)?.password else {
             return check("panel: the change form loads for the person's saved item", false, "no item")
         }
         await type(change, "current", old)
@@ -1156,15 +1165,17 @@ final class BrowserHostVaultQA {
         }
         let fresh = await page(change, "fresh.value")?.stringValue ?? ""
         let beside = vault.items.first { $0.username.isEmpty && $0.sites == [origin] && $0.hasPassword }
+        let besidePassword = await savedSecret(beside)?.password
+        let personPassword = await vault.secret(of: person.id)?.password
         check("panel: on a change form the made password goes into the new and confirmation fields and beside the saved item",
-              changeOffered && changeFilled && vault.secret(of: person.id)?.password == old
-                && beside.flatMap { vault.secret(of: $0.id)?.password } == fresh,
+              changeOffered && changeFilled && personPassword == old
+                && besidePassword == fresh,
               "offered \(changeOffered), filled \(changeFilled), beside \(beside?.name ?? "none")")
         _ = await page(change, "document.getElementById('go').click()")
         let asked = await waitUntilAsync(.seconds(5)) { controller.vaultOffer?.updates?.id == person.id }
         capture(controller, named: "vault-panel-password-update.png")
-        controller.acceptVaultOffer()
-        let updated = vault.secret(of: person.id)
+        await controller.acceptVaultOffer()
+        let updated = await vault.secret(of: person.id)
         check("panel: updating after the change gives the item the new password, keeps the old one and drops the item beside it",
               asked && updated?.password == fresh && updated?.previousPasswords?.first?.password == old
                 && !vault.items.contains { $0.id == beside?.id },
@@ -1191,8 +1202,8 @@ final class BrowserHostVaultQA {
         let member = VaultItem(name: "QA change", sites: ["qa-change.test"], username: "member@example.test")
         let recovering = VaultItem(name: "QA recover", sites: ["qa-recover.test"], username: "recover@example.test")
         let memberOld = "qa-change-old-not-real"
-        try? vault.save(member, secret: VaultSecret(password: memberOld))
-        try? vault.save(recovering, secret: VaultSecret(password: "qa-recover-old-not-real"))
+        try? await vault.save(member, secret: VaultSecret(password: memberOld))
+        try? await vault.save(recovering, secret: VaultSecret(password: "qa-recover-old-not-real"))
         let stopServing = await serve([dialogSite, recoverSite], on: first)
         defer { stopServing() }
         func open(_ address: String) async -> BrowserTab? {
@@ -1239,7 +1250,10 @@ final class BrowserHostVaultQA {
                 _ = try? await tab.devTools.send("Input.dispatchKeyEvent", event, timeout: .seconds(10))
             }
         }
-        func password(_ id: UUID?) -> String? { id.flatMap { vault.secret(of: $0)?.password } }
+        func password(_ id: UUID?) async -> String? {
+            guard let id else { return nil }
+            return await vault.secret(of: id)?.password
+        }
         func logged(_ id: UUID?) -> [VaultUse] { vault.allUses().filter { $0.itemID == id && $0.kinds == ["new_password"] } }
 
         // A fill the page does not answer within the fill's 10 seconds keeps its item.
@@ -1252,8 +1266,9 @@ final class BrowserHostVaultQA {
         let tied = await waitUntilAsync(.seconds(25)) { controller.madePassword != nil && controller.madePassword?.item != before }
         let slowItem = vault.items.first { $0.username == "slow@example.test" }
         let slowValue = await page(slow, "pass.value")?.stringValue
+        let slowPassword = await password(slowItem?.id)
         check("panel: a made password whose fill the page did not answer stays in its item",
-              tied && slowItem != nil && slowValue?.isEmpty == false && password(slowItem?.id) == slowValue
+              tied && slowItem != nil && slowValue?.isEmpty == false && slowPassword == slowValue
                 && logged(slowItem?.id).contains { $0.reason?.contains("no answer") == true },
               "tied \(tied), item \(slowItem?.name ?? "none"), log \(logged(slowItem?.id).compactMap(\.reason))")
 
@@ -1268,8 +1283,10 @@ final class BrowserHostVaultQA {
         }
         let firstValue = await page(failing, "fresh.value")?.stringValue ?? ""
         let made = vault.items.first { $0.sites == ["qa-change.test"] && $0.username.isEmpty }
+        let madePassword = await password(made?.id)
+        let originalPassword = await password(member.id)
         check("panel: in a change dialog with no form and no username the made password goes in beside the site's sign-in",
-              dialogOffered && dialogFilled && password(made?.id) == firstValue && password(member.id) == memberOld,
+              dialogOffered && dialogFilled && madePassword == firstValue && originalPassword == memberOld,
               "offered \(dialogOffered), filled \(dialogFilled), beside \(made?.name ?? "none")")
         await press(failing, "go")
         let refused = await waitUntilAsync(.seconds(5)) { await page(failing, "error.textContent !== ''") == .bool(true) }
@@ -1278,9 +1295,10 @@ final class BrowserHostVaultQA {
         await press(failing, "close")
         let closed = await waitUntilAsync(.seconds(3)) { await page(failing, "!document.getElementById('dialog')") == .bool(true) }
         try? await Task.sleep(for: .milliseconds(1500))
+        let passwordAfterClose = await password(made?.id)
         check("panel: a change dialog's error that keeps its fields, or its close button, sends nothing",
               refused && afterError && closed && controller.vaultOffer == nil && controller.madePassword?.submitted == false
-                && password(made?.id) == firstValue,
+                && passwordAfterClose == firstValue,
               "error \(refused), kept \(afterError), closed \(closed), offer \(controller.vaultOffer != nil)")
 
         // Emptying the fields that hold the made password leaves its item as it is: the log says so once both are empty,
@@ -1295,12 +1313,13 @@ final class BrowserHostVaultQA {
         let emptiedLog = { logged(made?.id).contains { $0.reason?.contains("emptied") == true } }
         await empty(dialog, "again")
         try? await Task.sleep(for: .seconds(1))
-        let keptAfterConfirmation = password(made?.id) == secondValue && !emptiedLog()
+        let keptAfterConfirmation = await password(made?.id) == secondValue && !emptiedLog()
         await empty(dialog, "fresh")
         let emptied = await waitUntilAsync(.seconds(5)) { emptiedLog() }
-        let previous = vault.secret(of: made?.id ?? UUID())?.previousPasswords?.map(\.password) ?? []
+        let previous = await vault.secret(of: made?.id ?? UUID())?.previousPasswords?.map(\.password) ?? []
+        let passwordAfterClearing = await password(made?.id)
         check("panel: emptying the fields that hold the made password leaves it in its item, and the log says so",
-              keptAfterConfirmation && emptied && password(made?.id) == secondValue && previous.first == firstValue,
+              keptAfterConfirmation && emptied && passwordAfterClearing == secondValue && previous.first == firstValue,
               "kept after the confirmation \(keptAfterConfirmation), logged \(emptied), previous \(previous.count)")
 
         // Sending the dialog from its [role=button] counts once its fields go, and the bar asks to update the site's
@@ -1308,7 +1327,7 @@ final class BrowserHostVaultQA {
         controller.useStrongPassword()
         _ = await waitUntilAsync(.seconds(5)) { await page(dialog, "fresh.value !== '' && fresh.value === again.value") == .bool(true) }
         let thirdValue = await page(dialog, "fresh.value")?.stringValue ?? ""
-        let reused = password(made?.id) == thirdValue && vault.items.filter { $0.sites == ["qa-change.test"] }.count == 2
+        let reused = await password(made?.id) == thirdValue && vault.items.filter { $0.sites == ["qa-change.test"] }.count == 2
         await press(dialog, "go")
         let changed = await waitUntilAsync(.seconds(5)) { await page(dialog, "window.qa.changed") == .bool(true) }
         let asked = await waitUntilAsync(.seconds(5)) { controller.vaultOffer?.updates?.id == member.id }
@@ -1317,11 +1336,13 @@ final class BrowserHostVaultQA {
         check("panel: a dialog sent from a [role=button] whose fields then go counts as sent, and the bar asks to update the site's one sign-in",
               reused && changed && asked && controller.vaultOffer?.presaved == made?.id && controller.madePassword?.submitted == true,
               "reused \(reused), changed \(changed), offer \(controller.vaultOffer.map { "\($0.updates?.name ?? "new") beside \(String(describing: $0.presaved))" } ?? "none")")
-        controller.acceptVaultOffer()
+        await controller.acceptVaultOffer()
         let madeLog = logged(made?.id)
         let values = [firstValue, secondValue, thirdValue]
+        let updatedPassword = await password(member.id)
+        let previousPassword = await vault.secret(of: member.id)?.previousPasswords?.first?.password
         check("panel: updating gives the sign-in the made password, and the log says what became of it without the value",
-              password(member.id) == thirdValue && vault.secret(of: member.id)?.previousPasswords?.first?.password == memberOld
+              updatedPassword == thirdValue && previousPassword == memberOld
                 && !vault.items.contains { $0.id == made?.id }
                 && madeLog.contains { $0.outcome == .saved && $0.reason?.contains("emptied") == true }
                 && madeLog.contains { $0.outcome == .saved && $0.reason?.contains("asks to update") == true }
@@ -1363,10 +1384,11 @@ final class BrowserHostVaultQA {
         await press(recover, "go")
         let recoverAsked = await waitUntilAsync(.seconds(5)) { controller.vaultOffer?.updates?.id == recovering.id }
         let recoverSent = await page(recover, "window.qa.submitted") == .bool(true)
-        controller.acceptVaultOffer()
+        await controller.acceptVaultOffer()
+        let recoveredPassword = await password(recovering.id)
         check("panel: on a recovery's form with no username the made password is kept, and the bar asks to update the site's one sign-in",
               recoverOffered && presaved != nil && !vault.items.contains { $0.id == presaved?.id } && recoverSent && recoverAsked
-                && password(recovering.id) == recoverValue && !recoverValue.isEmpty,
+                && recoveredPassword == recoverValue && !recoverValue.isEmpty,
               "offered \(recoverOffered), presaved \(presaved != nil), sent \(recoverSent), asked \(recoverAsked)")
     }
 
@@ -1387,9 +1409,9 @@ final class BrowserHostVaultQA {
                                createdAt: Date(timeIntervalSinceNow: -86400), lastUsedAt: Date(timeIntervalSinceNow: -60))
         let other = VaultItem(name: "QA reset other", sites: ["qa-reset.test"], username: "",
                               createdAt: Date(timeIntervalSinceNow: -3600), fields: [account])
-        try? vault.save(admin, secret: VaultSecret(password: "qa-reset-admin-not-real"))
-        try? vault.save(member, secret: VaultSecret(password: "qa-reset-member-not-real"))
-        try? vault.save(other, secret: VaultSecret(password: "qa-reset-other-not-real"))
+        try? await vault.save(admin, secret: VaultSecret(password: "qa-reset-admin-not-real"))
+        try? await vault.save(member, secret: VaultSecret(password: "qa-reset-member-not-real"))
+        try? await vault.save(other, secret: VaultSecret(password: "qa-reset-other-not-real"))
         let stopServing = await serve([console], on: first)
         defer { stopServing() }
         func page(_ tab: BrowserTab, _ expression: String) async -> JSONValue? {
@@ -1462,12 +1484,14 @@ final class BrowserHostVaultQA {
               opened && sent && asked && offer?.password == fresh && offer?.updates?.id == member.id
                 && Set(offer?.choices.map(\.id) ?? []) == [admin.id, member.id, other.id] && offer?.account == "“QA reset member”",
               "opened \(opened), sent \(sent), offer \(offer.map { "\($0.updates?.name ?? "new") among \($0.choices.map(\.name))" } ?? "none")")
-        if let picked = offer?.choices.first(where: { $0.id == other.id }) { controller.acceptVaultOffer(into: .item(picked)) }
-        let picked = vault.secret(of: other.id)
+        if let picked = offer?.choices.first(where: { $0.id == other.id }) { await controller.acceptVaultOffer(into: .item(picked)) }
+        let picked = await vault.secret(of: other.id)
+        let memberPassword = await vault.secret(of: member.id)?.password
+        let adminPassword = await vault.secret(of: admin.id)?.password
         check("panel: the sign-in picked from the bar's menu takes the new password and keeps its old one; the others stay",
               picked?.password == fresh && picked?.previousPasswords?.first?.password == "qa-reset-other-not-real"
-                && vault.secret(of: member.id)?.password == "qa-reset-member-not-real"
-                && vault.secret(of: admin.id)?.password == "qa-reset-admin-not-real" && controller.vaultOffer == nil,
+                && memberPassword == "qa-reset-member-not-real"
+                && adminPassword == "qa-reset-admin-not-real" && controller.vaultOffer == nil,
               "previous \(picked?.previousPasswords?.count ?? 0)")
 
         let shownPassword = "qa-reset-shown-not-real"
@@ -1497,8 +1521,8 @@ final class BrowserHostVaultQA {
         // Saved first, so that only the earlier step puts the person's item before it.
         let decoy = VaultItem(name: "QA steps decoy", sites: ["qa-steps.test"], username: "decoy@example.test")
         let blank = VaultItem(name: "QA blank", sites: ["qa-blank.test"], username: "")
-        try? vault.save(decoy, secret: VaultSecret(password: "qa-decoy-not-real"))
-        try? vault.save(blank, secret: VaultSecret(password: "qa-blank-not-real"))
+        try? await vault.save(decoy, secret: VaultSecret(password: "qa-decoy-not-real"))
+        try? await vault.save(blank, secret: VaultSecret(password: "qa-blank-not-real"))
         let stopServing = await serve([steps, blankSite, iam], on: first)
         defer { stopServing() }
         func open(_ address: String, until: String? = nil) async -> BrowserTab? {
@@ -1559,7 +1583,7 @@ final class BrowserHostVaultQA {
         check("panel: a password step takes the username its first step asked for",
               offered && offer?.username == "steps@example.test" && offer?.updates == nil,
               "offer \(offer.map { "\($0.username) updates \($0.updates?.name ?? "none")" } ?? "none")")
-        controller.acceptVaultOffer()
+        await controller.acceptVaultOffer()
         let saved = vault.items.first { $0.username == "steps@example.test" }
 
         // A hidden field marked as the username on the password step comes first.
@@ -1602,11 +1626,12 @@ final class BrowserHostVaultQA {
         try? await Task.sleep(for: .milliseconds(300))
         capture(controller, named: "vault-panel-add-username.png")
         let addOffer = controller.vaultOffer
-        controller.acceptVaultOffer()
+        await controller.acceptVaultOffer()
+        let blankPassword = await vault.secret(of: blank.id)?.password
         check("panel: an item saved without a username is offered the one the sign-in used, and takes it on Save",
               blankOffered && untouched && addOffer?.updates?.id == blank.id && addOffer?.addsAccount == true
                 && vault.items.first { $0.id == blank.id }?.username == "blank@example.test"
-                && vault.secret(of: blank.id)?.password == "qa-blank-not-real",
+                && blankPassword == "qa-blank-not-real",
               "offer \(addOffer.map { "\($0.account) adds \($0.addsAccount)" } ?? "none")")
 
         // An account beside the username: two accounts of one username are two items, told apart and filled back.
@@ -1620,7 +1645,7 @@ final class BrowserHostVaultQA {
             await type(form, "password", password)
             await press(form, "go")
             if await waitUntilAsync(.seconds(5), { controller.vaultOffer != nil }), let offer = controller.vaultOffer { offers.append(offer) }
-            controller.acceptVaultOffer()
+            await controller.acceptVaultOffer()
         }
         let iamItems = vault.items.filter { $0.sites == ["qa-iam.test"] }
         check("panel: an account field beside the username is kept with the item, and one username in two accounts is two items",
@@ -1723,8 +1748,8 @@ final class BrowserHostVaultQA {
                 && offer?.fields.isEmpty == true && offer?.secretFields.map(\.id) == ["orgId", "orgPw"]
                 && offer?.secretFields.map(\.value) == [values[0], values[1]],
               "\(record["severalSecretsOffer"].map { String(describing: $0) } ?? "none")")
-        controller.acceptVaultOffer()
-        guard let item = vault.items.first(where: { $0.username == values[2] }), let secret = vault.secret(of: item.id) else {
+        await controller.acceptVaultOffer()
+        guard let item = vault.items.first(where: { $0.username == values[2] }), let secret = await vault.secret(of: item.id) else {
             return check("panel: the sign-in with several secrets was saved", false, "none")
         }
         let file = String(decoding: (try? JSONEncoder().encode(item)) ?? Data(), as: UTF8.self)
@@ -1766,7 +1791,7 @@ final class BrowserHostVaultQA {
         // confirmation hold the same value.
         for (path, fields) in [("vault/change", ["current", "fresh", "again"]), ("vault/plain-change", ["p1", "p2", "p3"])] {
             guard let person = vault.items.first(where: { $0.username == "person@example.test" }),
-                  let old = vault.secret(of: person.id)?.password, let change = await open(path) else {
+                  let old = await vault.secret(of: person.id)?.password, let change = await open(path) else {
                 return check("panel: \(path) loads for the person's saved item", false, "no item")
             }
             controller.vaultOffer = nil
@@ -1834,7 +1859,7 @@ final class BrowserHostVaultQA {
         try? await Task.sleep(for: .milliseconds(300))
         capture(controller, named: "vault-panel-wallet-save-address.png")
         let offeredAddress = controller.walletSaveOffer?.address
-        controller.acceptWalletOffer()
+        await controller.acceptWalletOffer()
         check("panel: an address sent in a form is offered for saving and saved",
               addressOffered && vault.wallet.addresses.count == 1 && offeredAddress?.street == "12 Example Street\nFlat 3"
                 && offeredAddress?.postalCode == "06236" && offeredAddress?.country == "KR",
@@ -1861,7 +1886,7 @@ final class BrowserHostVaultQA {
         capture(controller, named: "vault-panel-wallet-save-card.png")
         let offeredCard = controller.walletSaveOffer?.card
         let typedClosed = await agent(AgentToolCatalog.evaluate, ["function": .string("() => document.title")])
-        controller.acceptWalletOffer()
+        await controller.acceptWalletOffer()
         check("panel: a card typed into a form with no autocomplete names is offered without its code, and the page closes to agent scripts",
               cardOffered && offeredCard?.number == "4242424242424242" && offeredCard?.expiryMonth == 7
                 && offeredCard?.expiryYear == 2034 && offeredCard?.name == "Ada Lovelace" && vault.wallet.cards.count == 1
@@ -1908,9 +1933,9 @@ final class BrowserHostVaultQA {
         let accountCode = VaultItem(name: "QA account code", sites: [origin], username: "account@example.test")
         let elsewhere = VaultItem(name: "QA Elsewhere sign-in", sites: ["qa-elsewhere.test"], username: "elsewhere@example.test")
         let elsewhereCode = VaultItem(name: "QA Elsewhere", sites: ["qa-elsewhere.test"], username: "elsewhere@example.test")
-        try? vault.save(account, secret: VaultSecret(password: "qa-account-not-real"))
-        try? vault.save(elsewhere, secret: VaultSecret(password: "qa-elsewhere-not-real"))
-        for item in [accountCode, elsewhereCode] { try? vault.save(item, secret: VaultSecret(oneTimeCode: key)) }
+        try? await vault.save(account, secret: VaultSecret(password: "qa-account-not-real"))
+        try? await vault.save(elsewhere, secret: VaultSecret(password: "qa-elsewhere-not-real"))
+        for item in [accountCode, elsewhereCode] { try? await vault.save(item, secret: VaultSecret(oneTimeCode: key)) }
         let pasteboard = NSPasteboard(name: NSPasteboard.Name("com.zzunkie.yardlet.vaultqa.codes"))
         controller.vaultPasteboard = pasteboard
         defer { pasteboard.releaseGlobally() }
@@ -1979,7 +2004,7 @@ final class BrowserHostVaultQA {
               otherFilled && otherTaken && offered && controller.vaultLinkOffer?.item.id == elsewhereCode.id
                 && controller.vaultLinkOffer?.site == "qa-other.test",
               "filled \(otherFilled), checked \(otherTaken), offer \(controller.vaultLinkOffer.map { "\($0.item.name) → \($0.site)" } ?? "none")")
-        controller.acceptVaultLinkOffer()
+        await controller.acceptVaultLinkOffer()
         var barTrail = ["after saving: \(controller.vaultCodeOffer?.page ?? "none")"]
         let kept = vault.items.first { $0.id == elsewhereCode.id }?.sites ?? []
         check("panel: saving keeps the site in that item beside its own", kept == ["qa-elsewhere.test", "qa-other.test"], "\(kept)")

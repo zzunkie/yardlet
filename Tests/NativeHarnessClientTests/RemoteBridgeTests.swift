@@ -15,6 +15,49 @@ import XCTest
 /// window's own model calls — on a fake adapter, so no provider runs.
 @MainActor
 final class RemoteBridgeTests: XCTestCase {
+    func testSnapshotCachesAntigravitySteeringAndPublishesBackgroundChanges() async throws {
+        let defaults = try XCTUnwrap(SnapshotDefaults(suiteName: testDefaultsSuite("RemoteSnapshot")))
+        let tasks = (0..<32).map { index in
+            SessionRecord(harness: .antigravityCLI, workspaceURL: URL(filePath: "/tmp/remote-snapshot"),
+                runtimeExecutableURL: URL(filePath: "/tmp/agy"), title: "Task \(index)")
+        }
+        defaults.set(false, forKey: AntigravityLiveSteer.preferenceKey)
+        let model = AppModel(store: SessionStore(sessions: tasks, repository: InMemorySessionRepository(sessions: tasks)),
+            runtimeSelections: RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false, loadsPersistedSelections: false),
+            preferences: defaults, restoresIndexOnLaunch: false)
+        let bridge = AppModelRemoteBridge(model: model)
+        let signals = SignalRecorder()
+        bridge.setChangeHandler { signals.record($0) }
+        let initialReads = defaults.mainThreadReads
+        let first = bridge.snapshot()
+        XCTAssertEqual(first.tasks.count, tasks.count)
+        XCTAssertTrue(first.tasks.allSatisfy { $0.steers == nil })
+        XCTAssertEqual(bridge.snapshot().tasks, first.tasks)
+        XCTAssertEqual(defaults.mainThreadReads, initialReads)
+
+        nonisolated(unsafe) let backgroundDefaults = defaults
+        await Task.detached {
+            backgroundDefaults.set(true, forKey: AntigravityLiveSteer.preferenceKey)
+        }.value
+        try await waitUntil {
+            let latest = bridge.snapshot()
+            return signals.changes.contains(.tasks) && latest.tasks.allSatisfy { $0.steers == true }
+        }
+        XCTAssertEqual(defaults.mainThreadReads, initialReads)
+        await model.shutdown()
+    }
+
+    private final class SnapshotDefaults: UserDefaults {
+        private let lock = NSLock()
+        private var reads = 0
+        var mainThreadReads: Int { lock.withLock { reads } }
+
+        override func bool(forKey key: String) -> Bool {
+            if key == AntigravityLiveSteer.preferenceKey, Thread.isMainThread { lock.withLock { reads += 1 } }
+            return super.bool(forKey: key)
+        }
+    }
+
     func testBankedResetRequiresConfirmationAndDoesNotRepeatAnAnsweredToken() async throws {
         let task = SessionRecord(harness: .codex, workspaceURL: URL(filePath: "/tmp/reset-fixture"),
             runtimeExecutableURL: URL(filePath: "/tmp/codex"), title: "Reset")

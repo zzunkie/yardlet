@@ -86,8 +86,8 @@ struct VaultSettingsView: View {
                         }
                     }
                     Group {
-                        Button(L10n.string("Import QR Code…"), action: importQRCodes)
-                        Button(L10n.string("Import File…"), action: importFile)
+                        Button(L10n.string("Import QR Code…"), action: { Task { await importQRCodes() } })
+                        Button(L10n.string("Import File…"), action: { Task { await importFile() } })
                         if !vault.items.isEmpty {
                             Menu(L10n.string("Export")) {
                                 Button(L10n.string("Encrypted Backup…"), action: exportBackup)
@@ -138,7 +138,7 @@ struct VaultSettingsView: View {
                 }
             }
             .alert(L10n.string("Delete all saved passwords?"), isPresented: $confirmsEmptying) {
-                Button(L10n.string("Delete All"), role: .destructive, action: empty)
+                Button(L10n.string("Delete All"), role: .destructive, action: { Task { await empty() } })
                 Button(L10n.string("Cancel"), role: .cancel) {}
             } message: {
                 Text(L10n.string("Every saved sign-in and its history is deleted from this Mac."))
@@ -157,7 +157,7 @@ struct VaultSettingsView: View {
         }
         .sheet(item: $backupToOpen) { file in
             VaultBackupKeySheet(fileName: file.url.lastPathComponent, onImport: { key in
-                restore(file, key: key)
+                await restore(file, key: key)
             }, onCancel: { backupToOpen = nil })
         }
         .sheet(item: $editing) { editing in
@@ -252,10 +252,14 @@ struct VaultSettingsView: View {
             .frame(maxWidth: .infinity)
             .parityCard()
         }
-        .task(id: codeItems.map(\.id)) {
-            codeSecrets = Dictionary(uniqueKeysWithValues: codeItems.compactMap { item in
-                vault.secret(of: item.id)?.oneTimeCode.map { (item.id, $0) }
-            })
+        .task(id: vault.isAllowedBuild ? codeItems.map(\.id) : []) {
+            guard vault.isAllowedBuild else { return }
+            var loaded: [UUID: OneTimeCodeSecret] = [:]
+            for item in codeItems {
+                loaded[item.id] = await vault.secret(of: item.id)?.oneTimeCode
+                guard !Task.isCancelled else { return }
+            }
+            codeSecrets = loaded
         }
     }
 
@@ -270,7 +274,7 @@ struct VaultSettingsView: View {
                 Text(L10n.string("Two-factor codes with no site"))
                     .font(SettingsMetrics.groupTitleFont)
                 Spacer(minLength: 8)
-                Button(L10n.string("Link All")) { link(ready) }
+                Button(L10n.string("Link All")) { Task { await link(ready) } }
                     .controlSize(.small)
                     .disabled(ready.isEmpty || !vault.isAllowedBuild)
             }
@@ -298,9 +302,9 @@ struct VaultSettingsView: View {
                             .textFieldStyle(.roundedBorder)
                             .labelsHidden()
                             .frame(width: 180)
-                            .onSubmit { link([item]) }
+                            .onSubmit { Task { await link([item]) } }
                             .accessibilityLabel(L10n.format("Site for “%@”", item.name))
-                        Button(L10n.string("Link")) { link([item]) }
+                        Button(L10n.string("Link")) { Task { await link([item]) } }
                             .disabled(siteToLink(item) == nil)
                     }
                     .controlSize(.small)
@@ -330,11 +334,11 @@ struct VaultSettingsView: View {
         VaultSite.normalize(linkSites[item.id] ?? "", suffixes: vault.suffixes)
     }
 
-    private func link(_ codes: [VaultItem]) {
+    private func link(_ codes: [VaultItem]) async {
         linkFailure = nil
         for item in codes {
             guard let site = siteToLink(item) else { continue }
-            if vault.link(item.id, to: site) == nil {
+            if await vault.link(item.id, to: site) == nil {
                 linkFailure = L10n.string("Yardlet could not read this sign-in from the keychain.")
             } else {
                 linkSites[item.id] = nil
@@ -363,7 +367,7 @@ struct VaultSettingsView: View {
     }
 
     /// Another manager's CSV export, Yardlet's own, or Yardlet's encrypted backup, which asks for its recovery key.
-    private func importFile() {
+    private func importFile() async {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.commaSeparatedText, Self.backupType]
         panel.canChooseDirectories = false
@@ -376,7 +380,7 @@ struct VaultSettingsView: View {
         }
         var encoding = String.Encoding.utf8
         let text = (try? String(contentsOf: url, usedEncoding: &encoding)) ?? ""
-        let count = vault.importSignIns(VaultCSVImport.entries(text, suffixes: vault.suffixes))
+        let count = await vault.importSignIns(VaultCSVImport.entries(text, suffixes: vault.suffixes))
         imported = Imported(title: L10n.format("Imported %lld sign-ins.", Int64(count)), count: count, files: [url])
     }
 
@@ -434,14 +438,14 @@ struct VaultSettingsView: View {
     }
 
     /// Opens a backup with the key typed and restores it; the words to show when the key does not open it.
-    private func restore(_ file: BackupFile, key: String) -> String? {
+    private func restore(_ file: BackupFile, key: String) async -> String? {
         let contents: VaultBackup.Contents
         do {
             contents = try VaultBackup.open(file.data, recoveryKey: key)
         } catch {
             return error.localizedDescription
         }
-        let restored = vault.restoreBackup(contents)
+        let restored = await vault.restoreBackup(contents)
         backupToOpen = nil
         var title = L10n.format("Imported %lld items from the backup.", Int64(restored.count))
         if restored.walletCount > 0 {
@@ -457,7 +461,7 @@ struct VaultSettingsView: View {
 
     /// Pictures of QR codes: an authenticator app's export (Google Authenticator's Transfer accounts, one
     /// or several codes) or a site's setup code. Each code becomes an item of its own.
-    private func importQRCodes() {
+    private func importQRCodes() async {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]
         panel.canChooseDirectories = false
@@ -465,7 +469,7 @@ struct VaultSettingsView: View {
         panel.prompt = L10n.string("Import")
         guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
         let found = VaultQRCodeReader.setups(in: panel.urls.flatMap(VaultQRCodeReader.messages(in:)))
-        let count = vault.importOneTimeCodes(found.setups)
+        let count = await vault.importOneTimeCodes(found.setups)
         var title = found.setups.isEmpty && found.unsupported == 0
             ? L10n.string("No two-factor QR code is in the picture.")
             : L10n.format("Imported %lld two-factor codes.", Int64(count))
@@ -476,10 +480,10 @@ struct VaultSettingsView: View {
         imported = Imported(title: title, count: count, files: panel.urls)
     }
 
-    private func empty() {
+    private func empty() async {
         do {
             failure = nil
-            let sites = try vault.clear()
+            let sites = try await vault.clear()
             guard !sites.isEmpty else { return }
             // The confirmation closes first; the list of sites is a second alert.
             Task { @MainActor in passkeySites = sites }

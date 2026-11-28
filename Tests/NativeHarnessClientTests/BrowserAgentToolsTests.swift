@@ -1587,7 +1587,7 @@ final class BrowserAgentToolsTests: XCTestCase {
 
         // With two items for the site and none named, the account the page's username field holds is filled, and the
         // agent hears which and why.
-        try? tools.vault?.save(VaultItem(name: "Other", sites: ["example.com"], username: "grace"),
+        try? await tools.vault?.save(VaultItem(name: "Other", sites: ["example.com"], username: "grace"),
                                secret: VaultSecret(password: "battery staple"))
         submission = targets([("https://www.example.com/session", "post")])
         let picked = await fill(false)
@@ -2431,7 +2431,8 @@ final class BrowserAgentToolsTests: XCTestCase {
         XCTAssertFalse(saved.isError, saved.text)
         XCTAssertTrue(saved.text.contains("The person saved the page's two-factor setup in “Example”")
                       && saved.text.contains("the one-time code"), saved.text)
-        XCTAssertEqual(vault.secret(of: item.id)?.oneTimeCode?.key, key, "the code went into the account's item")
+        let savedSecret = await vault.secret(of: item.id)
+        XCTAssertEqual(savedSecret?.oneTimeCode?.key, key, "the code went into the account's item")
         XCTAssertEqual(filledCodes.count, 1)
         XCTAssertEqual(filledCodes.first?.count, 6)
         XCTAssertNil(ask, "the ask ends once the agent read it")
@@ -2445,7 +2446,8 @@ final class BrowserAgentToolsTests: XCTestCase {
         answer = { _ in .declined }
         let declined = await fill()
         XCTAssertTrue(declined.isError && declined.text.contains("chose not to save"), declined.text)
-        XCTAssertEqual(vault.secret(of: item.id)?.oneTimeCode?.key, key)
+        let preserved = await vault.secret(of: item.id)
+        XCTAssertEqual(preserved?.oneTimeCode?.key, key)
         XCTAssertEqual(filledCodes.count, 1)
 
         // A page whose setup the vault holds asks nothing and fills its code.
@@ -2544,8 +2546,12 @@ final class BrowserAgentToolsTests: XCTestCase {
         let shownShot = await run(AgentToolCatalog.screenshot)
         XCTAssertFalse(shownShot.isError, shownShot.text)
         XCTAssertEqual(captures(), ["capture"])
-        XCTAssertFalse(vault(confirming: false).hidesCredentials, "kept for the next launch")
-        XCTAssertTrue(vault(confirming: true, teamSigned: false).hidesCredentials,
+        let nextLaunch = vault(confirming: false)
+        await nextLaunch.prepare()
+        XCTAssertFalse(nextLaunch.hidesCredentials, "kept for the next launch")
+        let unsigned = vault(confirming: true, teamSigned: false)
+        await unsigned.prepare()
+        XCTAssertTrue(unsigned.hidesCredentials,
                       "a build that is not team-signed always hides")
     }
 

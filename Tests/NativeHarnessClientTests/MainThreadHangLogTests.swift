@@ -5,6 +5,30 @@ import XCTest
 
 @MainActor
 final class MainThreadHangLogTests: XCTestCase {
+    func testOnlyAnIdleSheetAnimationLoopIsExcluded() {
+        let wait = [
+            "libsystem_kernel.dylib 0x1 mach_msg2_trap + 8",
+            "libsystem_kernel.dylib 0x2 mach_msg + 4",
+            "CoreFoundation 0x3 __CFRunLoopServiceMachPort + 8",
+            "CoreFoundation 0x4 __CFRunLoopRun + 4",
+            "CoreFoundation 0x5 _CFRunLoopRunSpecificWithOptions + 4"
+        ]
+        func sample(_ frames: [String]) -> MainThreadHang.Sample { .init(after: .milliseconds(250), frames: frames) }
+        func hang(_ samples: [MainThreadHang.Sample], ongoing: Bool = false) -> MainThreadHang {
+            .init(began: Date(), duration: .milliseconds(300), isOngoing: ongoing, samples: samples)
+        }
+        for selector in ["openSheet", "closeSheet"] {
+            let animation = ["AppKit 0x6 -[NSMoveHelper _doAnimation] + 4",
+                             "AppKit 0x7 -[NSSheetMoveHelper \(selector)] + 8"]
+            let idle = sample(wait + animation)
+            XCTAssertFalse(hang([idle]).shouldReport)
+            XCTAssertTrue(hang([idle], ongoing: true).shouldReport)
+            let callback = sample(wait + ["Yardlet 0x8 waitForResult + 4"] + wait.suffix(2) + animation)
+            XCTAssertTrue(hang([idle, callback]).shouldReport)
+            XCTAssertTrue(hang([sample(["Yardlet 0x9 prepareSheet + 8"] + animation)]).shouldReport)
+        }
+    }
+
     /// A main thread held past the threshold is reported once it runs again, with how long it was
     /// busy and a stack that names the function holding it and, deep as it is, what called it.
     func testABusyMainThreadIsReportedWithTheStackThatHeldIt() async throws {

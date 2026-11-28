@@ -93,15 +93,19 @@ extension VaultCenter {
         var rows: [VaultCSVExport.Row] = []
         var count = 0
         var unreadable = 0
-        for item in items {
-            guard let secret = secret(of: item.id) else {
-                if item.hasPassword || item.hasOneTimeCode { unreadable += 1 }
-                continue
+        await beginChange()
+        do {
+            defer { endChange() }
+            for item in items {
+                guard let secret = await secret(of: item.id) else {
+                    if item.hasPassword || item.hasOneTimeCode { unreadable += 1 }
+                    continue
+                }
+                let itemRows = VaultCSVExport.rows(of: item, secret: secret)
+                guard !itemRows.isEmpty else { continue }
+                rows += itemRows
+                count += 1
             }
-            let itemRows = VaultCSVExport.rows(of: item, secret: secret)
-            guard !itemRows.isEmpty else { continue }
-            rows += itemRows
-            count += 1
         }
         try StateFile.write(Data(VaultCSVExport.text(rows).utf8), to: file, isPrivate: true)
         return SignInExport(count: count, unreadable: unreadable)

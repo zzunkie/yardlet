@@ -144,25 +144,37 @@ extension VaultCenter {
     /// site or password (an authenticator's entries), and leaves out codes the vault already keeps. A
     /// code whose account's sign-in is saved takes that sign-in's site (`linkCodesToTheirSignIns`).
     /// Returns how many it saved.
-    func importOneTimeCodes(_ setups: [OneTimeCodeSetup]) -> Int {
+    func importOneTimeCodes(_ setups: [OneTimeCodeSetup]) async -> Int {
+        await beginChange()
+        defer { endChange() }
         var saved = 0
-        for setup in setups where !holds(setup.secret) {
+        for setup in setups where await !hasStoredCode(setup.secret) {
             var name = setup.itemName.isEmpty ? L10n.string("Two-factor code") : setup.itemName
             if !setup.account.isEmpty, name != setup.account,
                items.contains(where: { $0.name.compare(name, options: .caseInsensitive) == .orderedSame }) {
                 name += " (\(setup.account))"
             }
             let item = VaultItem(name: name, sites: [], username: setup.account, policy: .always)
-            guard (try? save(item, secret: VaultSecret(oneTimeCode: setup.secret))) != nil else { continue }
+            guard (try? await saveItem(item, secret: VaultSecret(oneTimeCode: setup.secret))) != nil else { continue }
             saved += 1
         }
-        if saved > 0 { linkCodesToTheirSignIns() }
+        if saved > 0 { _ = await linkSavedCodes() }
         return saved
     }
 
     /// Whether an item already keeps this code's secret.
-    func holds(_ secret: OneTimeCodeSecret) -> Bool {
-        items.contains { $0.hasOneTimeCode && self.secret(of: $0.id)?.oneTimeCode?.key == secret.key }
+    func holds(_ secret: OneTimeCodeSecret) async -> Bool {
+        await beginChange()
+        defer { endChange() }
+        return await hasStoredCode(secret)
+    }
+
+    /// The caller holds the vault change gate throughout the scan.
+    func hasStoredCode(_ secret: OneTimeCodeSecret) async -> Bool {
+        for item in items where item.hasOneTimeCode {
+            if await self.secret(of: item.id)?.oneTimeCode?.key == secret.key { return true }
+        }
+        return false
     }
 
     /// The item a site's new code goes into: the site's item for the code's account, else the site's
@@ -180,19 +192,22 @@ extension VaultCenter {
     /// Puts a site's code into an item (replacing its code), or into a new item for the site. Returns
     /// the item it saved.
     @discardableResult
-    func saveOneTimeCode(_ setup: OneTimeCodeSetup, site: String, into item: VaultItem?) throws -> VaultItem {
-        if let item {
+    func saveOneTimeCode(_ setup: OneTimeCodeSetup, site: String, into item: VaultItem?) async throws -> VaultItem {
+        await beginChange()
+        defer { endChange() }
+        if let requested = item {
             // A secret the keychain would not give back, or one whose item changed outside Yardlet, is left as it is.
-            guard var secret = secretToUpdate(item) else {
+            guard let item = items.first(where: { $0.id == requested.id }), item.sites == requested.sites,
+                  item.username == requested.username, var secret = try await trustedSecret(of: item) else {
                 throw VaultRefusal(message: L10n.string("Yardlet could not read this sign-in from the keychain."))
             }
             secret.oneTimeCode = setup.secret
-            try save(item, secret: secret)
+            try await saveItem(item, secret: secret)
             return items.first { $0.id == item.id } ?? item
         }
         let new = VaultItem(name: setup.issuer.isEmpty ? VaultSite.host(of: site) : setup.issuer, sites: [site],
                             username: setup.account, policy: .always)
-        try save(new, secret: VaultSecret(oneTimeCode: setup.secret))
+        try await saveItem(new, secret: VaultSecret(oneTimeCode: setup.secret))
         return items.first { $0.id == new.id } ?? new
     }
 }

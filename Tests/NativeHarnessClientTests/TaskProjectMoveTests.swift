@@ -329,7 +329,7 @@ final class TaskProjectMoveTests: XCTestCase {
             XCTAssertEqual(TaskProjectMove.commands(options).last.map { [$0.id, $0.title] },
                            ["move-to-chats", L10n.string("Move to Chats")], session.title)
         }
-        let snapshotBefore = AppModelRemoteBridge.snapshot(of: model)
+        let snapshotBefore = AppModelRemoteBridge(model: model).snapshot()
         XCTAssertEqual(snapshotBefore.tasks.first { $0.id == withID.id.uuidString }?.canReturnToChats, true,
                        "Another Mac's window offers the move too")
 
@@ -366,7 +366,7 @@ final class TaskProjectMoveTests: XCTestCase {
         let entries = try JSONDecoder().decode(Listing.self, from: Data(await listing.value.text.utf8)).tasks
         XCTAssertNil(try XCTUnwrap(entries.first { $0.taskId == moved.id.uuidString }).project, "list_tasks names no project")
         XCTAssertEqual(entries.first { $0.taskId == byFolder.id.uuidString }?.project, "Alpha")
-        let snapshot = AppModelRemoteBridge.snapshot(of: model)
+        let snapshot = AppModelRemoteBridge(model: model).snapshot()
         XCTAssertEqual(snapshot.tasks.first { $0.id == moved.id.uuidString }?.projectId,
                        RemoteTaskProjection.chatsProjectID, "The phone lists it under Chats")
         let mirror = RemoteSidebarMirror(hostID: "host", projects: snapshot.projects, tasks: snapshot.tasks)

@@ -35,9 +35,14 @@ enum BrowserFilledValueCleanup {
 
     /// As Yardlet starts: the person's vault passwords from the keychain, never in a test or QA run (whose vault is
     /// in memory) or a build the keychain does not trust with them.
-    static func runAtLaunch() {
+    static func runAtLaunch() async {
         guard NSClassFromString("XCTestCase") == nil, ProcessInfo.processInfo.environment["YARDLET_VAULT_QA"] != "1",
-              UserDefaults.yardlet.data(forKey: recordKey) == nil, MacVault.isTeamSigned else { return }
+              UserDefaults.yardlet.data(forKey: recordKey) == nil, await MacVault.signingCheck.value else { return }
+        guard let passwords = await Task.detached(operation: loadPasswords).value else { return }
+        run(root: BrowserHostPaths.standard().root, passwords: passwords, defaults: .yardlet)
+    }
+
+    nonisolated private static func loadPasswords() -> [String]? {
         let secrets = KeychainVaultSecretStore.live()
         var passwords: [String] = []
         for item in FileVaultRepository.live().loadItems() {
@@ -46,11 +51,11 @@ enum BrowserFilledValueCleanup {
                 secret = try secrets.load(item.id)
             } catch {
                 // An item the keychain will not give now is tried again at the next start.
-                return
+                return nil
             }
             if let password = secret?.password { passwords.append(password) }
         }
-        run(root: BrowserHostPaths.standard().root, passwords: passwords, defaults: .yardlet)
+        return passwords
     }
 
     @discardableResult

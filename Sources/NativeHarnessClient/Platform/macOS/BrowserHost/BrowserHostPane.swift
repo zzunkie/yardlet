@@ -1372,14 +1372,18 @@ struct BrowserHostPane: View {
                         if let offer = controller.vaultOffer { vaultOfferBar(offer) }
                         if let offer = controller.vaultSetupOffer {
                             BrowserVaultSetupBar(offer: offer, dismiss: { controller.dismissSetupOffer() },
-                                                 accept: { controller.acceptSetupOffer(into: $0) })
+                                                 accept: { choice in
+                                                     Task { await controller.acceptSetupOffer(offer, into: choice) }
+                                                 })
                         }
                         if let offer = controller.vaultCodeOffer { vaultCodeBar(offer) }
                         if let offer = controller.vaultPasswordOffer { vaultPasswordBar(offer) }
                         if let offer = controller.vaultSignInOffer { vaultSignInBar(offer) }
                         if let offer = controller.vaultLinkOffer { vaultLinkBar(offer) }
                         if let offer = controller.walletSaveOffer {
-                            BrowserWalletSaveBar(offer: offer, accept: controller.acceptWalletOffer) { controller.walletSaveOffer = nil }
+                            BrowserWalletSaveBar(offer: offer, accept: { Task { await controller.acceptWalletOffer(offer) } }) {
+                                controller.walletSaveOffer = nil
+                            }
                         }
                         if let offer = controller.walletFillOffer {
                             BrowserWalletFillBar(offer: offer, wallet: vault.wallet, fillAddress: controller.fillWallet(address:),
@@ -1738,7 +1742,9 @@ struct BrowserHostPane: View {
     /// Chrome's save bubble, as a bar above the page: the person just signed in with a password the vault
     /// does not have.
     private func vaultOfferBar(_ offer: BrowserVaultSaveOffer) -> some View {
-        BrowserVaultSaveBar(offer: offer, neverSave: controller.neverSaveHere, accept: controller.acceptVaultOffer) {
+        BrowserVaultSaveBar(offer: offer, neverSave: controller.neverSaveHere, accept: { choice in
+            Task { await controller.acceptVaultOffer(offer, into: choice) }
+        }) {
             controller.vaultOffer = nil
         }
     }
@@ -1798,7 +1804,7 @@ struct BrowserHostPane: View {
         } actions: {
             Button(L10n.string("Not Now")) { controller.vaultLinkOffer = nil }
                 .controlSize(.small)
-            Button(L10n.string("Save")) { controller.acceptVaultLinkOffer() }
+            Button(L10n.string("Save")) { Task { await controller.acceptVaultLinkOffer(offer) } }
                 .controlSize(.small)
         }
     }
