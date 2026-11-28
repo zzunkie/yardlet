@@ -1,6 +1,6 @@
 import type { ApiResult } from "./account";
 import { fromBase64Url, sha256, toBase64Url } from "./keys";
-import { count } from "./metrics";
+import { count, isExcluded } from "./metrics";
 import {
   accountIdFor,
   authorizeUrl,
@@ -149,7 +149,9 @@ async function redeem(request: Request, env: Env): Promise<Response> {
   });
   if (!redeemed) return redeemFailed(env);
   const { account, created } = redeemed;
-  count(env.METRICS, created ? "account.signUp" : "account.signIn", [account.provider]);
+  if (!isExcluded(env.METRICS_EXCLUDE_ACCOUNTS, account.id)) {
+    count(env.METRICS, created ? "account.signUp" : "account.signIn", [account.provider]);
+  }
   return json(200, { token: `${account.id}.${toBase64Url(tokenSecret)}`, account });
 }
 
