@@ -60,6 +60,11 @@ final class LocalSystemNotificationCenter: SystemNotificationCenter {
         center.removePendingNotificationRequests(withIdentifiers: identifiers)
     }
 
+    func deliveredIdentifiers() async -> [String] {
+        guard let center = resolvedCenter() else { return [] }
+        return await center.deliveredNotifications().map(\.request.identifier)
+    }
+
     /// Badges follow Notifications › Yardlet › Badges. Installs that allowed notifications before
     /// Yardlet asked for badges ask once more: the person already allowed them (not provisional,
     /// which a new request would prompt to upgrade), so macOS shows no prompt and adds the Badges

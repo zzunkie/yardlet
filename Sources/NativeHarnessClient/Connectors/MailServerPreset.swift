@@ -21,8 +21,7 @@ struct MailServerSettings: Codable, Equatable, Sendable {
 }
 
 /// A mail service that is reached over IMAP and SMTP with an app password, as its own help pages give
-/// it: the servers, the user name, and what the person turns on first on the service's website. Gmail
-/// and Outlook are not here; their accounts come through their own connectors' sign-in.
+/// it: the servers, the user name, and what the person turns on first on the service's website.
 struct MailServerPreset: Identifiable, Hashable, Sendable {
     struct Server: Hashable, Sendable {
         var host: String
@@ -55,6 +54,10 @@ struct MailServerPreset: Identifiable, Hashable, Sendable {
                                   smtpHost: smtp.host, smtpPort: smtp.port, smtpSecurity: smtp.security, smtpUsername: address)
     }
 
+    func normalizedPassword(_ password: String) -> String {
+        id == "gmail" ? password.replacingOccurrences(of: " ", with: "") : password
+    }
+
     static func preset(id: String) -> MailServerPreset? { all.first { $0.id == id } }
 
     /// The preset whose domain the address is at.
@@ -66,7 +69,6 @@ struct MailServerPreset: Identifiable, Hashable, Sendable {
     /// Addresses whose service has its own connector, which reads it better than IMAP.
     static func connectorService(for address: String) -> LocalConnectorService? {
         guard let domain = address.split(separator: "@").last.map({ $0.lowercased() }), address.contains("@") else { return nil }
-        if ["gmail.com", "googlemail.com"].contains(domain) { return .gmail }
         if ["outlook.com", "hotmail.com", "live.com", "msn.com"].contains(domain) { return .outlookMail }
         return nil
     }
@@ -78,6 +80,13 @@ struct MailServerPreset: Identifiable, Hashable, Sendable {
     /// The services, most used here first. Servers and ports are those the services' help pages give
     /// (docs/MAILBOX.md, "Mail accounts over IMAP").
     static let all: [MailServerPreset] = [
+        MailServerPreset(
+            id: "gmail", name: "Gmail", domains: ["gmail.com", "googlemail.com"],
+            imap: Server(host: "imap.gmail.com", port: 993, security: .tls),
+            smtp: Server(host: "smtp.gmail.com", port: 465, security: .tls),
+            steps: [step("Turn on 2-Step Verification in your Google Account."),
+                    step("Create an app password for Yardlet in Google App Passwords.", "https://myaccount.google.com/apppasswords"),
+                    step("Paste the 16-character app password below. Spaces are ignored.")]),
         MailServerPreset(
             id: "naver", name: "Naver Mail", domains: ["naver.com"],
             imap: Server(host: "imap.naver.com", port: 993, security: .tls),

@@ -205,6 +205,7 @@ protocol SystemNotificationCenter: AnyObject {
     func post(_ notification: SystemNotification) async
     /// Withdraws delivered notifications, such as an approval answered in the app.
     func removeNotifications(identifiers: [String])
+    func deliveredIdentifiers() async -> [String]
     /// Whether macOS lets Yardlet badge its Dock icon (Notifications › Yardlet › Badges).
     func allowsBadges() async -> Bool
     /// Receives each click on, and each action from, a notification Yardlet posted.
@@ -219,6 +220,8 @@ extension SystemNotificationCenter {
     }
 
     func removeNotifications(identifiers: [String]) {}
+
+    func deliveredIdentifiers() async -> [String] { [] }
 
     func allowsBadges() async -> Bool { false }
 

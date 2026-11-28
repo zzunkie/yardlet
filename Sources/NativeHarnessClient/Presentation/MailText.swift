@@ -5,19 +5,25 @@ enum MailText {
     /// What "Ask an agent" puts in a new task's composer: the thread named so the agent can read it
     /// with the account's connector, and no body, so nobody else's words reach the prompt as the
     /// person's own. The person writes what to do after it.
-    static func handoff(_ thread: MailThread, account: MailAccount) -> String {
+    static func handoff(_ thread: MailThread, account: MailAccount, accounts: [MailAccount] = []) -> String {
         let sender = thread.summary.senders.first.map(MailComposition.formatted) ?? ""
-        // Gmail's tools read a thread by its ID; Outlook's and an IMAP account's read a message, so the
-        // newest is named (an IMAP thread is one message).
-        let (id, tool) = switch account.provider {
-        case .gmail: (thread.summary.id.threadID, "get_thread")
-        case .outlook, .imap: (thread.messages.last { !$0.isDraft }?.id ?? thread.summary.id.threadID, "get_message")
+        // The folder's UID cannot identify a Gmail thread. Gmail supplies its API ID over IMAP.
+        var reader = account
+        var id = thread.summary.id.threadID
+        if account.provider == .imap, let gmailID = thread.gmailThreadID,
+           let gmail = accounts.first(where: { $0.provider == .gmail && $0.address.caseInsensitiveCompare(account.address) == .orderedSame }) {
+            reader = gmail
+            id = gmailID
         }
-        let reads = account.connectorSlug.map { "`\($0)_\(tool)`" } ?? account.serviceName
+        let isThread = reader.provider == .gmail
+        if !isThread { id = thread.messages.last { !$0.isDraft }?.id ?? id }
+        let tool = isThread ? "get_thread" : "get_message"
+        let reads = reader.connectorSlug.map { "`\($0)_\(tool)`" } ?? reader.serviceName
+        let reference = L10n.format(isThread ? "Mail handoff %@ %@ %@" : "Mail handoff message %@ %@ %@",
+                                    reader.address, id, reads)
         return [L10n.format("Mail subject %@", subject(thread.summary.subject)),
                 L10n.format("Mail from %@", sender),
-                L10n.format(account.provider == .gmail ? "Mail handoff %@ %@ %@" : "Mail handoff message %@ %@ %@",
-                            account.address, id, reads)]
+                reference]
             .joined(separator: "\n") + "\n\n"
     }
 

@@ -41,6 +41,27 @@ final class CalendarCenterTests: XCTestCase {
         return center
     }
 
+    func testForgettingOneAccountKeepsOtherCalendarChoicesEvenWhenDisabled() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("CalendarRemoval")))
+        let (direct, apple) = services()
+        let center = CalendarCenter(defaults: defaults)
+        let first = google.id.uuidString + " primary"
+        let second = mac.id.uuidString + " home"
+        defaults.set([first: true, second: false], forKey: CalendarPreference.choicesKey)
+        center.forgetAccount(google.id)
+        XCTAssertEqual(defaults.dictionary(forKey: CalendarPreference.choicesKey) as? [String: Bool], [second: false])
+        defaults.set([first: true, second: false], forKey: CalendarPreference.choicesKey)
+        center.setAccounts([(google, direct)])
+        center.setEnabled(true)
+        center.setAccounts([(google, direct), (mac, apple)])
+        XCTAssertEqual(center.choices, [first: true])
+        await center.refresh()
+        center.setAccounts([(mac, apple)])
+        XCTAssertTrue(center.calendars.allSatisfy { $0.id.accountID == mac.id })
+        XCTAssertTrue(center.choices.isEmpty)
+        XCTAssertNil(defaults.object(forKey: CalendarPreference.choicesKey))
+    }
+
     func testACalendarThatComesBothWaysIsShownOnceFromItsConnector() async throws {
         let (direct, apple) = services()
         let center = center(direct, apple)

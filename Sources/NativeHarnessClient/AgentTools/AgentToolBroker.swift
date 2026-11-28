@@ -874,6 +874,19 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         }
     }
 
+    func keepConnectorReadApprovals(for services: Set<String>) {
+        let kept = services.union([Self.personalAgentReads])
+        for task in approvedReadServices.keys {
+            approvedReadServices[task]?.formIntersection(kept)
+        }
+        for key in pendingReadApprovals.keys {
+            let scope = key.split(separator: "|", maxSplits: 1).last.map(String.init)
+            if let scope, !kept.contains(scope) {
+                pendingReadApprovals.removeValue(forKey: key)?.answer.cancel()
+            }
+        }
+    }
+
     /// Something a task's tools are made from changed (`ConnectorCenter.onToolsChanged`). Once the
     /// burst settles, each watched task between turns whose list now differs is told.
     func toolsMayHaveChanged() {

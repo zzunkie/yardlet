@@ -4347,3 +4347,7 @@
 "Google's MCP quota was reached. Gmail search has a daily free quota of 500 searches per project. Separate Personal Mode projects give each account its own quota." = "已达到 Google MCP 配额。每个项目每天可免费搜索 Gmail 500 次。为每个账号创建单独的 Personal Mode 项目，即可分别使用配额。";
 "Retry after %@." = "请在 %@ 后重试。";
 "%lld seconds" = "%lld 秒";
+"Turn on 2-Step Verification in your Google Account." = "在 Google 账号中启用两步验证。";
+"Create an app password for Yardlet in Google App Passwords." = "在 Google 应用专用密码页面为 Yardlet 创建密码。";
+"Paste the 16-character app password below. Spaces are ignored." = "在下方粘贴 16 位应用专用密码。空格会自动移除。";
+"An app password connects Mailbox and basic mail_* tools without Google Cloud setup. For full Gmail tools, use the Google connector. Some Workspace organizations disable app passwords." = "使用应用专用密码即可连接邮箱和基本的 mail_* 工具，无需设置 Google Cloud。如需完整的 Gmail 工具，请使用 Google 连接器。部分 Workspace 组织停用了应用专用密码。";

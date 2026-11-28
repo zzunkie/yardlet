@@ -4347,3 +4347,7 @@
 "Google's MCP quota was reached. Gmail search has a daily free quota of 500 searches per project. Separate Personal Mode projects give each account its own quota." = "Google MCP の利用上限に達しました。Gmail 検索の無料枠はプロジェクトごとに 1 日 500 回です。アカウントごとに Personal Mode プロジェクトを作ると、それぞれに別の枠が適用されます。";
 "Retry after %@." = "%@ 後に再試行してください。";
 "%lld seconds" = "%lld 秒";
+"Turn on 2-Step Verification in your Google Account." = "Google アカウントで 2 段階認証を有効にします。";
+"Create an app password for Yardlet in Google App Passwords." = "Google のアプリ パスワードで Yardlet 用のパスワードを作成します。";
+"Paste the 16-character app password below. Spaces are ignored." = "16 文字のアプリ パスワードを下に貼り付けます。スペースは無視されます。";
+"An app password connects Mailbox and basic mail_* tools without Google Cloud setup. For full Gmail tools, use the Google connector. Some Workspace organizations disable app passwords." = "アプリ パスワードを使うと、Google Cloud の設定なしでメールボックスと基本の mail_* ツールに接続できます。Gmail の全ツールには Google コネクタを使います。Workspace の組織によってはアプリ パスワードを利用できません。";

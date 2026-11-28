@@ -11,6 +11,33 @@ import XCTest
 /// nothing reaches Notification Center or the Dock.
 @MainActor
 final class NotificationRoutingTests: XCTestCase {
+    func testDisconnectingMailWhileMailboxIsOffWithdrawsDeliveredNotifications() async throws {
+        let (model, notifications, _) = makeModel(sessions: [])
+        func record(_ address: String) -> ConnectorRecord {
+            ConnectorRecord(name: "Gmail", slug: "gmail", serverURL: URL(string: "https://example.org")!,
+                            authorization: .oauth, status: .connected, localService: .gmail,
+                            account: address, accountSignInID: UUID())
+        }
+        let first = record("first@example.org"), other = record("other@example.org")
+        let center = ConnectorCenter(environment: .init(
+            repository: InMemoryConnectorRepository(records: [first, other]), credentials: InMemoryConnectorCredentialStore(),
+            http: FakeAppStoreConnect(), userAgent: nil, sha256: MacOAuthUserAgent.sha256, clientVersion: "1"))
+        model.connectorCenter = center
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("MailNotificationRemoval")))
+        model.followMailbox(defaults: defaults)
+        XCTAssertFalse(model.mailbox.isEnabled)
+        let firstID = "yardlet-mail-\(first.credentialID.uuidString)-thread"
+        let otherID = "yardlet-mail-\(other.credentialID.uuidString)-thread"
+        notifications.delivered = [firstID, otherID, "yardlet-mail-batch", "another-notification"]
+        center.disconnect(first.id)
+        try await waitUntil { notifications.removed.contains(firstID) }
+        XCTAssertEqual(notifications.removed, [firstID])
+        notifications.delivered.removeAll { $0 == firstID }
+        center.removeAccount(other.credentialID)
+        try await waitUntil { notifications.removed.contains("yardlet-mail-batch") }
+        XCTAssertEqual(Set(notifications.removed), [firstID, otherID, "yardlet-mail-batch"])
+    }
+
     // MARK: - A click opens the task
 
     func testClickingANotificationBringsYardletForwardAndOpensItsTask() async throws {
@@ -1060,6 +1087,9 @@ final class NotificationRoutingTests: XCTestCase {
 @MainActor
 private final class RecordingCenter: SystemNotificationCenter {
     var authorizationStatus: SystemNotificationAuthorization = .authorized
+    var delivered: [String] = []
+    func deliveredIdentifiers() async -> [String] { delivered }
+
     var badgesAllowed = false
     var onPost: (@MainActor (SystemNotification) async -> Void)?
     private(set) var posted: [SystemNotification] = []

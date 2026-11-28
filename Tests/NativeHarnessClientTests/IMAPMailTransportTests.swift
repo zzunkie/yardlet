@@ -75,6 +75,22 @@ final class IMAPMailTransportTests: XCTestCase {
         ], "Reading peeks, so only the mailbox's own change marks a message read")
     }
 
+    func testGmailThreadReferenceUsesTheAPIIdentifier() async throws {
+        let state = FakeMailState()
+        let opener = FakeMailOpener(imap: {
+            FakeIMAPServer { command, literal in
+                if command.hasSuffix(" X-GM-THRID)") {
+                    return ("* 1 FETCH (UID 10 X-GM-THRID 18446744073709551614 RFC822.SIZE 300)\r\n", "OK")
+                }
+                let (data, status) = state.answer(command, literal)
+                return (data, status.replacingOccurrences(of: "IMAP4rev1", with: "IMAP4rev1 X-GM-EXT-1"))
+            }
+        })
+        let thread = try await makeSession(opener).thread("7:10:INBOX")
+        XCTAssertEqual(thread.gmailThreadID, "fffffffffffffffe")
+        XCTAssertEqual(thread.summary.id.threadID, "7:10:INBOX")
+    }
+
     func testADraftIsSavedInDraftsAndSentWithoutItsBccWithACopyInSent() async throws {
         let state = FakeMailState()
         let opener = FakeMailOpener(imap: { FakeIMAPServer(answer: state.answer) }, sent: { state.sent($0) })

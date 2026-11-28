@@ -7,6 +7,61 @@ import XCTest
 /// where each account was read up to.
 @MainActor
 final class MailboxCenterTests: XCTestCase {
+    func testForgetClearsOnlyTheRemovedAccount() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("MailboxRemoval")))
+        let center = MailboxCenter(defaults: defaults)
+        let accounts = MailFixture().transports()
+        let first = accounts[0].account
+        let other = accounts[1].account
+        let saved = [first.id.uuidString: "1", other.id.uuidString: "2"]
+        defaults.set(saved, forKey: MailboxPreference.cursorsKey)
+        center.forgetAccount(first.id)
+        XCTAssertEqual(defaults.dictionary(forKey: MailboxPreference.cursorsKey) as? [String: String], [other.id.uuidString: "2"])
+        defaults.set(saved, forKey: MailboxPreference.cursorsKey)
+        center.setEnabled(true)
+        center.setAccounts(accounts.map { ($0.account, $0) })
+        let window = MailWindowState()
+        window.searchText = "CI"
+        window.runSearch(in: center)
+        try await waitUntil { window.searchResults?.isEmpty == false }
+        window.select(MailThreadKey(accountID: first.id, threadID: MailFixture.quoteThread), in: center)
+        try await waitUntil { window.thread != nil }
+        window.write(.new, account: first)
+        let draft = try XCTUnwrap(window.composition)
+        window.mailbox = .folder(accountID: first.id, folderID: "INBOX")
+        window.toggledAccounts = [first.id, other.id]
+        window.foldedLabels = window.toggledAccounts
+        window.composition?.to = "reader@example.org"
+        window.send(in: center)
+        XCTAssertNotNil(window.sendsAt)
+        center.setAccounts([(other, accounts[1])])
+        window.forgetAccounts(keeping: [other.id])
+        XCTAssertNil(window.sendsAt)
+        XCTAssertNil(window.composition)
+        XCTAssertNil(window.searchResults)
+        XCTAssertNil(window.thread)
+        XCTAssertNil(window.selection)
+        XCTAssertTrue(window.isChanged(draft))
+        XCTAssertEqual(window.mailbox, .allInboxes)
+        XCTAssertEqual(window.foldedLabels, [other.id])
+        XCTAssertEqual(window.toggledAccounts, [other.id])
+        XCTAssertEqual(defaults.dictionary(forKey: MailboxPreference.cursorsKey) as? [String: String], [other.id.uuidString: "2"])
+    }
+
+    func testGmailHandoffResolvesAnIMAPMessageInTheMatchingGoogleAccount() {
+        let address = ["user", "gmail.com"].joined(separator: "@")
+        let account = MailAccount(id: UUID(), address: address, provider: .imap, connectorSlug: "mail")
+        let google = MailAccount(id: UUID(), address: address.uppercased(), provider: .gmail, connectorSlug: "gmail")
+        var thread = MailFixture().single(account.id, "folder-uid", from: MailAddress(address: "sender@example.org"),
+                                          date: .now, subject: "Meeting", text: "Agenda")
+        thread.gmailThreadID = "b00c"
+        let handoff = MailText.handoff(thread, account: account, accounts: [google, account])
+        XCTAssertTrue(handoff.contains("gmail_get_thread"))
+        XCTAssertTrue(handoff.contains("b00c"))
+        XCTAssertFalse(handoff.contains("folder-uid"))
+        XCTAssertTrue(MailText.handoff(thread, account: account, accounts: [account]).contains("mail_get_message"))
+    }
+
     func testNewMailReadsTheInboxAgainAndIsToldOnce() async throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("MailboxWatch")))
         let fixture = MailFixture()

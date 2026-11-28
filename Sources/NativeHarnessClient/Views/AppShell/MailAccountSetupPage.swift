@@ -19,8 +19,9 @@ struct MailAccountSetupPage: View {
     /// The "Other IMAP server" choice, which shows the server fields.
     static let otherID = "other"
 
-    init(center: ConnectorCenter, address: String = "", preset: String? = nil) {
+    init(center: ConnectorCenter, address: String = "", password: String = "", preset: String? = nil) {
         self.center = center
+        _password = State(initialValue: password)
         _address = State(initialValue: address)
         _chosenPreset = State(initialValue: preset)
         _custom = State(initialValue: MailServerSettings(preset: nil, imapHost: "", imapPort: 993, imapSecurity: .tls, imapUsername: "",
@@ -48,8 +49,10 @@ struct MailAccountSetupPage: View {
         return settings
     }
 
+    private var normalizedPassword: String { preset?.normalizedPassword(password) ?? password }
+
     private var canConnect: Bool {
-        trimmedAddress.contains("@") && !password.isEmpty && settings != nil && !busy
+        trimmedAddress.contains("@") && !normalizedPassword.isEmpty && settings != nil && !busy
             && MailServerPreset.connectorService(for: trimmedAddress) == nil
     }
 
@@ -73,6 +76,12 @@ struct MailAccountSetupPage: View {
                                  service.name, service.name))
                     .font(.caption)
                     .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if preset?.id == "gmail" {
+                Text(L10n.string("An app password connects Mailbox and basic mail_* tools without Google Cloud setup. For full Gmail tools, use the Google connector. Some Workspace organizations disable app passwords."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             ConnectorSetupHeader(title: accounts.isEmpty ? L10n.string("Set up a mail account") : L10n.string("Add another mail account"),
@@ -129,6 +138,11 @@ struct MailAccountSetupPage: View {
                 SecureField("", text: $password)
                     .textFieldStyle(.roundedBorder)
                     .accessibilityLabel(L10n.string("App password"))
+            }
+            if let preset, preset.id == "gmail" {
+                Text(verbatim: "\(preset.imap.host):\(preset.imap.port) · \(preset.smtp.host):\(preset.smtp.port)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             if presetID == Self.otherID { serverFields }
         }
@@ -224,11 +238,12 @@ struct MailAccountSetupPage: View {
         guard let settings else { return }
         busy = true
         error = nil
+        let credential = normalizedPassword
         let address = trimmedAddress
         let name = preset.map { L10n.string($0.name) } ?? address
         Task {
             do {
-                _ = try await center.addMailAccount(address: address, password: password, settings: settings, name: name)
+                _ = try await center.addMailAccount(address: address, password: credential, settings: settings, name: name)
                 password = ""
                 self.address = ""
                 chosenPreset = nil

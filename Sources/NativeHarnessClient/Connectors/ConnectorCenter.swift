@@ -961,7 +961,13 @@ final class ConnectorCenter: ConnectorToolProviding {
         let affected = record(id)?.signsInPerAccount == true ? accountRecords(key).map(\.id) : [id]
         for other in affected {
             failures[other] = nil
-            update(other) { $0.status = .notConnected }
+            toolRefreshes.removeValue(forKey: other)?.cancel()
+            appCalls.forget(connector: other)
+            update(other) {
+                $0.status = .notConnected
+                $0.tools = []
+                $0.toolsUpdatedAt = nil
+            }
         }
     }
 
@@ -988,6 +994,7 @@ final class ConnectorCenter: ConnectorToolProviding {
         sessions[id] = nil
         failures[id] = nil
         activity[id] = nil
+        appCalls.forget(connector: id)
         connectors.removeAll { $0.id == id }
         let pruned = offInTasks.compactMapValues { set -> Set<UUID>? in
             let rest = set.subtracting([id])
@@ -2262,11 +2269,13 @@ final class ConnectorCenter: ConnectorToolProviding {
             }
         }
         let limit = environment.toolCallLimit
+        let cachesView = caller == .model && context.taskID != nil && MCPAppTool.viewURI(of: tool) != nil
+        let viewSession = cachesView ? session(for: record) : nil
         let answer = await Self.answer(within: limit) { [self] in
             await runConnectorTool(record, tool: toolName, arguments: arguments, readOnly: readOnly, context: context)
         }
-        if let answer, caller == .model, let taskID = context.taskID, MCPAppTool.viewURI(of: tool) != nil {
-            keepForView(answer, task: taskID, tool: name, arguments: calledArguments)
+        if let answer, let viewSession, sessions[record.id] === viewSession, let taskID = context.taskID {
+            keepForView(answer, connector: record.id, task: taskID, tool: name, arguments: calledArguments)
         }
         guard let answer else {
             let seconds = Int(limit.components.seconds)
@@ -2598,7 +2607,7 @@ final class ConnectorCenter: ConnectorToolProviding {
         toolRefreshes[record.id] = Task { [weak self] in
             let tools = try? await session.listTools()
             let icons = await session.serverIcons()
-            guard let self else { return }
+            guard let self, !Task.isCancelled else { return }
             self.toolRefreshes[record.id] = nil
             guard let tools else { return }
             self.update(record.id) {
@@ -2770,10 +2779,10 @@ extension ConnectorCenter {
 
     /// A model's call to a tool with a view returned: its whole result is kept for the view, unless it is too large to
     /// keep.
-    fileprivate func keepForView(_ answer: AgentToolResult, task: UUID, tool: String, arguments: ToolJSON) {
+    fileprivate func keepForView(_ answer: AgentToolResult, connector: UUID, task: UUID, tool: String, arguments: ToolJSON) {
         let result = answer.callToolResult
         guard let size = try? JSONEncoder().encode(result).count, size <= Self.largestKeptResult else { return }
-        appCalls.record(result, task: task, tool: tool, arguments: arguments)
+        appCalls.record(result, connector: connector, task: task, tool: tool, arguments: arguments)
     }
 
     /// The view a tool names and the tool as its server listed it, read from the tool's connector the first time and
