@@ -462,8 +462,11 @@ final class ConnectorCenter: ConnectorToolProviding {
     /// The Google OAuth app this build carries, used when the person saved none of their own.
     var googleBuiltInApp: GoogleOAuth.BuiltInApp? { environment.googleBuiltInApp }
 
-    /// Whether a saved OAuth client is available for Google agent tools.
-    var canSignInWithGoogle: Bool { googleAppClientID != nil || connectors.contains { $0.googleOAuthClientID != nil } }
+    /// Rows that can appear in agent settings and task tool lists. Native screens use their own account grants.
+    var agentConnectors: [ConnectorRecord] { connectors.filter { $0.googleAgentDisabled != true } }
+
+    /// A new account without a Personal Mode client can sign in with a shared Google app.
+    var canSignInWithGoogle: Bool { googleAppClientID != nil }
 
     /// The Microsoft Entra app the person registered for Outlook, OneDrive, and Teams; nil until
     /// one is saved.
@@ -482,6 +485,13 @@ final class ConnectorCenter: ConnectorToolProviding {
         case .google: canSignInWithGoogle
         case .microsoft: canSignInWithMicrosoft
         }
+    }
+
+    /// Whether this existing account must set up an OAuth client before it can reconnect.
+    func needsAccountApp(for record: ConnectorRecord) -> Bool {
+        guard let provider = record.localService?.accountProvider else { return false }
+        if provider == .google, record.googleOAuthClientID != nil { return false }
+        return !canSignIn(with: provider)
     }
 
     /// The provider services offered for account-based agent sign-in.
@@ -519,7 +529,7 @@ final class ConnectorCenter: ConnectorToolProviding {
     @ObservationIgnored private var stdioClients: [UUID: MCPStdioClient] = [:]
     @ObservationIgnored private var connectTasks: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var toolRefreshes: [UUID: Task<Void, Never>] = [:]
-    @ObservationIgnored private var pendingDeletion: Task<Void, Never>?
+    @ObservationIgnored private var pendingCredentialChange: Task<Void, Never>?
     /// The whole results of this run's calls to tools with a view (docs/CONNECTORS.md, "MCP Apps").
     @ObservationIgnored let appCalls = ConnectorAppCalls()
     /// Views read this run, by connector and URI, the most recently used last.
@@ -546,7 +556,21 @@ final class ConnectorCenter: ConnectorToolProviding {
             googleAppClientID = nil
             environment.repository.saveGoogleAppClientID(nil)
         }
-        applyGoogleMigrations(saved.googleMigrations ?? googleCredentials.migrations(in: saved, builtIn: googleBuiltInApp))
+        if let migrations = saved.googleMigrations {
+            applyGoogleMigrations(migrations)
+        } else if saved.connectors.contains(where: { $0.isGoogle && $0.googleUISignIn == nil }) {
+            // The app normally supplies a prepared snapshot. An early service start still keeps
+            // Keychain I/O off the main actor and completes it before later credential changes.
+            let credentials = googleCredentials
+            let builtIn = googleBuiltInApp
+            let reading = Task.detached { credentials.migrations(in: saved, builtIn: builtIn) }
+            pendingCredentialChange = Task { [weak self] in
+                let migrations = await reading.value
+                self?.applyGoogleMigrations(migrations)
+            }
+        } else {
+            applyGoogleMigrations([:])
+        }
     }
 
     private var googleCredentials: GoogleAccountCredentials {
@@ -568,7 +592,7 @@ final class ConnectorCenter: ConnectorToolProviding {
                         if let endpoint = $0.localService?.workspaceEndpoints.first { $0.serverURL = endpoint.url }
                         $0.hasGoogleUISignIn = migration.calendar
                         $0.googleMailboxSignIn = migration.mailbox
-                        if migration.builtIn && $0.status != .notConnected {
+                        if migration.builtIn && $0.googleAgentDisabled != true && $0.status != .notConnected {
                             $0.status = .signInRequired
                             $0.tools = []
                             $0.toolsUpdatedAt = nil
@@ -582,6 +606,13 @@ final class ConnectorCenter: ConnectorToolProviding {
                     failures[record.id] = error.localizedDescription
                 }
             }
+        }
+        // Start discovery before the first task asks for its Claude tool allowlist, including
+        // after a restart between saving the migrated account and saving its first tool list.
+        for record in connectors where record.status == .connected && record.googleAgentDisabled != true
+            && record.needsWorkspaceToolDiscovery && failures[record.id] == nil
+            && (record.googleOAuthClientID != nil || googleAppClientID != nil) {
+            refreshToolsIfStale(record)
         }
     }
 
@@ -793,15 +824,16 @@ final class ConnectorCenter: ConnectorToolProviding {
               let account = account(id), account.provider == .google else { throw GoogleSignInError.noApp }
         cancelConnect(account.services[0].id)
         await waitForConnection(account.services[0].id)
-        await pendingDeletion?.value
+        await pendingCredentialChange?.value
         guard self.account(id) != nil else { throw CancellationError() }
         let credential = ConnectorCredential.client(id: client, secret: Self.trimmed(secret))
-        try googleCredentials.saveAgent(credential, for: id)
+        try await googleStore { try $0.saveAgent(credential, for: id) }
+        guard self.account(id) != nil else { throw CancellationError() }
         accountSessions[id] = nil
-        for record in account.services {
+        for record in accountRecords(id) {
             update(record.id) {
                 $0.googleOAuthClientID = client
-                $0.status = .signInRequired
+                if $0.googleAgentDisabled != true { $0.status = .signInRequired }
             }
         }
     }
@@ -818,7 +850,7 @@ final class ConnectorCenter: ConnectorToolProviding {
                 if account.enabled == [service] {
                     disconnect(record.id)
                     update(record.id) { $0.googleAgentDisabled = true }
-                    await pendingDeletion?.value
+                    await pendingCredentialChange?.value
                     return
                 }
                 // A native screen can still use this row with its agent service off.
@@ -927,7 +959,7 @@ final class ConnectorCenter: ConnectorToolProviding {
     private func replaceCredential(_ credential: ConnectorCredential, for id: UUID, at destination: String) async throws {
         cancelConnect(id)
         await connectTasks[id]?.value
-        await pendingDeletion?.value
+        await pendingCredentialChange?.value
         try await saveCredential(credential, for: id, at: destination)
         sessions[id] = nil
     }
@@ -1085,7 +1117,7 @@ final class ConnectorCenter: ConnectorToolProviding {
             deviceCodes[id] = nil
         }
         // A disconnect just before must not leave its old credential for this connection to find.
-        await pendingDeletion?.value
+        await pendingCredentialChange?.value
         guard let record = record(id) else { return }
         guard !record.needsSetupBeforeConnecting || signsInOnGitHub(record) else {
             failures[id] = ConnectorOAuthError.noDynamicRegistration.errorDescription
@@ -1276,7 +1308,7 @@ final class ConnectorCenter: ConnectorToolProviding {
             for record in accountRecords(accountID) { activity[record.id] = nil }
         }
         // A disconnect just before must not leave its old credential for this connection to find.
-        await pendingDeletion?.value
+        await pendingCredentialChange?.value
         let records = accountRecords(accountID).filter { $0.googleAgentDisabled != true }
         guard let first = records.first, let provider = first.localService?.accountProvider else { return }
         let address = records.compactMap(\.account).first
@@ -1325,7 +1357,7 @@ final class ConnectorCenter: ConnectorToolProviding {
             if let signedIn {
                 try Task.checkCancellation()
                 if provider == .google {
-                    try googleCredentials.saveAgent(signedIn, for: accountID)
+                    try await googleStore { try $0.saveAgent(signedIn, for: accountID) }
                 } else {
                     try await saveCredential(signedIn, for: accountID, at: destination)
                 }
@@ -1344,7 +1376,9 @@ final class ConnectorCenter: ConnectorToolProviding {
             return
         } catch OAuthAPISession.Failure.signInRequired {
             if Task.isCancelled { return }
-            for record in accountRecords(accountID) { update(record.id) { $0.status = .signInRequired } }
+            for record in accountRecords(accountID) where record.googleAgentDisabled != true {
+                update(record.id) { $0.status = .signInRequired }
+            }
         } catch {
             if Task.isCancelled { return }
             let text = message(for: error, connector: first)
@@ -1399,12 +1433,16 @@ final class ConnectorCenter: ConnectorToolProviding {
             // The same account signed in twice: one account, with the newer sign-in, which holds what
             // was granted before as well (Google's `include_granted_scopes`, Microsoft's consent).
             let destination = provider.credentialDestination
+            let targetID = existing.id
             if let credential = try await store(at: destination, { try $0.load(accountID) }) {
                 if provider == .google {
-                    try googleCredentials.saveAgent(credential, for: existing.id)
+                    guard account(targetID) != nil else { throw CancellationError() }
+                    try await googleStore { try $0.saveAgent(credential, for: targetID) }
                 } else { try await saveCredential(credential, for: existing.id, at: destination) }
             }
             try await store { try $0.delete(accountID) }
+            guard let existing = account(targetID) else { throw CancellationError() }
+            let records = accountRecords(accountID)
             accountSessions[accountID] = nil
             accountSessions[existing.id] = nil
             for record in records {
@@ -1417,11 +1455,12 @@ final class ConnectorCenter: ConnectorToolProviding {
             if provider == .google {
                 let client = records.compactMap(\.googleOAuthClientID).first
                 let ui = existing.services.contains(where: \.hasGoogleUISignIn)
+                let mailbox = existing.services.contains { $0.googleMailboxSignIn == true }
                 for record in accountRecords(existing.id) {
                     update(record.id) {
                         $0.googleOAuthClientID = client
                         $0.hasGoogleUISignIn = ui
-                        $0.googleMailboxSignIn = existing.services.first?.googleMailboxSignIn
+                        $0.googleMailboxSignIn = mailbox
                         if records.contains(where: { $0.localService == record.localService }) { $0.googleAgentDisabled = nil }
                     }
                 }
@@ -1431,8 +1470,9 @@ final class ConnectorCenter: ConnectorToolProviding {
         let services = accountRecords(target).compactMap(\.localService)
         let granted = granted(provider, credential, of: services)
         let held = ownAppOnly(provider, credential, of: services)
-        for record in accountRecords(target) where record.googleAgentDisabled != true {
-            guard let service = record.localService else { continue }
+        for id in accountRecords(target).map(\.id) {
+            // A sibling's tool discovery can suspend while this service is turned off or removed.
+            guard let record = record(id), record.googleAgentDisabled != true, let service = record.localService else { continue }
             let firstSignIn = record.account == nil
             update(record.id) {
                 $0.account = $0.account ?? address
@@ -1570,7 +1610,9 @@ final class ConnectorCenter: ConnectorToolProviding {
     }
 
     private func googleSignInRequired(_ record: ConnectorRecord) -> AgentToolResult {
-        for other in accountRecords(record.credentialID) { update(other.id) { $0.status = .signInRequired } }
+        for other in accountRecords(record.credentialID) where other.googleAgentDisabled != true {
+            update(other.id) { $0.status = .signInRequired }
+        }
         return .error("\(record.displayName) needs the user to sign in again: Yardlet Settings → Connectors → "
             + "\(record.name) → Reconnect.")
     }
@@ -1762,7 +1804,7 @@ final class ConnectorCenter: ConnectorToolProviding {
             connectTasks[id] = nil
             activity[id] = nil
         }
-        await pendingDeletion?.value
+        await pendingCredentialChange?.value
         guard let record = record(id) else { return }
         failures[id] = nil
         activity[id] = .connecting
@@ -1923,7 +1965,7 @@ final class ConnectorCenter: ConnectorToolProviding {
             connectTasks[id] = nil
             activity[id] = nil
         }
-        await pendingDeletion?.value
+        await pendingCredentialChange?.value
         guard let record = record(id) else { return }
         failures[id] = nil
         activity[id] = .connecting
@@ -2123,13 +2165,13 @@ final class ConnectorCenter: ConnectorToolProviding {
     }
 
     var importSuggestions: [ConnectorImportSuggestion] {
-        ConnectorImportSuggestion.suggestions(from: nativeInventory, connected: connectors)
+        ConnectorImportSuggestion.suggestions(from: nativeInventory, connected: agentConnectors)
     }
 
     // MARK: Tools for harness sessions
 
     var offersTools: Bool {
-        connectors.contains { $0.status == .connected }
+        connectors.contains { $0.googleAgentDisabled != true && $0.status == .connected }
     }
 
     /// A connector that worked and now needs a new sign-in keeps its tools in the list, each call
@@ -2149,7 +2191,7 @@ final class ConnectorCenter: ConnectorToolProviding {
                 let prefix = ConnectorToolNaming.accountToolPrefix(for: service, among: connectors)
                 for record in records where record.status == .connected && service.usesWorkspaceMCP {
                     refreshToolsIfStale(record)
-                    if record.workspaceToolEndpoints == nil { await toolRefreshes[record.id]?.value }
+                    if record.needsWorkspaceToolDiscovery { await toolRefreshes[record.id]?.value }
                 }
                 let current = records.compactMap { self.record($0.id) }.filter {
                     (!service.usesWorkspaceMCP || $0.status == .connected)
@@ -2175,6 +2217,19 @@ final class ConnectorCenter: ConnectorToolProviding {
         guard let endpoint = record.workspaceToolEndpoints?[tool],
               record.localService?.workspaceEndpoints.contains(endpoint) == true else { return nil }
         return GoogleWorkspaceMCPClient(endpoint: endpoint.url, transport: environment.googleWorkspaceTransport)
+    }
+
+    /// Claude fixes its tool allowlist at process launch. Join first-time discovery for the
+    /// connected services this task can use if it starts while migration is still warming them.
+    func waitForInitialWorkspaceTools(for taskID: UUID, scope: ConnectorTaskScope) async {
+        guard scope.harness == .claudeCode else { return }
+        let needed = connectors.filter {
+            $0.status == .connected && $0.googleAgentDisabled != true && $0.needsWorkspaceToolDiscovery
+                && state(of: $0, inTask: taskID, scope: scope) == .on
+        }
+        guard !needed.isEmpty else { return }
+        await pendingCredentialChange?.value
+        for record in needed { await toolRefreshes[record.id]?.value }
     }
 
     func googleWorkspaceToolNames(for context: ConnectorToolContext) -> [String] {
@@ -2227,7 +2282,7 @@ final class ConnectorCenter: ConnectorToolProviding {
     private func toolOwners(listedIn context: ConnectorToolContext?) -> [ToolOwner] {
         var owners: [ToolOwner] = []
         var accountsByService: [LocalConnectorService: [ConnectorRecord]] = [:]
-        for record in connectors {
+        for record in connectors where record.googleAgentDisabled != true {
             if let context {
                 guard record.status == .connected || (record.status == .signInRequired && record.toolsUpdatedAt != nil),
                       state(of: record, inTask: context.taskID, scope: context.scope) == .on else { continue }
@@ -2572,17 +2627,33 @@ final class ConnectorCenter: ConnectorToolProviding {
         let existing = original.flatMap { account($0.id) } ?? googleAccounts.first { $0.address?.lowercased() == identity.lowercased() }
         var row = existing?.record(.googleCalendar) ?? makeAccountRecord(.googleCalendar, address: identity, accountID: existing?.id)
         let target = existing?.id ?? row.id
-        try googleCredentials.update(target) { value in
-            var combined = value ?? ConnectorCredential(kind: .client, accessToken: "")
-            if existing?.services.first?.googleMailboxSignIn == true, combined.uiMailboxGrant == nil,
-               combined.uiClientID != googleBuiltInApp?.clientID {
-                combined.uiMailboxGrant = GoogleMailboxGrant(combined.calendarGrant(endpoint: environment.google.token))
-            }
-            combined.setCalendarGrant(grant)
-            value = combined
+        let newAccount = existing == nil
+        if newAccount {
+            // Reserve the new account before yielding to Keychain. A second sign-in for the
+            // same address finds this row, and removal queues deletion behind this write.
+            row.googleAgentDisabled = true
+            connectors.append(row)
         }
+        let keepMailbox = existing?.services.contains { $0.googleMailboxSignIn == true } == true
+        do {
+            try await googleStore { credentials in
+                try credentials.update(target) { value in
+                    var combined = value ?? ConnectorCredential(kind: .client, accessToken: "")
+                    if keepMailbox, combined.uiMailboxGrant == nil, combined.uiClientID != credentials.builtInClientID {
+                        combined.uiMailboxGrant = GoogleMailboxGrant(combined.calendarGrant(endpoint: credentials.tokenEndpoint))
+                    }
+                    combined.setCalendarGrant(grant)
+                    value = combined
+                }
+            }
+        } catch {
+            if newAccount, let current = account(target), current.services == [row] { remove(row.id) }
+            throw error
+        }
+        guard let current = account(target) else { throw CancellationError() }
         calendarUISessions[target] = nil
-        if existing?.record(.googleCalendar) == nil {
+        if current.record(.googleCalendar) == nil {
+            row = makeAccountRecord(.googleCalendar, address: identity, accountID: target)
             row.googleAgentDisabled = true
             row.hasGoogleUISignIn = true
             connectors.append(row)
@@ -2606,14 +2677,19 @@ final class ConnectorCenter: ConnectorToolProviding {
         return session
     }
 
-    private func googleUIGrantExpired(_ id: UUID) {
+    private func googleUIGrantExpired(_ id: UUID) async {
         // A replacement sign-in may have completed before the invalid-grant callback ran.
-        let calendar = (try? googleCredentials.sessionStore(.calendar).load(id)) != nil
-        let mailbox = (try? googleCredentials.sessionStore(.mailbox).load(id)) != nil
+        let previousCalendar = calendarUISessions[id]
+        let previousMailbox = mailboxUISessions[id]
+        guard let (calendar, mailbox) = try? await googleStore({ credentials in
+            let calendar = try credentials.sessionStore(.calendar).load(id) != nil
+            let mailbox = try credentials.sessionStore(.mailbox).load(id) != nil
+            return (calendar, mailbox)
+        }) else { return }
         for record in accountRecords(id) {
             update(record.id) {
-                if !calendar { $0.hasGoogleUISignIn = false }
-                if !mailbox { $0.googleMailboxSignIn = false }
+                if !calendar, previousCalendar === calendarUISessions[id] { $0.hasGoogleUISignIn = false }
+                if !mailbox, previousMailbox === mailboxUISessions[id] { $0.googleMailboxSignIn = false }
             }
         }
     }
@@ -2818,7 +2894,7 @@ final class ConnectorCenter: ConnectorToolProviding {
             update(record.id) {
                 $0.tools = tools
                 $0.workspaceToolEndpoints = routes
-                $0.toolsUpdatedAt = environment.now()
+                if successful { $0.toolsUpdatedAt = environment.now() }
                 if !successful && tools.isEmpty { $0.status = .notConnected }
             }
         } catch {
@@ -2832,7 +2908,7 @@ final class ConnectorCenter: ConnectorToolProviding {
     private func refreshToolsIfStale(_ record: ConnectorRecord) {
         let age = record.toolsUpdatedAt.map { environment.now().timeIntervalSince($0) } ?? .infinity
         let workspace = record.localService?.usesWorkspaceMCP == true
-        guard age > environment.toolListMaximumAge || (workspace && record.workspaceToolEndpoints == nil),
+        guard age > environment.toolListMaximumAge || record.needsWorkspaceToolDiscovery,
               toolRefreshes[record.id] == nil, connectTasks[taskKey(record.id)] == nil else { return }
         if workspace {
             toolRefreshes[record.id] = Task {
@@ -2902,6 +2978,22 @@ final class ConnectorCenter: ConnectorToolProviding {
         return try await Task.detached { try operation(credentials) }.value
     }
 
+    /// Keep account writes ordered with disconnect and deletion even if Keychain waits for a prompt.
+    private func googleStore<T: Sendable>(
+        _ operation: @escaping @Sendable (GoogleAccountCredentials) throws -> T
+    ) async throws -> T {
+        let credentials = googleCredentials
+        let change = Task.detached { [previous = pendingCredentialChange] in
+            await previous?.value
+            try Task.checkCancellation()
+            return try operation(credentials)
+        }
+        pendingCredentialChange = Task { _ = await change.result }
+        return try await withTaskCancellationHandler {
+            try await change.value
+        } onCancel: { change.cancel() }
+    }
+
     /// The same, on the store as a connector whose secret goes to `destination` sees it
     /// (`ConnectorCredentialDestinationStore`): every read of a secret that is then sent, and every save.
     private func store<T: Sendable>(
@@ -2918,7 +3010,7 @@ final class ConnectorCenter: ConnectorToolProviding {
         let credentials = environment.credentials
         let google = accountRecords(id).contains(where: \.isGoogle) ? googleCredentials : nil
         let keeps = keepingClient && (record(id)?.usesRegisteredClient == true || record(id)?.program != nil)
-        pendingDeletion = Task.detached { [previous = pendingDeletion] in
+        pendingCredentialChange = Task.detached { [previous = pendingCredentialChange] in
             await previous?.value
             if let google {
                 try? google.update(id) { value in
@@ -2934,7 +3026,7 @@ final class ConnectorCenter: ConnectorToolProviding {
 
     /// Waits for background deletions, for callers that read the store right after.
     func waitForPendingDeletions() async {
-        await pendingDeletion?.value
+        await pendingCredentialChange?.value
     }
 
     private func session(for record: ConnectorRecord) -> ConnectorSession {

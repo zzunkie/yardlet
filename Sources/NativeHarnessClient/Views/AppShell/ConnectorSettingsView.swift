@@ -23,6 +23,7 @@ struct ConnectorSettingsView: View {
     static let importDismissedKey = "YardletConnectorImportDismissed"
 
     var body: some View {
+        let records = ConnectorSettingsState.ordered(center)
         VStack(alignment: .leading, spacing: SettingsMetrics.groupSpacing) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(L10n.string("Tools of the services you connect here work in every task, whichever harness or account it uses."))
@@ -56,7 +57,7 @@ struct ConnectorSettingsView: View {
                         .settingsAnchor(SettingsSearch.Anchor.addConnector)
                     Spacer(minLength: 8)
                     // With none yet, the empty state holds the one "Add connector".
-                    if (!isRemote || onRemoteAdd != nil), !center.connectors.isEmpty {
+                    if (!isRemote || onRemoteAdd != nil), !records.isEmpty {
                         Button {
                             addConnector()
                         } label: {
@@ -67,11 +68,11 @@ struct ConnectorSettingsView: View {
                     }
                 }
                 .frame(minHeight: 22)
-                if center.connectors.isEmpty {
+                if records.isEmpty {
                     emptyState
                 } else {
                     VStack(spacing: 0) {
-                        ForEach(Array(ConnectorSettingsState.ordered(center).enumerated()), id: \.element.id) { index, record in
+                        ForEach(Array(records.enumerated()), id: \.element.id) { index, record in
                             if index > 0 { Divider().padding(.leading, 42) }
                             ConnectorRow(
                                 center: center,
@@ -314,7 +315,7 @@ enum ConnectorSettingsState: Equatable {
             let activity = record.status == .connected ? nil : center.activity[record.id]
             return make(record, activity: activity, failure: center.failures[record.id]).rank
         }
-        return center.connectors.enumerated()
+        return center.agentConnectors.enumerated()
             .sorted { lhs, rhs in
                 let left = rank(lhs.element), right = rank(rhs.element)
                 return left == right ? lhs.offset < rhs.offset : left < right
@@ -610,7 +611,7 @@ private struct ConnectorRow: View {
 
     /// A Google or Microsoft account with no app to sign in with: its page in Add connector comes first.
     private var needsAccountApp: Bool {
-        record.localService?.accountProvider.map { !center.canSignIn(with: $0) } ?? false
+        center.needsAccountApp(for: record)
     }
 
     /// An App Store Connect key Apple refused, or an app password a mail server refused: a new one is

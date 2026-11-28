@@ -46,7 +46,7 @@ final class ConnectorsEasyQARenderingTests: XCTestCase {
 
     private func center(_ records: [ConnectorRecord], app: Bool, homes: [NativeMCPHome] = []) -> ConnectorCenter {
         var environment = ConnectorCenter.Environment(
-            repository: InMemoryConnectorRepository(records: records, googleAppClientID: app ? FakeGoogle.clientID : nil),
+            repository: InMemoryConnectorRepository(records: records.map(FakeGoogle.withCachedTools), googleAppClientID: app ? FakeGoogle.clientID : nil),
             credentials: InMemoryConnectorCredentialStore(), http: FakeGoogleWorkspace(), userAgent: FakeUserAgent(),
             sha256: MacOAuthUserAgent.sha256, clientVersion: "9.9")
         environment.googleWorkspaceTransport = environment.http

@@ -179,6 +179,10 @@ struct ConnectorRecord: Codable, Equatable, Identifiable, Sendable {
     /// Google's and Microsoft's.
     var signsInPerAccount: Bool { localService?.accountProvider != nil }
 
+    var needsWorkspaceToolDiscovery: Bool {
+        localService?.usesWorkspaceMCP == true && workspaceToolEndpoints?.isEmpty != false
+    }
+
     /// The tools it offers: a local service's own catalog, which comes with the app, or the
     /// server's list as it last gave it (a remote server's, or Xcode's).
     var offeredTools: [ToolJSON] { localService?.tools ?? tools }

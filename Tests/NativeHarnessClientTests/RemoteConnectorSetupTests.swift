@@ -223,6 +223,13 @@ final class RemoteConnectorSetupTests: XCTestCase {
         environment.googleWorkspaceTransport = google
         let center = ConnectorCenter(environment: environment)
         let coordinator = RemoteConnectorSetupCoordinator()
+        // A client saved on an existing account cannot authorize a new account.
+        let missing = try start(coordinator, center: center, draft: .init(presetID: "gmail", clientID: "  "))
+        try await waitUntil { try self.poll(coordinator, id: missing, center: center).status == .failed }
+        XCTAssertNil(try poll(coordinator, id: missing, center: center).connectorID)
+        XCTAssertEqual(center.googleAccounts.map(\.id), [existing.id])
+        XCTAssertTrue(google.requests.isEmpty)
+
         let id = try start(coordinator, center: center, draft: .init(presetID: "gmail",
             clientID: FakeGoogle.clientID, clientSecret: FakeGoogle.clientSecret))
         let (result, opened) = try await completeOAuth(coordinator, id: id, center: center)

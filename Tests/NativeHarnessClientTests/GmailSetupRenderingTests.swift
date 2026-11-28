@@ -25,7 +25,7 @@ final class GmailSetupRenderingTests: XCTestCase {
     private func center(_ records: [ConnectorRecord], app: Bool, builtIn: Bool = false,
                         credentials: InMemoryConnectorCredentialStore = InMemoryConnectorCredentialStore()) -> ConnectorCenter {
         var environment = ConnectorCenter.Environment(
-            repository: InMemoryConnectorRepository(records: records,
+            repository: InMemoryConnectorRepository(records: records.map(FakeGoogle.withCachedTools),
                                                     googleAppClientID: app ? FakeGoogle.clientID : nil),
             credentials: credentials, http: FakeGoogle(), userAgent: FakeUserAgent(),
             sha256: MacOAuthUserAgent.sha256, clientVersion: "9.9")

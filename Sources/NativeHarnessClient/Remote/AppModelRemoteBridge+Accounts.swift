@@ -172,7 +172,7 @@ extension AppModelRemoteBridge {
 
         guard let center = model.connectorCenter,
               let uuid = UUID(uuidString: id),
-              let record = center.connectors.first(where: { $0.id == uuid }) else {
+              let record = center.record(uuid), record.googleAgentDisabled != true else {
             return .failure(RemoteError(.notFound))
         }
         guard record.status == .connected || !center.isOn(uuid) else {
@@ -227,7 +227,7 @@ extension AppModelRemoteBridge {
         let harnesses = HarnessCatalog.builtIns.map { descriptor in
             remoteHarnessRuntime(for: descriptor, in: model)
         }
-        let connectors = (model.connectorCenter?.connectors ?? []).map { record in
+        let connectors = (model.connectorCenter?.agentConnectors ?? []).map { record in
             Self.remoteConnector(record, in: model.connectorCenter)
         }
         let withTasks = Set(model.store.sessions.map(\.harness))

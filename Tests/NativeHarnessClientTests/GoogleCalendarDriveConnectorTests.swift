@@ -312,6 +312,30 @@ final class GoogleCalendarDriveConnectorTests: XCTestCase {
         _ = try json(try await call(center, "drive_search_files", ["account": .string("person@example.test"), "query": .string("x")]))
     }
 
+    func testStartupDiscoversMissingRoutesBeforeAClaudeTaskListsTools() async throws {
+        let google = FakeGoogleWorkspace()
+        let credentials = InMemoryConnectorCredentialStore()
+        let (_, account) = try await signedIn(services: [.googleDrive], google: google, credentials: credentials)
+        var row = try XCTUnwrap(account.record(.googleDrive))
+        for routes: [String: GoogleWorkspaceEndpoint]? in [nil, [:]] {
+            row.workspaceToolEndpoints = routes
+            row.tools = []
+            row.toolsUpdatedAt = .now
+            row.googleUISignIn = nil
+            var environment = ConnectorCenter.Environment(
+                repository: InMemoryConnectorRepository(records: [row], googleAppClientID: FakeGoogle.clientID),
+                credentials: credentials, http: google, userAgent: nil, sha256: MacOAuthUserAgent.sha256, clientVersion: "test")
+            environment.google = FakeGoogleWorkspace.endpoints
+            environment.googleWorkspaceTransport = google
+            let reopened = ConnectorCenter(environment: environment)
+            let task = UUID()
+            let scope = ConnectorTaskScope(harness: .claudeCode)
+            await reopened.waitForInitialWorkspaceTools(for: task, scope: scope)
+            XCTAssertTrue(reopened.googleWorkspaceToolNames(for: ConnectorToolContext(taskID: task, scope: scope)).contains("drive_get_values"))
+            XCTAssertEqual(reopened.record(row.id)?.workspaceToolEndpoints?["get_values"], .sheets)
+        }
+    }
+
     func testDriveDiscoveryKeepsHealthyAPIsAndOfflineSchemas() async throws {
         let google = FakeGoogleWorkspace()
         google.google.fail(.slides, status: 403)
@@ -328,6 +352,7 @@ final class GoogleCalendarDriveConnectorTests: XCTestCase {
         for endpoint in LocalConnectorService.googleDrive.workspaceEndpoints { google.google.fail(endpoint, status: 0) }
         center.connect(drive.id)
         await center.waitForConnection(drive.id)
+        XCTAssertEqual(center.record(drive.id)?.toolsUpdatedAt, drive.toolsUpdatedAt)
         XCTAssertEqual(center.record(drive.id)?.tools, drive.tools)
         XCTAssertEqual(center.record(drive.id)?.workspaceToolEndpoints, drive.workspaceToolEndpoints)
         XCTAssertEqual(center.record(drive.id)?.status, .connected)

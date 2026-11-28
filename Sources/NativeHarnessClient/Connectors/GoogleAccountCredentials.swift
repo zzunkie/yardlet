@@ -39,7 +39,7 @@ struct GoogleAccountCredentials: Sendable {
             guard custom != nil || builtIn != nil else { continue }
             results[id] = Result {
                 try update(id) { value in
-                    let client = value?.clientID ?? custom ?? builtIn?.clientID
+                    let client = value?.clientID ?? value?.uiClientID ?? custom ?? builtIn?.clientID
                     let isBuiltIn = builtIn != nil && client == builtIn?.clientID
                     guard var stored = value else { return Migration(builtIn: isBuiltIn, calendar: false, mailbox: false) }
                     let services = Set(records.filter {

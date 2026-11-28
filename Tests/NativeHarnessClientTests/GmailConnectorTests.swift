@@ -434,6 +434,14 @@ final class GmailConnectorTests: XCTestCase {
         XCTAssertEqual(center.record(personal.id)?.status, .connected)
         _ = try json(try await call(center, "gmail_list_labels", ["account": .string("person@example.test")]))
 
+        // Turning off the last service keeps the account row, but its address leaves tool hints.
+        await center.setService(.gmail, on: false, account: work.credentialID)
+        XCTAssertEqual(center.googleAccounts.count, 2)
+        let invalid = try await call(center, "gmail_list_labels", ["account": .string("unknown@example.test")])
+        XCTAssertEqual(invalid.failure?.kind, .invalidArguments)
+        XCTAssertTrue(invalid.text.contains("person@example.test"), invalid.text)
+        XCTAssertFalse(invalid.text.contains("developer@company.test"), invalid.text)
+
         // Removing one leaves the other, its sign-in and its tools.
         center.remove(work.id)
         await center.waitForPendingDeletions()
@@ -667,6 +675,21 @@ final class FakeGoogle: ConnectorHTTPTransport, @unchecked Sendable {
         "sheetsmcp.googleapis.com": ["get_values"],
         "slidesmcp.googleapis.com": ["read_presentation"]
     ]
+    /// A connected row in a settings preview already has its last discovered schema.
+    static func withCachedTools(_ record: ConnectorRecord) -> ConnectorRecord {
+        guard record.status == .connected, let endpoints = record.localService?.workspaceEndpoints,
+              !endpoints.isEmpty else { return record }
+        var row = record
+        var routes: [String: GoogleWorkspaceEndpoint] = [:]
+        for endpoint in endpoints {
+            for name in tools[endpoint.url.host() ?? ""] ?? [] { routes[name] = endpoint }
+        }
+        row.workspaceToolEndpoints = routes
+        row.tools = routes.keys.sorted().map { .object(["name": .string($0)]) }
+        row.toolsUpdatedAt = .now
+        return row
+    }
+
     private var endpointFailures: [String: Int] = [:]
     func fail(_ endpoint: GoogleWorkspaceEndpoint, status: Int?) {
         lock.withLock { endpointFailures[endpoint.url.host()!] = status }

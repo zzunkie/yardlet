@@ -18,9 +18,14 @@ final class GoogleBuiltInAppTests: XCTestCase {
         var environment = ConnectorCenter.Environment(
             repository: repository ?? InMemoryConnectorRepository(records: records), credentials: credentials, http: google, userAgent: agent,
             sha256: MacOAuthUserAgent.sha256, clientVersion: "9.9")
+        environment.googleWorkspaceTransport = google
         environment.google = FakeGoogleWorkspace.endpoints
         environment.googleBuiltInApp = builtIn
-        return ConnectorCenter(environment: environment)
+        var settings = environment.repository.loadSettings()
+        let secrets = GoogleAccountCredentials(store: credentials.bound(to: ConnectorAccountProvider.google.credentialDestination),
+                                               tokenEndpoint: environment.google.token, builtInClientID: builtIn?.clientID)
+        settings.googleMigrations = secrets.migrations(in: settings, builtIn: builtIn)
+        return ConnectorCenter(environment: environment, saved: settings)
     }
 
     func testTheBuiltInAppComesFromTheInfoDictionary() {
@@ -35,7 +40,7 @@ final class GoogleBuiltInAppTests: XCTestCase {
         XCTAssertNil(GoogleOAuth.BuiltInApp.from(info: nil))
     }
 
-    func testLegacyAccountsKeepIdentityTaskChoicesAndCalendarAccess() throws {
+    func testLegacyAccountsKeepIdentityTaskChoicesAndCalendarAccess() async throws {
         let credentials = InMemoryConnectorCredentialStore()
         var records = [ConnectorRecord]()
         for index in 0..<7 {
@@ -77,6 +82,54 @@ final class GoogleBuiltInAppTests: XCTestCase {
         XCTAssertEqual(center.calendarAccounts().count, 1)
         let reopened = makeCenter(builtIn: builtIn, credentials: credentials, repository: repository)
         XCTAssertEqual(reopened.connectors, center.connectors)
+
+        // Setting up one migrated account must leave the other six on the setup path.
+        try await reopened.saveGoogleClient(account: records[0].id, clientID: Self.otherClientID, secret: nil)
+        for record in reopened.agentConnectors {
+            XCTAssertEqual(reopened.needsAccountApp(for: record), record.credentialID != records[0].id)
+        }
+        try await reopened.saveGoogleApp(clientID: Self.otherClientID, secret: nil)
+        XCTAssertTrue(reopened.agentConnectors.allSatisfy { !reopened.needsAccountApp(for: $0) })
+    }
+
+    func testRestartAfterKeychainMigrationRecognizesBuiltInCalendarWithSharedAppConfigured() throws {
+        let credentials = InMemoryConnectorCredentialStore()
+        let row = ConnectorRecord(name: "Calendar", slug: "calendar", serverURL: FakeGoogleWorkspace.endpoints.calendarAPI,
+                                  status: .connected, localService: .googleCalendar, account: "person@example.test")
+        var stored = ConnectorCredential(kind: .client, accessToken: "")
+        stored.uiClientID = FakeGoogle.clientID
+        stored.uiAccessToken = "calendar"
+        stored.uiGrantedScopes = GoogleOAuth.calendarUIScope
+        try credentials.save(stored, for: row.id)
+        let repository = InMemoryConnectorRepository(records: [row], googleAppClientID: Self.otherClientID)
+        let center = makeCenter(builtIn: .init(clientID: FakeGoogle.clientID, clientSecret: nil), credentials: credentials,
+                                repository: repository)
+        XCTAssertEqual(center.record(row.id)?.status, .signInRequired)
+        XCTAssertEqual(center.record(row.id)?.hasGoogleUISignIn, true)
+        XCTAssertEqual(try credentials.load(row.id)?.uiAccessToken, stored.uiAccessToken)
+    }
+
+    func testRemovingAccountDuringKeychainSaveDoesNotBlockUIOrRestoreTheGrant() async throws {
+        let credentials = PausedGoogleCredentialStore()
+        let row = ConnectorRecord(name: "Gmail", slug: "gmail", serverURL: GoogleWorkspaceEndpoint.gmail.url,
+                                  status: .connected, localService: .gmail, account: "person@example.test")
+        var environment = ConnectorCenter.Environment(
+            repository: InMemoryConnectorRepository(records: [row]), credentials: credentials, http: FakeGoogle(),
+            userAgent: nil, sha256: MacOAuthUserAgent.sha256, clientVersion: "test")
+        environment.googleBuiltInApp = .init(clientID: FakeGoogle.clientID, clientSecret: nil)
+        let center = ConnectorCenter(environment: environment)
+        let saving = Task { try await center.saveGoogleClient(account: row.id, clientID: Self.otherClientID, secret: nil) }
+        defer { credentials.release() }
+        try await waitUntil { credentials.started }
+        center.removeAccount(row.id)
+        credentials.release()
+        do {
+            try await saving.value
+            XCTFail("A removed account cannot accept a new client")
+        } catch is CancellationError {}
+        await center.waitForPendingDeletions()
+        XCTAssertNil(try credentials.values.load(row.id))
+        XCTAssertNil(center.record(row.id))
     }
 
     func testMigratingCustomAppKeepsItsAgentGrantAndConnectedStatus() throws {
@@ -206,6 +259,8 @@ final class GoogleBuiltInAppTests: XCTestCase {
                                 credentials: credentials, records: [row])
         await center.setService(.gmail, on: false, account: row.id)
         XCTAssertEqual(center.googleAccounts.first?.enabled, [])
+        XCTAssertTrue(center.agentConnectors.isEmpty)
+        XCTAssertTrue(ConnectorSettingsState.ordered(center).isEmpty)
         let kept = try XCTUnwrap(credentials.load(row.id))
         XCTAssertEqual(kept.accessToken, "")
         XCTAssertNil(kept.refreshToken)
@@ -213,6 +268,8 @@ final class GoogleBuiltInAppTests: XCTestCase {
         XCTAssertEqual(kept.uiAccessToken, saved.uiAccessToken)
         XCTAssertEqual(kept.clientID, saved.clientID)
         XCTAssertEqual(kept.clientSecret, saved.clientSecret)
+        try await center.saveGoogleClient(account: row.id, clientID: Self.otherClientID, secret: nil)
+        XCTAssertEqual(center.record(row.id)?.status, .notConnected)
         center.removeAccount(row.id)
         await center.waitForPendingDeletions()
         XCTAssertNil(try credentials.load(row.id))
@@ -225,5 +282,29 @@ final class GoogleBuiltInAppTests: XCTestCase {
                 XCTAssertEqual(error.localizedDescription, ConnectorOAuthError.authorizationDenied(L10n.string("Only the Google Account that created this Personal Mode client can sign in. Open Personal Mode with the account you want to connect and create a client for it.")).localizedDescription)
             }
         }
+    }
+}
+
+/// Pause a write long enough to remove its account while the system Keychain would be waiting.
+private final class PausedGoogleCredentialStore: ConnectorCredentialStoring, @unchecked Sendable {
+    let values = InMemoryConnectorCredentialStore()
+    private let lock = NSLock()
+    private let gate = DispatchSemaphore(value: 0)
+    private var saving = false
+    var started: Bool { lock.withLock { saving } }
+    func release() { gate.signal() }
+    func load(_ id: UUID) throws -> ConnectorCredential? {
+        XCTAssertFalse(Thread.isMainThread)
+        return try values.load(id)
+    }
+    func save(_ credential: ConnectorCredential, for id: UUID) throws {
+        XCTAssertFalse(Thread.isMainThread)
+        lock.withLock { saving = true }
+        if !Thread.isMainThread { gate.wait() }
+        try values.save(credential, for: id)
+    }
+    func delete(_ id: UUID) throws {
+        XCTAssertFalse(Thread.isMainThread)
+        try values.delete(id)
     }
 }

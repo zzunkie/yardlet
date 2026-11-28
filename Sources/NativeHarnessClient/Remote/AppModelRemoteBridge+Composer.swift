@@ -45,7 +45,7 @@ extension AppModelRemoteBridge {
         let center = model.connectorCenter
         let scope = model.connectorScopeBySessionID[session.id] ?? ConnectorTaskScope(harness: session.harness)
         let list = ComposerConnectorList.make(Self.composerOptions(of: session, in: model).connectors,
-            connectors: center?.connectors ?? [],
+            connectors: center?.agentConnectors ?? [],
             taskState: { center?.state(of: $0, inTask: session.id, scope: scope) ?? .on },
             standInServerNames: Set(scope.leftOutNativeServers.map(\.name)))
         let rows = list?.rows.map { row in

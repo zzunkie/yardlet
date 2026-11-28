@@ -129,7 +129,7 @@ final class MacAgentToolService: NativeSurfaceResource {
         broker.connectors = connectors
         connectors.onToolsChanged = { [weak broker = self.broker, weak connectors] in
             if let connectors {
-                let services = connectors.connectors.filter { $0.status == .connected }.map { record in
+                let services = connectors.agentConnectors.filter { $0.status == .connected }.map { record in
                     if let service = record.localService, service.sharesToolsAcrossAccounts { return service.name }
                     return record.name
                 }
