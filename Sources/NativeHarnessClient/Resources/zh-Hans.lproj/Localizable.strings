@@ -1452,6 +1452,10 @@
 "The saved image attachment is unavailable." = "已保存的图片附件不可用。";
 "This edited attachment cannot be sent." = "无法发送此已编辑的附件。";
 "Claude Code did not report plan limits for this login." = "Claude Code 未报告此登录账户的套餐限额。";
+"Sign-in expires in %lld days" = "登录将在 %lld 天后到期";
+"Sign-in expires tomorrow" = "登录将于明天到期";
+"Sign-in expires today" = "登录将于今天到期";
+"Sign-in expired" = "登录已过期";
 "This account is not signed in. Sign in from Accounts, then choose it again." = "此账户尚未登录。请先在“账户”中登录，然后再重新选择。";
 "No other account shares this task's conversation history." = "没有其他账户共享此任务的对话历史记录。";
 "Install Update…" = "安装更新…";
@@ -4335,7 +4339,3 @@
 "Cursor Agent can run code and access files in %@. It runs there only once you trust the folder's contents, and remembers your answer for the folder." = "Cursor Agent 可以在 %@ 中运行代码并访问文件。只有在你信任该文件夹的内容后，它才会在其中运行，并会记住你对该文件夹的选择。";
 "Trust this folder" = "信任此文件夹";
 "Don't trust" = "不信任";
-"Sign-in expires in %lld days" = "登录将在 %lld 天后到期";
-"Sign-in expires tomorrow" = "登录将于明天到期";
-"Sign-in expires today" = "登录将于今天到期";
-"Sign-in expired" = "登录已过期";
