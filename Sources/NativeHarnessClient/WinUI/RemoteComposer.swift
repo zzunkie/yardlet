@@ -127,6 +127,10 @@ final class RemoteComposer {
         sending.margin = Thickness(left: 4, top: 0, right: 4, bottom: 0)
         chips.redraw = { [weak self] in self?.redrawControls() }
         chips.choose = { [weak self] id, value, apply in self?.choose(id, value, apply) }
+        chips.prepareModels = { [weak self] hasChoices in
+            guard let self, let taskID = self.taskID else { return }
+            await self.model.readTaskSettings(taskID, prepare: !hasChoices, modelsOnly: true)
+        }
         chips.prepare = { [weak self] in await self?.prepare() }
     }
 

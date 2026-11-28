@@ -236,7 +236,7 @@ enum CodexComposerModelProjection {
         cached: [CodexModelOption]
     ) -> CodexModelCatalog {
         var catalog = live
-        if catalog.models.isEmpty { catalog.models = cached }
+        if !cached.isEmpty { catalog.models = cached }
         guard catalog.selection == nil else { return catalog }
         if let stored {
             catalog.selection = stored

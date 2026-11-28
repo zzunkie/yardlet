@@ -680,7 +680,7 @@ struct MainWindow: View {
             projects: projects.visibleGroups(sessions: model.store.sessions).compactMap(\.project),
             harnesses: runtimes.connectedDescriptors,
             models: NewTaskModelSource(catalogs: model.modelCatalogs) {
-                await model.loadNewTaskModels(harness: $0, runtimeURL: $1, connection: $2, workspaceURL: $3)
+                await model.refreshModelsIfStale(harness: $0, runtimeURL: $1, connection: $2, workspaceURL: $3)
             },
             accounts: { connections.choices(for: [$0]) },
             checkAccounts: { await connections.checkNewTaskAccounts(for: $0, runtimeSelections: runtimes) },
@@ -1848,6 +1848,7 @@ struct MainWindow: View {
             refreshProviderStatus: {
                 await model.refreshConversationStatus(for: session)
             },
+            prepareModels: { await model.prepareModelPicker(for: session, hasChoices: $0) },
             prepareProviderSettings: {
                 switch wiring.settings {
                 case .codexModels: await model.loadCodexModels(for: session)
@@ -1927,7 +1928,7 @@ struct MainWindow: View {
             runtimeSelections: model.runtimeSelections,
             connections: model.connections,
             models: NewTaskModelSource(catalogs: model.modelCatalogs) {
-                await model.loadNewTaskModels(harness: $0, runtimeURL: $1, connection: $2, workspaceURL: $3)
+                await model.refreshModelsIfStale(harness: $0, runtimeURL: $1, connection: $2, workspaceURL: $3)
             },
             accounts: NewTaskAccountSource(
                 preview: { model.newTaskAccountPreview(harness: $0, model: $1) },

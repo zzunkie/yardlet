@@ -25,6 +25,7 @@ struct ComposerSessionControls: View {
     var registersTaskFocus = true
     let onChoose: (ComposerSessionChoice) -> Void
     /// Reads choices a control does not have yet: a detached task's settings or a model list.
+    var prepareModels: ((_ hasChoices: Bool) async -> Void)?
     let onPrepare: () async -> Void
     /// Turns Codex's Plan mode off. Without it the Plan indicator is not drawn.
     var onTurnOffPlanMode: (() -> Void)? = nil
@@ -92,7 +93,7 @@ struct ComposerSessionControls: View {
         }
         // Beside Send, as both reference apps place it.
         if let model = options.model {
-            ComposerModelControl(menu: model.menu, onPrepare: onPrepare, onSetOption: { id, value in
+            ComposerModelControl(menu: model.menu, onPrepare: onPrepare, prepareModels: prepareModels, onSetOption: { id, value in
                 if let choice = model.apply.choice(id: id, value: value) { onChoose(choice) }
             }, openRequest: modelOpenRequest, isDisabled: isDisabled, registersTaskFocus: registersTaskFocus)
             .fixedSize(horizontal: !shortensModelToFit, vertical: true)

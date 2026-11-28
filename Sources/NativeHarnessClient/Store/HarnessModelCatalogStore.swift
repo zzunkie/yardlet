@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import Synchronization
 
 /// Where each harness keeps the settings that name its default model, by account.
 struct HarnessModelSettingsLocations: Equatable, Sendable {
@@ -74,26 +75,86 @@ final class HarnessModelCatalogStore {
     @ObservationIgnored private let fileURL: URL?
     @ObservationIgnored private let environment: [String: String]
 
+    @ObservationIgnored private var modelRefreshes: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var refreshedAt: [String: Date] = [:]
+    /// Shared with the serial writer so a local save is never mistaken for an external edit.
+    private final class FileStamp: Sendable {
+        let date = Mutex<Date?>(nil)
+    }
+    @ObservationIgnored private let modificationStamp = FileStamp()
+    @ObservationIgnored var codexModelsChanged: ((String, [CodexModelOption]) -> Void)?
+
     init(fileURL: URL? = nil, locations: HarnessModelSettingsLocations = .live(),
          environment: [String: String] = ProcessInfo.processInfo.environment) {
         self.fileURL = fileURL
         self.locations = locations
         self.environment = environment
-        guard let fileURL else { return }
+        guard fileURL != nil else { return }
         StateFileWriter.shared.flush()
-        guard let data = try? Data(contentsOf: fileURL),
+        reloadIfChangedOnDisk()
+    }
+
+    private nonisolated static func modificationDate(_ file: URL) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: file.path(percentEncoded: false)))?[.modificationDate] as? Date
+    }
+
+    func reloadIfChangedOnDisk() {
+        guard let fileURL, let date = Self.modificationDate(fileURL), !modificationStamp.date.withLock({ $0 == date }) else { return }
+        // A newer local snapshot may already be queued behind the write we just observed.
+        StateFileWriter.shared.flush()
+        guard let date = Self.modificationDate(fileURL), !modificationStamp.date.withLock({ $0 == date }),
+              let data = try? Data(contentsOf: fileURL),
               let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data), snapshot.version == 1 else { return }
-        claude = snapshot.claude
-        codex = snapshot.codex
-        codexThreads = snapshot.codexThreads ?? [:]
-        antigravity = snapshot.antigravity ?? []
-        antigravityModes = snapshot.antigravityModes ?? []
-        claudeContextWindows = snapshot.claudeContextWindows ?? [:]
+        modificationStamp.date.withLock { $0 = date }
+        if claude != snapshot.claude {
+            for scope in Set(claude.keys).union(snapshot.claude.keys) where claude[scope] != snapshot.claude[scope] {
+                refreshedAt.removeValue(forKey: Self.catalogKey(.claudeCode, scope))
+            }
+            claude = snapshot.claude
+        }
+        if codex != snapshot.codex {
+            let previous = codex
+            codex = snapshot.codex
+            for scope in Set(previous.keys).union(codex.keys) where previous[scope] != codex[scope] {
+                refreshedAt.removeValue(forKey: Self.catalogKey(.codex, scope))
+                codexModelsChanged?(scope, codex[scope] ?? [])
+            }
+        }
+        if antigravity != (snapshot.antigravity ?? []) {
+            antigravity = snapshot.antigravity ?? []
+            let prefix = Self.catalogKey(.antigravityCLI, "")
+            refreshedAt = refreshedAt.filter { !$0.key.hasPrefix(prefix) }
+        }
+        if codexThreads != snapshot.codexThreads ?? [:] { codexThreads = snapshot.codexThreads ?? [:] }
+        if antigravityModes != snapshot.antigravityModes ?? [] { antigravityModes = snapshot.antigravityModes ?? [] }
+        if claudeContextWindows != snapshot.claudeContextWindows ?? [:] { claudeContextWindows = snapshot.claudeContextWindows ?? [:] }
+    }
+
+    static func catalogKey(_ harness: HarnessKind, _ scope: String) -> String { harness.rawValue + "|" + scope }
+
+    func isStale(for harness: HarnessKind, connection: ProviderConnection?, now: Date = Date()) -> Bool {
+        let key = Self.catalogKey(harness, Self.scope(for: connection))
+        return refreshedAt[key].map { now.timeIntervalSince($0) >= 900 } ?? true
+    }
+
+    func refreshIfStale(for harness: HarnessKind, connection: ProviderConnection?,
+                        read: @escaping @MainActor () async -> Void) async {
+        reloadIfChangedOnDisk()
+        guard isStale(for: harness, connection: connection) else { return }
+        let key = Self.catalogKey(harness, Self.scope(for: connection))
+        if let refresh = modelRefreshes[key] { return await refresh.value }
+        let refresh = Task {
+            await read()
+            modelRefreshes[key] = nil
+        }
+        modelRefreshes[key] = refresh
+        await refresh.value
     }
 
     /// Keeps the window Claude Code reported for `model`.
     func recordClaudeContextWindow(_ tokens: UInt64, model: String) {
         guard tokens > 0, !model.isEmpty, claudeContextWindows[model] != tokens else { return }
+        reloadIfChangedOnDisk()
         claudeContextWindows[model] = tokens
         save()
     }
@@ -108,13 +169,17 @@ final class HarnessModelCatalogStore {
         return claudeContextWindows[wantsMillion ? base + suffix : base]
     }
 
-    func recordAntigravity(_ models: [HarnessModelOption]) {
-        guard !models.isEmpty, antigravity != models else { return }
+    func recordAntigravity(_ models: [HarnessModelOption], for connection: ProviderConnection? = nil) {
+        guard !models.isEmpty else { return }
+        reloadIfChangedOnDisk()
+        refreshedAt[Self.catalogKey(.antigravityCLI, Self.scope(for: connection))] = Date()
+        guard antigravity != models else { return }
         antigravity = models
         save()
     }
 
     func recordAntigravityModes(_ choices: [ProviderCapabilityChoice]) {
+        reloadIfChangedOnDisk()
         guard !choices.isEmpty, antigravityModes != choices else { return }
         antigravityModes = choices
         save()
@@ -166,21 +231,29 @@ final class HarnessModelCatalogStore {
 
     func recordClaude(_ models: [HarnessModelOption], for connection: ProviderConnection?) {
         let scope = Self.scope(for: connection)
-        guard !models.isEmpty, claude[scope] != models else { return }
+        guard !models.isEmpty else { return }
+        reloadIfChangedOnDisk()
+        refreshedAt[Self.catalogKey(.claudeCode, scope)] = Date()
+        guard claude[scope] != models else { return }
         claude[scope] = models
         save()
     }
 
     func recordCodex(_ models: [CodexModelOption], for connection: ProviderConnection?) {
         let scope = Self.scope(for: connection)
-        guard !models.isEmpty, codex[scope] != models else { return }
+        guard !models.isEmpty else { return }
+        reloadIfChangedOnDisk()
+        refreshedAt[Self.catalogKey(.codex, scope)] = Date()
+        guard codex[scope] != models else { return }
         codex[scope] = models
+        codexModelsChanged?(scope, models)
         save()
     }
 
     /// Keeps what a Codex task's App Server reported, models and the thread's model alike.
     func recordCodex(_ catalog: CodexModelCatalog, for session: SessionRecord) {
         recordCodex(catalog.models, for: session.connection)
+        reloadIfChangedOnDisk()
         guard let selection = catalog.selection, codexThreads[session.id] != selection else { return }
         codexThreads[session.id] = selection
         save()
@@ -237,10 +310,11 @@ final class HarnessModelCatalogStore {
                                 antigravity: antigravity.isEmpty ? nil : antigravity,
                                 antigravityModes: antigravityModes.isEmpty ? nil : antigravityModes,
                                 claudeContextWindows: claudeContextWindows.isEmpty ? nil : claudeContextWindows)
-        StateFileWriter.shared.write(fileURL) {
+        StateFileWriter.shared.write(fileURL) { [modificationStamp] in
             try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             try JSONEncoder().encode(snapshot).write(to: fileURL, options: .atomic)
+            modificationStamp.date.withLock { $0 = Self.modificationDate(fileURL) }
         }
     }
 }

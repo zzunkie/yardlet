@@ -232,7 +232,7 @@ struct SessionRailSettingsCard: View {
         VStack(alignment: .leading, spacing: ParitySpace.s4) {
             if let model = settings.model {
                 row(L10n.string("Model")) {
-                    ComposerModelControl(menu: model.menu, onPrepare: actions.onPrepareSettings, onSetOption: { id, value in
+                    ComposerModelControl(menu: model.menu, onPrepare: actions.onPrepareSettings, prepareModels: actions.prepareModels, onSetOption: { id, value in
                         if let choice = model.apply.choice(id: id, value: value) { actions.onChoose(choice) }
                     }, registersTaskFocus: false)
                 }

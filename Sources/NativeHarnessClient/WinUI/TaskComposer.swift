@@ -126,6 +126,10 @@ final class TaskComposer {
 
         chips.redraw = { [weak self] in self?.redrawControls() }
         chips.choose = { [weak self] id, value, apply in self?.choose(id, value, apply) }
+        chips.prepareModels = { [weak self] hasChoices in
+            guard let self, let session = self.session else { return }
+            await self.model.prepareModelPicker(for: session, hasChoices: hasChoices)
+        }
         chips.prepare = { [weak self] in await self?.prepare() }
     }
 

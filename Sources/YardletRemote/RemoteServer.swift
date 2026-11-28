@@ -185,6 +185,7 @@ public protocol RemoteBridge: AnyObject, Sendable {
     func subtask(taskID: String, activityID: String, stop: Bool) async -> Result<RemoteSubtaskTranscript, RemoteError>
     func fileRewind(taskID: String, action: RemoteFileRewindAction, pointID: String?, receipt: String?, confirmed: Bool, permit: RemoteFileWritePermit?) async -> Result<RemoteFileRewind, RemoteError>
     func taskSettings(taskID: String, prepare: Bool) async -> Result<[RemoteSetting], RemoteError>
+    func taskModelSettings(taskID: String, hasChoices: Bool) async -> Result<[RemoteSetting], RemoteError>
     /// Applies a choice as the Mac's menu does; the controls after it.
     func setTaskSetting(taskID: String, setting: String, value: String, confirmed: Bool) async -> Result<[RemoteSetting], RemoteError>
     /// The slash commands the task's composer offers that may run from another device.
@@ -388,6 +389,10 @@ extension RemoteBridge {
 
     public func fileScope(taskID: String) async -> Result<RemoteFileScope, RemoteError> {
         .failure(RemoteError(.unavailable))
+    }
+
+    public func taskModelSettings(taskID: String, hasChoices: Bool) async -> Result<[RemoteSetting], RemoteError> {
+        await taskSettings(taskID: taskID, prepare: !hasChoices)
     }
 
     public func taskSettings(taskID: String, prepare: Bool) async -> Result<[RemoteSetting], RemoteError> {
@@ -1916,8 +1921,9 @@ public actor RemoteServer {
                 }
                 return await self.bridge.railAction(taskID: taskID, action: action, targetID: targetID, confirmed: confirmed)
             } answer: { response in response.output = draft }
-        case let .taskSettings(taskID, prepare):
-            let result = await bridge.taskSettings(taskID: taskID, prepare: prepare)
+        case let .taskSettings(taskID, prepare, modelsOnly):
+            let result = if modelsOnly { await bridge.taskModelSettings(taskID: taskID, hasChoices: !prepare) }
+                else { await bridge.taskSettings(taskID: taskID, prepare: prepare) }
             respondSettings(envelope.id, taskID: taskID, result, on: id)
         case let .setTaskSetting(taskID, setting, value, confirmed):
             var settings: [RemoteSetting]?

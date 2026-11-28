@@ -99,6 +99,16 @@ final class ComposerModelVisibilityTests: XCTestCase {
         // goes by each account's own list, and leaves alone a model no list names.
         XCTAssertNil(reopened.offers("opus", harness: .claudeCode, connection: account), "No list of its own yet")
         XCTAssertEqual(reopened.offers("opus", harness: .claudeCode, connection: nil), true)
+        XCTAssertTrue(reopened.isStale(for: .claudeCode, connection: nil))
+        reopened.recordClaude(ModelVisibilityFixtures.claudeModels, for: nil)
+        XCTAssertFalse(reopened.isStale(for: .claudeCode, connection: nil))
+        XCTAssertTrue(reopened.isStale(for: .claudeCode, connection: nil, now: Date().addingTimeInterval(901)))
+        XCTAssertTrue(reopened.isStale(for: .claudeCode, connection: account))
+        reopened.recordClaude([.init(value: "sonnet", name: "Sonnet")], for: account)
+        XCTAssertFalse(reopened.isStale(for: .claudeCode, connection: account))
+        StateFileWriter.shared.flush()
+        store.reloadIfChangedOnDisk()
+        XCTAssertEqual(store.claudeModels(for: account).map(\.value), ["sonnet"])
         let team = ProviderConnection(id: "team", name: "team@example.test", harness: .claudeCode,
                                       providerID: nil, homePath: root.path, credentialSelector: nil)
         reopened.recordClaude([.init(value: "opus", name: "Opus", resolvedModel: "claude-opus-5-5"),
@@ -110,6 +120,20 @@ final class ComposerModelVisibilityTests: XCTestCase {
     }
 
     // MARK: Claude Code before it connects
+
+    func testAnAccountWithFallbackChoicesReadsItsOwnCatalogWithoutAttaching() async throws {
+        let fixture = try await ClaudeFixture.make(settings: "{}", in: self)
+        let model = fixture.model, catalogs = model.modelCatalogs
+        let fallback = [HarnessModelOption(value: "previous", name: "Previous")]
+        catalogs.recordClaude(fallback, for: nil)
+        XCTAssertEqual(catalogs.claudeModels(for: fixture.connection), fallback)
+        await model.prepareModelPicker(for: fixture.session, hasChoices: true)
+        await model.prepareModelPicker(for: fixture.session, hasChoices: true)
+        XCTAssertEqual(catalogs.claudeModels(for: fixture.connection), ModelVisibilityFixtures.claudeModels)
+        XCTAssertEqual(catalogs.claudeModels(for: nil), fallback)
+        XCTAssertEqual(fixture.transports.all.count, 1)
+        XCTAssertFalse(model.isAttached(fixture.session.id))
+    }
 
     func testAClaudeTaskShowsTheModelItWillUseBeforeItConnects() async throws {
         let fixture = try await ClaudeFixture.make(settings: #"{"model":"fable","effortLevel":"xhigh"}"#, in: self)
@@ -308,6 +332,34 @@ final class ComposerModelVisibilityTests: XCTestCase {
         let turns = await fixture.transport.requests.filter { $0.method == "turn/start" }
         XCTAssertEqual(turns.first?.params["model"]?.stringValue, "fast")
         XCTAssertEqual(turns.first?.params["effort"]?.stringValue, "low")
+    }
+
+    func testOpeningCachedCodexMenusSharesTheLiveCatalogWithAccountsAndExistingTasks() async throws {
+        let root = try temporaryFolder()
+        let file = root.appending(path: "models.json")
+        let writer = HarnessModelCatalogStore(fileURL: file)
+        writer.recordCodex([ModelVisibilityFixtures.codexModel("old", efforts: ["low"])], for: nil)
+        let catalogs = HarnessModelCatalogStore(fileURL: file, locations: locations(root), environment: [:])
+        let fixture = try CodexFixture(config: "", catalogs: catalogs, in: self)
+        let model = fixture.model, session = fixture.session
+        model.runtimeSelections.select(fixture.executable, for: .codex)
+        await model.refreshConversationStatus(for: session)
+        XCTAssertTrue(catalogs.isStale(for: .codex, connection: nil))
+        async let first: Void = model.refreshModelsIfStale(for: session)
+        async let second: Void = model.refreshModelsIfStale(for: session)
+        _ = await (first, second)
+        let expected = ["gpt-test", "fast"]
+        let menu = NewTaskModelProjection.menu(harness: .codex, choice: nil, catalogs: catalogs, connection: nil, workspaceURL: nil)
+        XCTAssertEqual(menu?.model?.choices.map(\.value), expected)
+        XCTAssertEqual(model.codexCapabilitiesBySessionID[session.id]?.modelCatalog.models.map(\.model), expected)
+        XCTAssertEqual(model.composerCodexCapabilities(for: session).modelCatalog.models.map(\.model), expected)
+        let caller = try XCTUnwrap(model.sessionToolCaller(session.id))
+        let result = await model.listAccounts(.object(["model": .string("fast")]), caller: caller)
+        XCTAssertTrue(result.text.contains(#""offersModel":true"#), result.text)
+        let requests = await fixture.transport.requestMethods
+        XCTAssertEqual(requests.filter { $0 == "model/list" }.count, 1)
+        XCTAssertFalse(requests.contains("thread/resume"))
+        XCTAssertFalse(requests.contains("turn/start"))
     }
 
     // MARK: New task

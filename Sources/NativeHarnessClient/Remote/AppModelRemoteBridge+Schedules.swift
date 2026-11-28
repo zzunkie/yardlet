@@ -183,10 +183,8 @@ extension AppModelRemoteBridge {
             // Opening the host's own new-task menu loads its model catalog without starting a turn.
             let initial = ComposerSessionOptionsProjection.newTask(harness: harness, choice: baseline,
                 catalogs: model.modelCatalogs, connection: connection, workspaceURL: folder)
-            if initial.model?.menu.canChoose == false, let runtime = model.runtimeSelections.selectedURL(for: harness) {
-                await RemoteServer.waitAtMost(10) { @MainActor in
-                    await model.loadNewTaskModels(harness: harness, runtimeURL: runtime, connection: connection, workspaceURL: folder)
-                }
+            if let menu = initial.model?.menu {
+                await Self.prepareModels(menu, in: model, harness: harness, connection: connection, folder: folder)
             }
             let choice = try Self.choosingSchedule(picked, harness: harness, from: baseline,
                 model: model, connection: connection, folder: folder).get()

@@ -6,10 +6,13 @@ import YardletRemote
 /// carry them out. A host from before them offers none, and the window shows none.
 extension RemoteHostModel {
     /// Reads a task's settings; `prepare` reads the choices first, as opening the host's menu does.
-    func readTaskSettings(_ taskID: String, prepare: Bool = false) async {
+    func readTaskSettings(_ taskID: String, prepare: Bool = false, modelsOnly: Bool = false) async {
         guard taskControls, isConnected else { return }
-        let response = await response(to: .taskSettings(taskID: taskID, prepare: prepare))
-        if response.ok, conversations[taskID] != nil { taskSettings[taskID] = response.settings ?? [] }
+        let response = await response(to: .taskSettings(taskID: taskID, prepare: prepare, modelsOnly: modelsOnly))
+        if response.ok, conversations[taskID] != nil {
+            let settings = response.settings ?? []
+            if taskSettings[taskID] != settings { taskSettings[taskID] = settings }
+        }
     }
 
     /// A menu's choice, applied on the host; `confirmed` once this Mac asked as the host's menu asks.

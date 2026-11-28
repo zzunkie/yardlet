@@ -60,7 +60,7 @@ struct ScheduledTasksMain: View {
                 tasks: model.sidebarSessions.sorted { $0.updatedAt > $1.updatedAt },
                 runtimeSelections: model.runtimeSelections, connections: model.connections,
                 models: NewTaskModelSource(catalogs: model.modelCatalogs) {
-                    await model.loadNewTaskModels(harness: $0, runtimeURL: $1, connection: $2, workspaceURL: $3)
+                    await model.refreshModelsIfStale(harness: $0, runtimeURL: $1, connection: $2, workspaceURL: $3)
                 },
                 now: { center.now() },
                 projectName: projectName,

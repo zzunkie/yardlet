@@ -39,6 +39,8 @@ final class CodexModelSelectionTests: XCTestCase {
         let inherited = try await routed.modelCatalog(for: child)
         XCTAssertEqual(inherited.selection, .init(model: "fast", reasoningEffort: "low"))
         _ = try await routed.selectModel(.init(model: "large", reasoningEffort: "ultra"), for: child)
+        let requestsBeforeMiss = await transport.requests
+        XCTAssertEqual(requestsBeforeMiss.filter { $0.method == "model/list" }.count, 2)
         do {
             _ = try await routed.selectModel(.init(model: "fast", reasoningEffort: "ultra"), for: main)
             XCTFail("Unsupported effort must fail before a turn is sent")
@@ -55,8 +57,8 @@ final class CodexModelSelectionTests: XCTestCase {
         XCTAssertEqual(turns.map { $0.params["effort"]?.stringValue }, ["low", "ultra"])
         XCTAssertTrue(turns.allSatisfy { $0.params["collaborationMode"] == nil })
         let pages = requests.filter { $0.method == "model/list" }
-        XCTAssertEqual(pages.count, 2)
-        XCTAssertEqual(pages.last?.params["cursor"]?.stringValue, "page-two")
+        XCTAssertEqual(pages.count, 4, "Each rejected selection retries one read")
+        XCTAssertEqual(pages[1].params["cursor"]?.stringValue, "page-two")
         XCTAssertEqual(pages.first?.params["includeHidden"], .bool(false))
         let restored = try await routed.resumeSession(providerSessionID: "restored", localSessionID: UUID(), workspaceURL: main.workspaceURL)
         let resumed = try await routed.modelCatalog(for: restored)
@@ -64,6 +66,47 @@ final class CodexModelSelectionTests: XCTestCase {
         await routed.close(main)
         await routed.close(child)
         await routed.close(restored)
+    }
+
+    func testModelListExpiresWhileTheServerStaysOpen() async throws {
+        let clock = TestClock()
+        let transport = FakeCodexTransport(responses: [
+            "initialize": [.object(["platformOs": .string("macos")])],
+            "thread/start": [thread("thread", model: "first", effort: "low")],
+            "model/list": ["first", "second"].map { .object(["data": .array([model($0)])]) }
+        ])
+        let adapter = CodexAdapter(executableURL: URL(filePath: "/tmp/codex"), transport: transport, now: { clock.now })
+        let session = try await adapter.createSession(.init(localSessionID: UUID(), workspaceURL: URL(filePath: "/tmp"), initialPrompt: nil))
+        let first = try await adapter.modelCatalog(for: session)
+        clock.now.addTimeInterval(299)
+        let cached = try await adapter.modelCatalog(for: session)
+        XCTAssertEqual(first, cached)
+        clock.now.addTimeInterval(1)
+        let refreshed = try await adapter.modelCatalog(for: session)
+        XCTAssertEqual(refreshed.models.map(\.model), ["second"])
+        await adapter.close(session)
+    }
+
+    func testSelectionRefreshesOnAMissAndAReplacementServerListsItsOwnModels() async throws {
+        let transport = FakeCodexTransport(responses: [
+            "initialize": Array(repeating: .object(["platformOs": .string("macos")]), count: 2),
+            "thread/start": [thread("first", model: "old", effort: "low"), thread("second", model: "next", effort: "low")],
+            "model/list": ["old", "new", "next"].map { .object(["data": .array([model($0)])]) }
+        ])
+        let adapter = CodexAdapter(executableURL: URL(filePath: "/tmp/codex"), transport: transport)
+        func open() async throws -> HarnessSessionHandle {
+            try await adapter.createSession(.init(localSessionID: UUID(), workspaceURL: URL(filePath: "/tmp"), initialPrompt: nil))
+        }
+        let first = try await open()
+        let original = try await adapter.modelCatalog(for: first)
+        XCTAssertEqual(original.models.map(\.model), ["old"])
+        let updated = try await adapter.selectModel(.init(model: "new", reasoningEffort: "low"), for: first)
+        XCTAssertEqual(updated.selection?.model, "new")
+        await adapter.close(first)
+        let second = try await open()
+        let restarted = try await adapter.modelCatalog(for: second)
+        XCTAssertEqual(restarted.models.map(\.model), ["next"])
+        await adapter.close(second)
     }
 
     private func model(_ id: String, efforts: [String] = ["low"], hidden: Bool = false) -> JSONValue {

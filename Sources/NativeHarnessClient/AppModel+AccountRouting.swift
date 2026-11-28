@@ -265,7 +265,14 @@ extension AppModel {
         await refreshAccountReadings(of: harness)
         let now = Date()
         let newTaskAccount = connections.selected(for: harness)?.id
-        let accounts = connections.choices(for: [harness]).map { choice in
+        let choices = connections.choices(for: [harness])
+        if let runtime = runtimeSelections.selectedURL(for: harness) {
+            for choice in choices {
+                await refreshModelsIfStale(harness: harness, runtimeURL: runtime,
+                                           connection: choice.connection, workspaceURL: nil)
+            }
+        }
+        let accounts = choices.map { choice in
             AccountListing.Account(
                 account: choice.id, name: choice.title, signedIn: choice.snapshot?.state == .signedIn,
                 automaticAssignment: connections.isInAutomaticAssignment(choice),

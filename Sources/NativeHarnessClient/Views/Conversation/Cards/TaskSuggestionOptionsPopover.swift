@@ -99,10 +99,9 @@ extension TaskSuggestionOptionsContext: TaskSuggestionOptionsSource {
             },
             canStart: runtimeURL(choice.harness) != nil,
             start: { _ in context.start(context.choice()) },
-            // Opening Options is opening the model menu: a list not read yet is read now, as the
-            // new-task screen's menu reads it when it opens.
+            // Opening Options refreshes the same catalog as the new-task model menu.
             loadModels: .init(id: ModelListKey(harness: choice.harness, connectionID: choice.connection?.id, folder: folder)) {
-                guard let model = options.model, !model.menu.canChoose || model.menu.isEmpty,
+                guard options.model != nil,
                       let models = context.models, let runtime = context.runtimeURL(choice.harness) else { return }
                 await models.load(choice.harness, runtime, choice.connection, choice.place.folder)
             },

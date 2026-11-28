@@ -33,6 +33,7 @@ struct ComposerActions {
     // MARK: Session controls
 
     var refreshProviderStatus: () async -> Void = {}
+    var prepareModels: ((_ hasChoices: Bool) async -> Void)?
     var prepareProviderSettings: () async -> Void = {}
     var setProviderOption: (String, String) -> Void = { _, _ in }
     var selectCodexModel: (CodexModelSelection) -> Void = { _ in }
