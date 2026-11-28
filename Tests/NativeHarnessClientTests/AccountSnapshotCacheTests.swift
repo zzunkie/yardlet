@@ -208,7 +208,8 @@ import XCTest
             let connection = claude(home)
             let accounts = store(root)
             try accounts.save(connection)
-            accounts.publish(signedIn(email: "fixture@example.test", checkedAt: Date().addingTimeInterval(-600),
+            let lastQuotaCheck = Date().addingTimeInterval(-600)
+            accounts.publish(signedIn(email: "fixture@example.test", checkedAt: lastQuotaCheck,
                 usage: [quota("session", used: 0.75, resetsAt: nil)]), for: connection)
             try Data().write(to: home.appending(path: ".usage-error"))
             if clearsLogin { try Data().write(to: home.appending(path: ".clear-on-usage")) }
@@ -220,9 +221,39 @@ import XCTest
             XCTAssertEqual(reading.state, clearsLogin ? .signedOut : .signedIn)
             XCTAssertEqual(reading.usage.compactMap(\.usedFraction), clearsLogin ? [] : [0.75])
             XCTAssertEqual(reading.canLogin, clearsLogin)
+            if !clearsLogin { XCTAssertEqual(reading.checkedAt, lastQuotaCheck) }
             XCTAssertEqual(store(root).snapshots[connection.id]?.loginExpiresAt, reading.loginExpiresAt)
             XCTAssertEqual(reading.loginExpiresAt != nil, !clearsLogin)
         }
+    }
+
+    func testColdUsageFailureCanRetryAndAnAccountWithoutLimitsFinishesNormally() async throws {
+        let root = try directory()
+        let home = try accountHome(in: root, email: "fixture@example.test")
+        let account = claude(home)
+        let accounts = store(root)
+        try accounts.save(account)
+        let runtime = try runtime(fakeClaude(in: root))
+        let error = home.appending(path: ".usage-error")
+        try Data().write(to: error)
+        await accounts.check(defaultsOf: [], savedOf: [.claudeCode], runtimeSelections: runtime)
+        XCTAssertEqual(accounts.snapshots[account.id]?.state, .signedIn)
+        XCTAssertEqual(accounts.snapshots[account.id]?.usageProbeFailed, true)
+        XCTAssertEqual(accounts.readingStatus[account.id], .checkFailed)
+        XCTAssertFalse(accounts.isFresh(account.id))
+        let calls = home.appending(path: "calls")
+        XCTAssertEqual(try String(contentsOf: calls, encoding: .utf8), "auth\n-p\nauth\n")
+
+        try FileManager.default.removeItem(at: error)
+        try Data().write(to: home.appending(path: ".no-limits"))
+        await accounts.check(defaultsOf: [], savedOf: [.claudeCode], runtimeSelections: runtime)
+        let reading = try XCTUnwrap(accounts.snapshots[account.id])
+        XCTAssertEqual(reading.state, .signedIn)
+        XCTAssertEqual(reading.usageProbeFailed, false)
+        XCTAssertTrue(reading.usage.isEmpty)
+        XCTAssertEqual(accounts.readingStatus[account.id], .current)
+        XCTAssertTrue(accounts.isFresh(account.id))
+        XCTAssertEqual(try String(contentsOf: calls, encoding: .utf8), "auth\n-p\nauth\nauth\n-p\n")
     }
 
     func testLoginExpiryWarningStartsAtTenDays() throws {
@@ -232,6 +263,7 @@ import XCTest
         let reading = signedIn(email: "fixture@example.test", checkedAt: now, usage: [])
         XCTAssertNil(reading.expiryWarning(now: now))
         for (seconds, warning) in [(864_001, nil), (864_000, L10n.format("Sign-in expires in %lld days", Int64(10))),
+                                    (86_400, L10n.string("Sign-in expires tomorrow")),
                                     (1, L10n.string("Sign-in expires today")), (0, L10n.string("Sign-in expired"))] {
             let reading = signedIn(email: "fixture@example.test", checkedAt: now, usage: [],
                 loginExpiresAt: now.addingTimeInterval(TimeInterval(seconds)))
@@ -239,6 +271,14 @@ import XCTest
         }
         let parsed = HarnessAccountBroker.claudeStatusFields(from: #"{"loginExpiresAt":"2030-01-01T12:00:00.125Z"}"#)
         XCTAssertEqual(parsed.loginExpiresAt, now.addingTimeInterval(0.125))
+        XCTAssertNil(HarnessAccountBroker.claudeStatusFields(from: #"{"loginExpiresAt":"invalid"}"#).loginExpiresAt)
+
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+        let beforeDST = try XCTUnwrap(ClaudeUsageProbe.date("2025-03-05T23:30:00-08:00"))
+        let expiry = signedIn(email: "fixture@example.test", checkedAt: beforeDST, usage: [],
+            loginExpiresAt: beforeDST.addingTimeInterval(10 * 86_400))
+        XCTAssertEqual(expiry.expiryWarning(now: beforeDST, calendar: calendar),
+            L10n.format("Sign-in expires in %lld days", Int64(10)))
     }
 
     func testCheckLogRetainsTransitionsAndHourlyHealthyReadings() throws {
@@ -267,10 +307,16 @@ import XCTest
         entry.state = AccountAuthState.signedIn.rawValue
         record(3606)
         record(3607)
+        entry = AccountCheckLog.Entry(event: "turn-refused", harness: "codex", account: "default", configHome: "default")
+        record(3608)
+        entry = AccountCheckLog.Entry(harness: "claude", account: "default", configHome: "default",
+            state: AccountAuthState.signedIn.rawValue, exitCode: 0, loginExpiresAt: start, usageProbeFailed: false)
+        record(3609)
         let lines = try String(contentsOf: file, encoding: .utf8).split(whereSeparator: \.isNewline).map {
             try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any])
         }
-        XCTAssertEqual(lines.compactMap { $0["milliseconds"] as? Int }, [0, 3600, 3601, 3602, 3603, 3604, 3605, 3606])
+        XCTAssertEqual(lines.compactMap { $0["milliseconds"] as? Int }, [0, 3600, 3601, 3602, 3603, 3604, 3605, 3606, 3608])
+        XCTAssertNil(lines.last?["usageProbeFailed"])
         XCTAssertEqual(lines[2]["loginExpiresAt"] as? String, "1970-01-01T00:00:00.000Z")
         XCTAssertEqual(lines[3]["usageProbeFailed"] as? Bool, true)
     }
@@ -335,6 +381,10 @@ import XCTest
           exit 0
         fi
         read first; read second
+        if [ -f "$CLAUDE_CONFIG_DIR/.no-limits" ]; then
+          echo '{"type":"control_response","response":{"subtype":"success","request_id":"usage","response":{"rate_limits_available":false}}}'
+          exit 0
+        fi
         if [ -f "$CLAUDE_CONFIG_DIR/.usage-error" ]; then
           [ -f "$CLAUDE_CONFIG_DIR/.clear-on-usage" ] && touch "$CLAUDE_CONFIG_DIR/.signed-out"
           echo '{"type":"control_response","response":{"subtype":"error","request_id":"usage"}}'

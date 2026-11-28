@@ -403,11 +403,16 @@ actor HarnessAccountBroker {
         var recheckFailure: String?
         var state = Self.commandAccountState(for: descriptor.id, result: result)
         var metrics: [AccountUsageMetric]?
-        var usageProbeFailed = false
+        var usageProbeFailed: Bool?
         if descriptor.id == .claudeCode, state == .signedIn {
-            metrics = try? await ClaudeUsageProbe.read(executableURL: executableURL,
-                environment: connection?.environment ?? [:])
-            if metrics == nil {
+            let reading = await ClaudeUsageProbe.read(executableURL: executableURL, environment: connection?.environment ?? [:])
+            usageProbeFailed = false
+            switch reading {
+            case let .limits(rows):
+                metrics = rows
+            case .notAvailable:
+                metrics = []
+            case .failed:
                 usageProbeFailed = true
                 // A failed renewal can clear the login while the usage command runs.
                 started = .now
@@ -480,7 +485,7 @@ actor HarnessAccountBroker {
         }
         var usage = [notExposedUsage()]
         if descriptor.id == .claudeCode, state == .signedIn {
-            usage = metrics.flatMap { $0.isEmpty ? nil : $0 } ?? [AccountUsageMetric(id: "not-reported",
+            usage = metrics ?? [AccountUsageMetric(id: "not-reported",
                 label: L10n.string("Usage"), usedFraction: nil,
                 detail: L10n.string("Claude Code did not report plan limits for this login."),
                 resetsAt: nil, evidence: .notExposed)]
@@ -496,7 +501,7 @@ actor HarnessAccountBroker {
             accountPlan: claudeIdentity?.planLabel,
             loginExpiresAt: descriptor.id == .claudeCode && state == .signedIn
                 ? Self.claudeStatusFields(from: result.output).loginExpiresAt : nil,
-            usageProbeFailed: usageProbeFailed ? true : nil,
+            usageProbeFailed: usageProbeFailed,
             detail: detail,
             credentialOwner: descriptor.id == .openCode
                 ? L10n.string("OpenCode provider credentials and environment")
@@ -549,7 +554,7 @@ actor HarnessAccountBroker {
     /// One Claude status check, for `AccountCheckLog`. The Keychain item is looked at only when the
     /// CLI found no login, which is when it tells "no login here" from "a login it could not read".
     private func logClaudeCheck(runtime: URL, state: AccountAuthState?, result: AccountCommandResult?,
-                                milliseconds: Int, failure: String?, usageProbeFailed: Bool = false) {
+                                milliseconds: Int, failure: String?, usageProbeFailed: Bool? = nil) {
         guard AccountCheckLog.fileURL != nil else { return }
         var entry = AccountCheckLog.Entry(harness: HarnessKind.claudeCode.rawValue, account: connection?.id ?? "default",
             runtime: runtime.path(percentEncoded: false), configHome: claudeConfigFolder ?? "default",

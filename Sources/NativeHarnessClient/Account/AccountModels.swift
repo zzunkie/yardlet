@@ -298,7 +298,7 @@ struct HarnessAccountSnapshot: Identifiable, Codable, Equatable, Sendable {
         switch days {
         case 0: return L10n.string("Sign-in expires today")
         case 1: return L10n.string("Sign-in expires tomorrow")
-        default: return L10n.format("Sign-in expires in %lld days", Int64(days))
+        default: return L10n.format("Sign-in expires in %lld days", Int64(min(days, 10)))
         }
     }
 

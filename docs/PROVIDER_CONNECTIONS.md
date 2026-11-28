@@ -257,8 +257,8 @@ is deleted at the end. The response's `limits` rows (`session` for 5 hours, `wee
 `scope.model` is present) come first; without them, `five_hour`, `seven_day` and `model_scoped` are read. An unknown
 group is not shown as a limit. After a failed lookup, Yardlet checks the login once more. A cleared login shows as
 signed out immediately. A still-signed-in account keeps its last known quotas. Its account row shows a warning from
-ten days before the expiry reported by `auth status`. `rate_limits_available: false` (API keys and the like) or a failed lookup with no prior quotas shows "Claude
-Code did not report plan limits for this login." and is not turned into 0.
+ten days before the expiry reported by `auth status`. A successful response with `rate_limits_available: false` (for example, an API key)
+leaves the quota list empty and completes the check. A failed lookup with no prior quotas remains eligible for retry.
 
 ## Antigravity account and plan limit lookup
 

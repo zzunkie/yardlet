@@ -48,7 +48,7 @@ final class AccountCommandRunnerTests: XCTestCase {
             let fixture = try makeExecutable(script)
             defer { try? FileManager.default.removeItem(at: fixture.root) }
             let cpu = cpuSeconds()
-            _ = try? await ClaudeUsageProbe.read(executableURL: fixture.executable,
+            _ = await ClaudeUsageProbe.read(executableURL: fixture.executable,
                 environment: answers ? ["ANSWERS": "1"] : [:], timeout: .milliseconds(500), exitGrace: .seconds(30))
             let saved = fixture.executable.path(percentEncoded: false) + ".saved"
             try await waitUntil(timeout: .seconds(20)) { FileManager.default.fileExists(atPath: saved) }
@@ -86,6 +86,36 @@ final class AccountCommandRunnerTests: XCTestCase {
             }
             XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.executable.appendingPathExtension("saved").path))
         }
+    }
+
+    func testStalledTitleProcessIsReapedAfterItsGracePeriod() async throws {
+        let fixture = try makeExecutable("""
+        #!/bin/sh
+        cat >/dev/null
+        echo "$$" > "$0.pid"
+        exec sleep 60
+        """)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let pidFile = fixture.executable.appendingPathExtension("pid")
+        let grace: Duration = .milliseconds(300)
+        let task = Task {
+            try await ClaudeTitleRequest.run(executableURL: fixture.executable, environment: [:],
+                model: "fixture", prompt: "Title", exitGrace: grace)
+        }
+        try await waitUntil {
+            guard let text = try? String(contentsOf: pidFile, encoding: .utf8) else { return false }
+            return pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)) != nil
+        }
+        let pid = try readPID(pidFile)
+        let interrupted = ContinuousClock.now
+        task.cancel()
+        do {
+            _ = try await task.value
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {}
+        XCTAssertGreaterThanOrEqual(ContinuousClock.now - interrupted, grace)
+        XCTAssertLessThan(ContinuousClock.now - interrupted, .seconds(10))
+        try await waitUntilGone(pid)
     }
 
     /// A stalled probe is stopped with its children and reaped by Foundation. Neither a

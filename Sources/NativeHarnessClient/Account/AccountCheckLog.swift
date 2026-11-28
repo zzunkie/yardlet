@@ -26,7 +26,7 @@ enum AccountCheckLog {
         /// Names only: the variables a login shell sets that decide how Claude Code signs in.
         var shellVariables: [String]?
         var loginExpiresAt: Date?
-        var usageProbeFailed = false
+        var usageProbeFailed: Bool?
         var failure: String?
     }
 
@@ -63,12 +63,13 @@ enum AccountCheckLog {
     static func record(_ entry: Entry, at date: Date = Date()) {
         state.lock.withLock {
             guard let file = state.fileURL else { return }
+            let key = "\(entry.harness):\(entry.account)"
             let healthy = entry.event == "status" && entry.state == AccountAuthState.signedIn.rawValue
-                && entry.exitCode == 0 && entry.failure == nil && !entry.usageProbeFailed
+                && entry.exitCode == 0 && entry.failure == nil && entry.usageProbeFailed != true
             var signature = entry
             signature.milliseconds = nil
             signature.credentialItemMilliseconds = nil
-            if healthy, let last = state.healthy[entry.account], last.entry == signature,
+            if healthy, let last = state.healthy[key], last.entry == signature,
                (0..<3600).contains(date.timeIntervalSince(last.time)) { return }
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .custom { date, encoder in
@@ -90,9 +91,9 @@ enum AccountCheckLog {
             kept.append(data)
             do {
                 try StateFile.write(kept, to: file, isPrivate: true)
-                state.healthy[entry.account] = healthy ? (signature, date) : nil
+                state.healthy[key] = healthy ? (signature, date) : nil
             } catch {
-                state.healthy.removeValue(forKey: entry.account)
+                state.healthy.removeValue(forKey: key)
             }
         }
     }

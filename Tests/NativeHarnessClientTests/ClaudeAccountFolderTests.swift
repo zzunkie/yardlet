@@ -55,9 +55,10 @@ import XCTest
         echo '{"type":"control_response","response":{"subtype":"success","request_id":"usage","response":{"rate_limits_available":true,"rate_limits":{"seven_day":{"utilization":25}}}}}'
         sleep 30
         """)
-        let usage = try await ClaudeUsageProbe.read(executableURL: cli, environment: [
+        let reading = await ClaudeUsageProbe.read(executableURL: cli, environment: [
             "PROBE_RECORD": record.path, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"])
-        XCTAssertEqual(usage?.map(\.usedFraction), [0.25])
+        guard case let .limits(usage) = reading else { return XCTFail("Expected subscription limits") }
+        XCTAssertEqual(usage.map(\.usedFraction), [0.25])
         let lines = try String(contentsOf: record, encoding: .utf8).split(separator: "\n").map(String.init)
         let fields = lines[0].split(separator: "|", omittingEmptySubsequences: false).map(String.init)
         XCTAssertTrue(fields[0].contains("Yardlet-ClaudeUsage-"))

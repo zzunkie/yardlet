@@ -44,13 +44,13 @@ enum ClaudeTitleRequest {
                 // Cancellation also starts the grace period. EOF lets Claude finish saving its login.
                 try? await Task.sleep(for: timeout)
                 guard process.isRunning else { return false }
-                try? input.fileHandleForWriting.close()
                 if !(await exit.wait(timeout: exitGrace)), process.isRunning {
                     NativeProcessTree.terminate(process: process)
                 }
                 return true
             }
             return try await withTaskCancellationHandler {
+                // The writer owns stdin through EOF. The deadline can still stop a child that never reads.
                 try? input.fileHandleForWriting.write(contentsOf: Data(prompt.utf8))
                 try? input.fileHandleForWriting.close()
                 let stderr = Task.detached { errors.fileHandleForReading.readDataToEndOfFile() }
