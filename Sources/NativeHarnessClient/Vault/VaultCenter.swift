@@ -382,6 +382,7 @@ final class VaultCenter: ObservableObject {
             let allowed = await environment.checkBuild?() ?? environment.isAllowedBuild
             let shows = allowed ? (try? await store { try $0.loadShowsCredentials() }) == true : false
             let availabilityChanged = environment.isAllowedBuild != allowed
+            if availabilityChanged { objectWillChange.send() }
             environment.isAllowedBuild = allowed
             if visibilityRequest == nil || !shows { hidesCredentials = !shows }
             if availabilityChanged { onToolsChanged?() }
@@ -717,8 +718,10 @@ final class VaultCenter: ObservableObject {
     /// Deletes the item a made password was presaved in, which the page certainly did not take (it moved on first,
     /// or had no field for it), or which went into another item.
     func deleteMadePassword(_ itemID: UUID, origin: String, taskID: UUID? = nil, _ reason: String) async throws {
+        await beginChange()
+        defer { endChange() }
         let item = items.first { $0.id == itemID }
-        try await delete(itemID)
+        try await deleteItem(itemID)
         if let item { logMadePassword(item, .deleted, origin: origin, taskID: taskID, reason) }
     }
 
@@ -1234,6 +1237,10 @@ final class VaultCenter: ObservableObject {
     func delete(_ itemID: UUID) async throws {
         await beginChange()
         defer { endChange() }
+        try await deleteItem(itemID)
+    }
+
+    private func deleteItem(_ itemID: UUID) async throws {
         try await store { try $0.delete(itemID) }
         items.removeAll { $0.id == itemID }
         environment.repository.saveItems(items)
@@ -1251,7 +1258,7 @@ final class VaultCenter: ObservableObject {
         let kept = try await readWallet()
         try await store { store in
             try store.deleteAll()
-            try store.saveWallet(kept)
+            try store.saveWallet(kept.isEmpty ? nil : kept)
         }
         environment.repository.removeAll()
         items = []

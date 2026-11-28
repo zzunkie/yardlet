@@ -17,6 +17,7 @@ final class MainThreadHangLogTests: XCTestCase {
         func hang(_ samples: [MainThreadHang.Sample], ongoing: Bool = false) -> MainThreadHang {
             .init(began: Date(), duration: .milliseconds(300), isOngoing: ongoing, samples: samples)
         }
+        XCTAssertTrue(hang([]).shouldReport)
         for selector in ["openSheet", "closeSheet"] {
             let animation = ["AppKit 0x6 -[NSMoveHelper _doAnimation] + 4",
                              "AppKit 0x7 -[NSSheetMoveHelper \(selector)] + 8"]

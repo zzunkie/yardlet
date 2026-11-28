@@ -198,7 +198,7 @@ extension VaultCenter {
         if let requested = item {
             // A secret the keychain would not give back, or one whose item changed outside Yardlet, is left as it is.
             guard let item = items.first(where: { $0.id == requested.id }), item.sites == requested.sites,
-                  item.username == requested.username, var secret = try await trustedSecret(of: item) else {
+                  item.username == requested.username, var secret = try? await trustedSecret(of: item) else {
                 throw VaultRefusal(message: L10n.string("Yardlet could not read this sign-in from the keychain."))
             }
             secret.oneTimeCode = setup.secret

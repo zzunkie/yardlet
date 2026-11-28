@@ -112,7 +112,7 @@ struct MainThreadHang: Sendable {
     let samples: [Sample]
 
     var shouldReport: Bool {
-        isOngoing || !samples.allSatisfy(\.isWaitingForSheetAnimation)
+        samples.isEmpty || isOngoing || !samples.allSatisfy(\.isWaitingForSheetAnimation)
     }
 
     var description: String {

@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import CoreImage.CIFilterBuiltins
 import Foundation
 import XCTest
@@ -12,6 +13,33 @@ import YardletAgentTools
 /// vault unless the page certainly took nothing.
 @MainActor
 final class VaultTests: XCTestCase {
+    func testPreparingPublishesAvailabilityWhileCredentialsAreBeingHidden() async throws {
+        let secrets = InMemoryVaultSecretStore()
+        try secrets.saveShowsCredentials(true)
+        var signing: CheckedContinuation<Bool, Never>?
+        let checkBuild: @MainActor @Sendable () async -> Bool = {
+            await withCheckedContinuation { signing = $0 }
+        }
+        let center = VaultCenter(environment: .init(
+            secrets: secrets, repository: InMemoryVaultRepository(), hmac: MacVault.hmac,
+            isAllowedBuild: false, checkBuild: checkBuild, defaults: .vaultTests()))
+        var observedAvailability: [Bool] = []
+        let subscription = center.objectWillChange.sink { observedAvailability.append(center.isAllowedBuild) }
+        defer { subscription.cancel() }
+
+        let preparing = Task { await center.prepare() }
+        try await waitUntil { signing != nil }
+        // The hide request runs on this actor before preparation can publish the signing result.
+        signing?.resume(returning: true)
+        await center.setHidesCredentials(true)
+        await preparing.value
+
+        XCTAssertEqual(observedAvailability, [false], "Publish availability before changing it")
+        XCTAssertTrue(center.isAllowedBuild)
+        XCTAssertTrue(center.hidesCredentials)
+        XCTAssertFalse(try secrets.loadShowsCredentials())
+    }
+
     func testSecretStoreRunsOffMainAndOverlappingSavesKeepPasswordHistory() async throws {
         final class Store: VaultSecretStoring, @unchecked Sendable {
             let memory = InMemoryVaultSecretStore()
@@ -709,7 +737,9 @@ final class VaultTests: XCTestCase {
 
         // An item made for a password the page certainly did not take is deleted with a reason; the log says what
         // became of a made password without the value, and the item sheet's recent use keeps to fills and refusals.
-        try await center.deleteMadePassword(beside.id, origin: "https://github.com", "The page took nothing.")
+        async let firstDelete: Void = center.deleteMadePassword(beside.id, origin: "https://github.com", "The page took nothing.")
+        async let secondDelete: Void = center.deleteMadePassword(beside.id, origin: "https://github.com", "The page took nothing.")
+        _ = try await (firstDelete, secondDelete)
         XCTAssertEqual(repository.uses.filter { $0.itemID == beside.id }.map(\.outcome), [.saved, .saved, .deleted])
         XCTAssertFalse(repository.uses.contains { use in ["made-1", "made-2"].contains { (use.reason ?? "").contains($0) } })
         XCTAssertTrue(center.uses(of: beside.id).isEmpty)
