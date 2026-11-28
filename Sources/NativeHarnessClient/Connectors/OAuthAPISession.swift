@@ -17,13 +17,15 @@ actor OAuthAPISession {
     private let credentials: any ConnectorCredentialStoring
     /// The transport without the token, for an address that carries its own authorization.
     nonisolated let http: any ConnectorHTTPTransport
+    private let onInvalidGrant: (@Sendable () async -> Void)?
     private let now: @Sendable () -> Date
     private var credential: ConnectorCredential?
     private var loaded = false
     private var refreshing: Task<Result<ConnectorCredential, Error>, Never>?
 
     init(id: UUID, credentials: any ConnectorCredentialStoring, http: any ConnectorHTTPTransport,
-         now: @escaping @Sendable () -> Date) {
+         now: @escaping @Sendable () -> Date, onInvalidGrant: (@Sendable () async -> Void)? = nil) {
+        self.onInvalidGrant = onInvalidGrant
         self.id = id
         self.credentials = credentials
         self.http = http
@@ -47,7 +49,7 @@ actor OAuthAPISession {
     }
 
     func accessToken() async throws -> String {
-        if !loaded {
+        if !loaded || credentials is GoogleGrantStore {
             credential = try credentials.load(id)
             loaded = true
         }
@@ -74,6 +76,7 @@ actor OAuthAPISession {
     /// Refreshes unless another call already replaced `staleToken`.
     private func refresh(from staleToken: String?) async throws {
         if let current = credential?.accessToken, current != staleToken { return }
+        guard let original = credential else { throw Failure.signInRequired }
         let task: Task<Result<ConnectorCredential, Error>, Never>
         if let refreshing {
             task = refreshing
@@ -92,10 +95,20 @@ actor OAuthAPISession {
         switch outcome {
         case .success(let refreshed):
             if credential?.accessToken != refreshed.accessToken {
+                if let store = credentials as? GoogleGrantStore {
+                    guard try store.replace(original, with: refreshed, for: id) else {
+                        credential = nil
+                        throw Failure.signInRequired
+                    }
+                } else { try? credentials.save(refreshed, for: id) }
                 credential = refreshed
-                try? credentials.save(refreshed, for: id)
             }
         case .failure(ConnectorOAuthError.invalidGrant):
+            if let store = credentials as? GoogleGrantStore, store.purpose != .agent,
+               try store.replace(original, with: nil, for: id) {
+                credential = nil
+                await onInvalidGrant?()
+            }
             throw Failure.signInRequired
         case .failure(ConnectorOAuthError.tokenRequestFailed("no refresh token")):
             throw Failure.signInRequired

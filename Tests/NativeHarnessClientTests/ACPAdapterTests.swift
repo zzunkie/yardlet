@@ -547,7 +547,7 @@ final class ACPAdapterTests: XCTestCase {
         // with the account a shared connector's call acts in; any other title stays as the agent wrote it.
         ConnectorToolLabels.shared.update([ConnectorRecord(
             name: "Gmail", slug: "gmail", serverURL: URL(string: "https://gmail.googleapis.com/gmail/v1/")!,
-            status: .connected, presetID: "gmail", localService: .gmail, account: "person@example.test")])
+            status: .connected, tools: [.object(["name": .string("send_message")])], presetID: "gmail", localService: .gmail, account: "person@example.test")])
         defer { ConnectorToolLabels.shared.update([]) }
         let titled: [(String, String, JSONValue)] = [
             ("Run mcp_yardlet_f31bd028_list_tasks", "other", .object([:])),

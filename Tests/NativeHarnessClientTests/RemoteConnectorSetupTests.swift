@@ -206,13 +206,21 @@ final class RemoteConnectorSetupTests: XCTestCase {
         XCTAssertTrue(center.connectors.isEmpty)
     }
 
-    func testGoogleAccountSetupUsesHostAppAndResolvesDuplicateAccount() async throws {
+    func testGoogleAccountSetupKeepsClientOnAccountAndResolvesDuplicateAccount() async throws {
         let google = FakeGoogle()
         let localAgent = FakeUserAgent()
-        let credentials = InMemoryConnectorCredentialStore()
-        var environment = ConnectorCenter.Environment(repository: InMemoryConnectorRepository(), credentials: credentials,
+        var existing = ConnectorRecord(name: "Gmail", slug: "gmail_work", serverURL: FakeGoogle.endpoints.gmailAPI,
+            authorization: .oauth, status: .signInRequired, presetID: "gmail", localService: .gmail,
+            account: "work@example.test")
+        existing.googleOAuthClientID = "old-client.apps.googleusercontent.com"
+        let storedClient = ConnectorCredential.client(id: try XCTUnwrap(existing.googleOAuthClientID), secret: nil)
+            .bound(to: existing.credentialDestination)
+        let credentials = InMemoryConnectorCredentialStore([existing.id: storedClient])
+        var environment = ConnectorCenter.Environment(repository: InMemoryConnectorRepository(records: [existing]),
+            credentials: credentials,
             http: google, userAgent: localAgent, sha256: MacOAuthUserAgent.sha256, clientVersion: "test")
         environment.google = FakeGoogle.endpoints
+        environment.googleWorkspaceTransport = google
         let center = ConnectorCenter(environment: environment)
         let coordinator = RemoteConnectorSetupCoordinator()
         let id = try start(coordinator, center: center, draft: .init(presetID: "gmail",
@@ -224,18 +232,39 @@ final class RemoteConnectorSetupTests: XCTestCase {
         XCTAssertEqual(center.record(recordID)?.localService, .gmail)
         XCTAssertEqual(opened.host(), "accounts.google.test")
         XCTAssertTrue(localAgent.opened.isEmpty)
+        XCTAssertNil(center.googleAppClientID)
+        XCTAssertEqual(center.record(recordID)?.googleOAuthClientID, FakeGoogle.clientID)
         XCTAssertEqual(try credentials.load(recordID)?.clientID, FakeGoogle.clientID)
         let firstForm = FakeConnectorServer.form(try XCTUnwrap(google.requests.first { $0.url?.path() == "/token" }))
         XCTAssertEqual(firstForm["redirect_uri"], "http://127.0.0.1:47823/callback")
         XCTAssertEqual(firstForm["client_secret"], FakeGoogle.clientSecret)
 
         // Signing in to the same account again merges it, so the operation must name the surviving connector.
-        let duplicate = try start(coordinator, center: center, draft: .init(presetID: "gmail"))
+        let duplicate = try start(coordinator, center: center, draft: .init(presetID: "gmail", clientID: FakeGoogle.clientID,
+                                                                          clientSecret: FakeGoogle.clientSecret))
         let (merged, _) = try await completeOAuth(coordinator, id: duplicate, center: center)
         XCTAssertEqual(merged.status, .connected, merged.message ?? "")
         XCTAssertEqual(merged.connectorID, recordID.uuidString)
-        XCTAssertEqual(center.googleAccounts.count, 1)
-        XCTAssertEqual(center.connectors.count, 1)
+        XCTAssertEqual(center.googleAccounts.count, 2)
+        XCTAssertEqual(try credentials.load(existing.id), storedClient)
+        XCTAssertEqual(center.record(existing.id)?.googleOAuthClientID, existing.googleOAuthClientID)
+        let personal = try XCTUnwrap(try credentials.load(recordID))
+
+        // Change the other account's client in place through remote setup.
+        google.signInAs = try XCTUnwrap(existing.account)
+        let editID = UUID().uuidString
+        _ = try coordinator.handle(.init(action: .start, operationID: editID,
+            draft: .init(clientID: FakeGoogle.secondClientID, clientSecret: FakeGoogle.clientSecret), connectorID: existing.id.uuidString),
+            owner: owner, center: center).get()
+        let (edited, _) = try await completeOAuth(coordinator, id: editID, center: center)
+        XCTAssertEqual(edited.status, .connected, edited.message ?? "")
+        XCTAssertEqual(edited.connectorID, existing.id.uuidString)
+        XCTAssertEqual(center.record(existing.id)?.account, existing.account)
+        XCTAssertEqual(center.record(existing.id)?.googleOAuthClientID, FakeGoogle.secondClientID)
+        XCTAssertEqual(try credentials.load(existing.id)?.clientID, FakeGoogle.secondClientID)
+        XCTAssertEqual(try credentials.load(recordID), personal)
+        XCTAssertNil(center.googleAppClientID)
+        XCTAssertTrue(google.requests.contains { $0.url?.host() == "gmailmcp.googleapis.com" && $0.url?.path() == "/mcp/v1" })
     }
 
     func testMicrosoftAccountSetupUsesConfiguredHostApp() async throws {

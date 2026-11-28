@@ -114,6 +114,8 @@ struct GoogleWorkspaceMCPClient: Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
         request.setValue(Self.protocolVersion, forHTTPHeaderField: "MCP-Protocol-Version")
+        request.setValue(method, forHTTPHeaderField: "Mcp-Method")
+        request.setValue(fields["name"]?.stringValue, forHTTPHeaderField: "Mcp-Name")
         request.setValue(language, forHTTPHeaderField: "Accept-Language")
         request.httpBody = try encoder.encode(ToolJSON.object([
             "jsonrpc": .string("2.0"), "id": .integer(1), "method": .string(method), "params": .object(params)

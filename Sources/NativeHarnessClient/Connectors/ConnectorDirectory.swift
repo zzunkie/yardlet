@@ -119,25 +119,22 @@ struct ConnectorPreset: Identifiable, Equatable, Sendable {
                         setupURL: URL(string: "https://api.slack.com/apps")!,
                         note: "Needs a Slack app of your own, made from Yardlet's manifest in a few clicks. Enter its client ID.",
                         claudeAINames: ["claude.ai Slack"], codexPlugins: ["slack"]),
-        // Yardlet's own Google servers on the public Gmail, Calendar, and Drive APIs (2026-10-17,
-        // 2026-10-19), all signed in with one Google OAuth app: Google's own MCP servers for them
-        // need the Workspace developer preview, which personal accounts cannot join.
-        ConnectorPreset(id: "gmail", name: "Gmail", serverURL: GoogleOAuth.Endpoints.live.gmailAPI,
-                        signIn: .googleAccount, scope: GmailToolCatalog.scope,
-                        authorizationParameters: googleOffline, symbol: "envelope", setupURL: googleSetup,
-                        note: "Yardlet's own Gmail server. Each Google account signs in once.",
+        ConnectorPreset(id: "gmail", name: "Gmail", serverURL: GoogleWorkspaceEndpoint.gmail.url,
+                        signIn: .googleAccount, scope: LocalConnectorService.gmail.scopes.joined(separator: " "),
+                        authorizationParameters: googleOffline, symbol: "envelope", setupURL: GoogleOAuth.personalModeURL,
+                        note: "Create a Personal Mode client for each Google account you use with agent tools.",
                         claudeAINames: ["claude.ai Gmail"], codexPlugins: ["gmail"]),
         ConnectorPreset(id: "google-calendar", name: "Google Calendar",
-                        serverURL: GoogleOAuth.Endpoints.live.calendarAPI, signIn: .googleAccount,
-                        scope: GoogleCalendarToolCatalog.scopes.joined(separator: " "),
-                        authorizationParameters: googleOffline, symbol: "calendar", setupURL: googleSetup,
-                        note: "Yardlet's own Google Calendar server, with the same Google OAuth app as Gmail.",
+                        serverURL: GoogleWorkspaceEndpoint.calendar.url, signIn: .googleAccount,
+                        scope: LocalConnectorService.googleCalendar.scopes.joined(separator: " "),
+                        authorizationParameters: googleOffline, symbol: "calendar", setupURL: GoogleOAuth.personalModeURL,
+                        note: "Create a Personal Mode client for each Google account you use with agent tools.",
                         claudeAINames: ["claude.ai Google Calendar"], codexPlugins: ["google-calendar", "google_calendar"]),
         ConnectorPreset(id: "google-drive", name: "Google Drive",
-                        serverURL: GoogleOAuth.Endpoints.live.driveAPI, signIn: .googleAccount,
-                        scope: GoogleDriveToolCatalog.scopes.joined(separator: " "),
-                        authorizationParameters: googleOffline, symbol: "externaldrive", setupURL: googleSetup,
-                        note: "Yardlet's own Google Drive server, with the same Google OAuth app as Gmail.",
+                        serverURL: GoogleWorkspaceEndpoint.drive.url, signIn: .googleAccount,
+                        scope: LocalConnectorService.googleDrive.scopes.joined(separator: " "),
+                        authorizationParameters: googleOffline, symbol: "externaldrive", setupURL: GoogleOAuth.personalModeURL,
+                        note: "Create a Personal Mode client for each Google account you use with agent tools.",
                         claudeAINames: ["claude.ai Google Drive"], codexPlugins: ["google-drive", "google_drive"]),
         // Google Analytics 4 and Google Ads on the same Google sign-in (2026-10-27), read only: each
         // account turns them on by itself, so their scopes are asked for only then, and only with a
@@ -493,11 +490,13 @@ struct ConnectorImportSuggestion: Identifiable, Equatable, Sendable {
     /// connectors (Claude Docs, Claude Code Remote), which exist only in claude.ai.
     static func suggestions(from inventory: [NativeMCPInventoryEntry], connected: [ConnectorRecord]) -> [ConnectorImportSuggestion] {
         let added = Set(connected.map { MCPServerAddress.canonical($0.serverURL) })
+        let addedServices = Set(connected.compactMap(\.localService))
         let addedPrograms = Set(connected.compactMap { $0.program?.key })
         var order: [String] = []
         var byID: [String: ConnectorImportSuggestion] = [:]
         func found(_ target: Target, _ place: String) {
             let suggestion = ConnectorImportSuggestion(target: target, foundIn: [place])
+            if case .preset(let preset) = target, let service = preset.localService, addedServices.contains(service) { return }
             if let url = suggestion.serverURL, added.contains(MCPServerAddress.canonical(url)) { return }
             if case .program(_, let server, _) = target, let key = server.programKey, addedPrograms.contains(key) { return }
             if var existing = byID[suggestion.id] {
@@ -677,7 +676,7 @@ final class ConnectorToolLabels: @unchecked Sendable {
         }
         for (service, first) in sharedBy {
             let prefix = ConnectorToolNaming.accountToolPrefix(for: service, among: records)
-            for tool in service.tools ?? [] {
+            for tool in service.tools ?? records.filter({ $0.localService == service }).flatMap(\.offeredTools) {
                 guard let original = tool["name"]?.stringValue else { continue }
                 next[ConnectorToolNaming.name(slug: prefix, tool: original)] =
                     Label(connector: service.name, presetID: first.presetID, tool: original, localService: service,

@@ -2,25 +2,23 @@ import Foundation
 import XCTest
 @testable import NativeHarnessClient
 
-/// The Google OAuth app a build carries (docs/CONNECTORS.md, "Google"): read from the bundle's
-/// Info.plist, used to sign in when the person saved no app of their own, set aside by one they
-/// save, and signing in for Gmail, Calendar, and Drive only. Google is a local fake here: no
-/// request leaves the machine and no real account signs in.
+/// Account migrations and Calendar sign-in use an in-memory Keychain and a local Google stand-in.
 @MainActor
 final class GoogleBuiltInAppTests: XCTestCase {
     private static let otherClientID = "999-builtin.apps.googleusercontent.com"
 
     private func makeCenter(
         builtIn: GoogleOAuth.BuiltInApp?,
-        google: FakeGoogle = FakeGoogle(),
+        google: any ConnectorHTTPTransport = FakeGoogle(),
         agent: FakeUserAgent = FakeUserAgent(),
         credentials: InMemoryConnectorCredentialStore = InMemoryConnectorCredentialStore(),
-        records: [ConnectorRecord] = []
+        records: [ConnectorRecord] = [],
+        repository: InMemoryConnectorRepository? = nil
     ) -> ConnectorCenter {
         var environment = ConnectorCenter.Environment(
-            repository: InMemoryConnectorRepository(records: records), credentials: credentials, http: google, userAgent: agent,
+            repository: repository ?? InMemoryConnectorRepository(records: records), credentials: credentials, http: google, userAgent: agent,
             sha256: MacOAuthUserAgent.sha256, clientVersion: "9.9")
-        environment.google = FakeGoogle.endpoints
+        environment.google = FakeGoogleWorkspace.endpoints
         environment.googleBuiltInApp = builtIn
         return ConnectorCenter(environment: environment)
     }
@@ -37,140 +35,195 @@ final class GoogleBuiltInAppTests: XCTestCase {
         XCTAssertNil(GoogleOAuth.BuiltInApp.from(info: nil))
     }
 
-    /// With no app of the person's own, an account signs in with the built-in one, and its sign-in
-    /// keeps that client for later refreshes.
-    func testAnAccountSignsInWithTheBuiltInApp() async throws {
-        let google = FakeGoogle()
+    func testLegacyAccountsKeepIdentityTaskChoicesAndCalendarAccess() throws {
+        let credentials = InMemoryConnectorCredentialStore()
+        var records = [ConnectorRecord]()
+        for index in 0..<7 {
+            let address = "account\(index)@example.test"
+            let gmail = ConnectorRecord(name: "Gmail", slug: "gmail_\(index)", serverURL: FakeGoogle.endpoints.gmailAPI,
+                                        authorization: .oauth, status: .connected, localService: .gmail, account: address)
+            records.append(gmail)
+            if index == 0 {
+                records.append(ConnectorRecord(name: "Calendar", slug: "calendar", serverURL: FakeGoogleWorkspace.endpoints.calendarAPI,
+                                               authorization: .oauth, status: .connected, localService: .googleCalendar,
+                                               account: address, accountSignInID: gmail.id))
+            }
+            try credentials.save(ConnectorCredential(kind: .oauth, accessToken: "access-\(index)", refreshToken: "refresh-\(index)",
+                                                      expiresAt: .distantFuture, scope: GoogleOAuth.calendarUIScope,
+                                                      clientID: index.isMultiple(of: 2) ? nil : FakeGoogle.clientID), for: gmail.id)
+        }
+        let choices = [UUID(): Set(records.map(\.id))]
+        let repository = InMemoryConnectorRepository(records: records, taskChoices: choices, googleAppClientID: FakeGoogle.clientID)
+        let builtIn = GoogleOAuth.BuiltInApp(clientID: FakeGoogle.clientID, clientSecret: FakeGoogle.clientSecret)
+        let center = makeCenter(builtIn: builtIn, credentials: credentials, repository: repository)
+        XCTAssertEqual(center.googleAccounts.count, 7)
+        XCTAssertNil(repository.googleAppClientID)
+        XCTAssertEqual(center.offInTasks, choices)
+        for before in records {
+            let after = try XCTUnwrap(center.record(before.id))
+            XCTAssertEqual(after.account, before.account)
+            XCTAssertEqual(after.credentialID, before.credentialID)
+            XCTAssertEqual(after.status, .signInRequired)
+            XCTAssertEqual(after.hasGoogleUISignIn, before.credentialID == records[0].id)
+            let stored = try XCTUnwrap(credentials.load(after.credentialID))
+            XCTAssertTrue(stored.accessToken.isEmpty)
+            XCTAssertNil(stored.refreshToken)
+        }
+        let restored = try XCTUnwrap(credentials.load(records[0].id))
+        XCTAssertEqual(restored.uiAccessToken, "access-0")
+        XCTAssertEqual(restored.uiRefreshToken, "refresh-0")
+        XCTAssertEqual(restored.uiClientID, FakeGoogle.clientID)
+        XCTAssertEqual(restored.uiGrantedScopes, GoogleOAuth.calendarUIScope)
+        XCTAssertEqual(center.calendarAccounts().count, 1)
+        let reopened = makeCenter(builtIn: builtIn, credentials: credentials, repository: repository)
+        XCTAssertEqual(reopened.connectors, center.connectors)
+    }
+
+    func testMigratingCustomAppKeepsItsAgentGrantAndConnectedStatus() throws {
+        let credentials = InMemoryConnectorCredentialStore()
+        let row = ConnectorRecord(name: "Gmail", slug: "gmail", serverURL: FakeGoogle.endpoints.gmailAPI,
+                                  authorization: .oauth, status: .connected, localService: .gmail, account: "person@example.test")
+        let saved = ConnectorCredential(kind: .oauth, accessToken: "agent", refreshToken: "refresh", clientID: Self.otherClientID)
+        try credentials.save(saved, for: row.id)
+        let repository = InMemoryConnectorRepository(records: [row], googleAppClientID: Self.otherClientID)
+        let center = makeCenter(builtIn: .init(clientID: FakeGoogle.clientID, clientSecret: nil), credentials: credentials,
+                                repository: repository)
+        XCTAssertEqual(center.record(row.id)?.status, .connected)
+        XCTAssertEqual(try credentials.load(row.id)?.refreshToken, saved.refreshToken)
+        XCTAssertFalse(try XCTUnwrap(center.record(row.id)).hasGoogleUISignIn)
+    }
+
+    func testLegacySharedStandardClientKeepsBothScreensAfterAgentClientChanges() async throws {
+        let credentials = InMemoryConnectorCredentialStore()
+        let gmail = ConnectorRecord(name: "Gmail", slug: "gmail", serverURL: FakeGoogleWorkspace.endpoints.gmailAPI,
+                                    status: .connected, localService: .gmail, account: "person@example.test")
+        let calendar = ConnectorRecord(name: "Calendar", slug: "calendar", serverURL: FakeGoogleWorkspace.endpoints.calendarAPI,
+                                      status: .connected, localService: .googleCalendar, account: gmail.account, accountSignInID: gmail.id)
+        let scopes = ([GoogleOAuth.mailboxScope] + LocalConnectorService.googleCalendar.scopes).joined(separator: " ")
+        try credentials.save(.client(id: Self.otherClientID, secret: "shared"), for: GoogleOAuth.appCredentialID)
+        try credentials.save(ConnectorCredential(kind: .oauth, accessToken: "standard", refreshToken: "legacy-refresh",
+                                                  expiresAt: .distantFuture, scope: scopes), for: gmail.id)
+        let repository = InMemoryConnectorRepository(records: [gmail, calendar], googleAppClientID: Self.otherClientID)
+        let server = ScriptedRegistry { _ in (200, Data("{}".utf8)) }
+        let center = makeCenter(builtIn: .init(clientID: FakeGoogle.clientID, clientSecret: nil), google: server,
+                                credentials: credentials, repository: repository)
+        let migrated = try XCTUnwrap(credentials.load(gmail.id))
+        XCTAssertEqual(migrated.clientID, Self.otherClientID)
+        XCTAssertEqual(migrated.tokenEndpoint, FakeGoogle.endpoints.token)
+        XCTAssertEqual(migrated.tokenEndpointAuthMethod, "client_secret_post")
+        XCTAssertEqual(migrated.uiClientID, Self.otherClientID)
+        XCTAssertEqual(migrated.uiClientSecret, "shared")
+        try await center.saveGoogleClient(account: gmail.id, clientID: "personal", secret: "personal-secret")
+        await center.setService(.gmail, on: false, account: gmail.id)
+        await center.setService(.googleCalendar, on: false, account: gmail.id)
+        XCTAssertEqual(center.googleAccounts.first?.enabled, [])
+        let mailbox = try XCTUnwrap(center.mailAccounts().first?.1)
+        let calendarScreen = try XCTUnwrap(center.calendarAccounts().first?.1)
+        _ = try await mailbox.folders()
+        _ = try await calendarScreen.calendars()
+        XCTAssertGreaterThan(server.requests.count, 1)
+        XCTAssertTrue(server.requests.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "Bearer standard" })
+    }
+
+    func testBuiltInAndFreshAgentGrantsNeverServeMailbox() throws {
+        let credentials = InMemoryConnectorCredentialStore()
+        var gmail = ConnectorRecord(name: "Gmail", slug: "gmail", serverURL: FakeGoogleWorkspace.endpoints.gmailAPI,
+                                    status: .connected, localService: .gmail, account: "person@example.test")
+        let builtIn = GoogleOAuth.BuiltInApp(clientID: FakeGoogle.clientID, clientSecret: nil)
+        let scopes = GoogleOAuth.scope(for: [.gmail, .googleCalendar])
+        let grant = ConnectorCredential(kind: .oauth, accessToken: "agent", refreshToken: "agent-refresh", scope: scopes,
+                                        clientID: Self.otherClientID)
+        var legacy = grant
+        legacy.clientID = builtIn.clientID
+        try credentials.save(legacy, for: gmail.id)
+        XCTAssertTrue(makeCenter(builtIn: builtIn, credentials: credentials, records: [gmail]).mailAccounts().isEmpty)
+
+        gmail.hasGoogleUISignIn = false
+        try credentials.save(grant, for: gmail.id)
+        let repository = InMemoryConnectorRepository(records: [gmail], googleAppClientID: Self.otherClientID)
+        let current = makeCenter(builtIn: builtIn, credentials: credentials, repository: repository)
+        XCTAssertTrue(current.mailAccounts().isEmpty)
+        XCTAssertNil(try credentials.load(gmail.id)?.uiAccessToken)
+    }
+
+    func testCalendarOnlySignInPreservesMigratedMailboxGrant() async throws {
+        let credentials = InMemoryConnectorCredentialStore()
+        let gmail = ConnectorRecord(name: "Gmail", slug: "gmail", serverURL: FakeGoogleWorkspace.endpoints.gmailAPI,
+                                    status: .connected, localService: .gmail, account: "person@example.test")
+        let saved = ConnectorCredential(kind: .oauth, accessToken: "standard-mail", refreshToken: "mail-refresh",
+                                        expiresAt: .distantFuture, scope: GoogleOAuth.mailboxScope, clientID: Self.otherClientID)
+        try credentials.save(saved, for: gmail.id)
+        let google = FakeGoogleWorkspace(granting: GoogleOAuth.calendarUIScope)
+        let center = makeCenter(builtIn: .init(clientID: FakeGoogle.clientID, clientSecret: FakeGoogle.clientSecret), google: google,
+                                credentials: credentials, records: [gmail])
+        try await center.signInGoogleCalendarUI(account: gmail.id)
+        let both = try XCTUnwrap(credentials.load(gmail.id))
+        XCTAssertEqual(both.uiClientID, FakeGoogle.clientID)
+        XCTAssertEqual(both.uiMailboxGrant?.clientID, Self.otherClientID)
+        XCTAssertEqual(both.uiMailboxGrant?.refreshToken, saved.refreshToken)
+        XCTAssertEqual(center.mailAccounts().count, 1)
+        XCTAssertEqual(center.calendarAccounts().count, 1)
+    }
+
+    func testCalendarScreenRefreshAndReconnectLeaveAgentGrantAlone() async throws {
+        let google = FakeGoogleWorkspace(granting: GoogleOAuth.calendarUIScope)
         let agent = FakeUserAgent()
         let credentials = InMemoryConnectorCredentialStore()
         let center = makeCenter(builtIn: .init(clientID: FakeGoogle.clientID, clientSecret: FakeGoogle.clientSecret),
                                 google: google, agent: agent, credentials: credentials)
-        XCTAssertNil(center.googleAppClientID)
-        XCTAssertTrue(center.canSignInWithGoogle)
-
-        let record = try XCTUnwrap(center.addGmailAccount())
-        await center.waitForConnection(record.id)
-        XCTAssertNil(center.failures[record.id])
-        XCTAssertEqual(center.record(record.id)?.status, .connected)
-
-        let opened = try XCTUnwrap(agent.opened.first)
-        let query = URLComponents(url: opened, resolvingAgainstBaseURL: false)?.queryItems ?? []
-        XCTAssertEqual(query.first { $0.name == "client_id" }?.value, FakeGoogle.clientID)
-        let form = FakeConnectorServer.form(try XCTUnwrap(google.requests.first { $0.url?.path() == "/token" }))
-        XCTAssertEqual(form["client_secret"], FakeGoogle.clientSecret)
-        XCTAssertEqual(try credentials.load(record.id)?.clientID, FakeGoogle.clientID)
-        XCTAssertNil(try credentials.load(GoogleOAuth.appCredentialID), "Nothing is saved as the person's own app")
+        try await center.signInGoogleCalendarUI()
+        let account = try XCTUnwrap(center.googleAccounts.first)
+        XCTAssertTrue(account.enabled.isEmpty)
+        let transport = try XCTUnwrap(center.calendarAccounts().first?.1)
+        let calendars = try await transport.calendars()
+        XCTAssertFalse(calendars.isEmpty)
+        let query = URLComponents(url: try XCTUnwrap(agent.opened.first), resolvingAgainstBaseURL: false)?.queryItems
+        XCTAssertEqual(query?.first { $0.name == "scope" }?.value, GoogleOAuth.calendarUIScope)
+        XCTAssertNil(query?.first { $0.name == "include_granted_scopes" })
+        google.google.revoke(try XCTUnwrap(account.address))
+        do {
+            _ = try await transport.calendars()
+            XCTFail("Revocation must expire the Calendar sign-in")
+        } catch OAuthAPISession.Failure.signInRequired {}
+        XCTAssertFalse(try XCTUnwrap(center.googleAccounts.first?.record(.googleCalendar)).hasGoogleUISignIn)
+        XCTAssertTrue(center.calendarAccounts().isEmpty)
+        XCTAssertNil(try credentials.load(account.id)?.uiRefreshToken)
     }
 
-    /// An app the person saves signs in instead of the built-in one; removing it brings the built-in
-    /// one back.
-    func testAnAppOfYourOwnTakesPrecedence() async throws {
-        let agent = FakeUserAgent()
-        let center = makeCenter(builtIn: .init(clientID: Self.otherClientID, clientSecret: "GOCSPX-builtin"), agent: agent)
-        try await center.saveGoogleApp(clientID: FakeGoogle.clientID, secret: FakeGoogle.clientSecret)
-
-        let record = try XCTUnwrap(center.addGmailAccount())
-        await center.waitForConnection(record.id)
-        XCTAssertNil(center.failures[record.id], "The fake Google takes only the person's app")
-        let query = URLComponents(url: try XCTUnwrap(agent.opened.first), resolvingAgainstBaseURL: false)?.queryItems ?? []
-        XCTAssertEqual(query.first { $0.name == "client_id" }?.value, FakeGoogle.clientID)
-
-        try await center.removeGoogleApp()
-        XCTAssertNil(center.googleAppClientID)
-        XCTAssertTrue(center.canSignInWithGoogle)
-    }
-
-    /// Yardlet's own app asks Google for these six scopes and no others, even for an account that
-    /// wants Analytics or Ads and when Google lists their scopes as granted from before
-    /// (`include_granted_scopes`): those services wait for an app of the person's own, without
-    /// opening a sign-in or offering tools. An app saved under Yardlet's client ID is Yardlet's.
-    func testTheBuiltInAppSignsInForGmailCalendarAndDriveOnly() async throws {
-        let auth = "https://www.googleapis.com/auth/"
-        XCTAssertEqual(GoogleOAuth.scope(for: GoogleOAuth.BuiltInApp.services),
-                       ["gmail.modify", "calendar.calendarlist.readonly", "calendar.events", "calendar.events.freebusy",
-                        "drive.readonly", "drive.file"].map { auth + $0 }.joined(separator: " "))
-
-        let google = FakeGoogle()
-        google.grantedScope = GoogleOAuth.scope(for: LocalConnectorService.google)
-        let agent = FakeUserAgent()
-        let center = makeCenter(builtIn: .init(clientID: FakeGoogle.clientID, clientSecret: FakeGoogle.clientSecret),
-                                google: google, agent: agent)
-        XCTAssertEqual(center.signInServices(.google), GoogleOAuth.BuiltInApp.services)
-
-        let account = try XCTUnwrap(center.addAccount(services: [.gmail, .googleAnalytics, .googleAds]))
-        await center.waitForConnection(account.id)
-        let scope = URLComponents(url: try XCTUnwrap(agent.opened.first), resolvingAgainstBaseURL: false)?
-            .queryItems?.first { $0.name == "scope" }?.value
-        XCTAssertEqual(scope, auth + "gmail.modify")
-        XCTAssertEqual(center.googleAccounts.first?.services.map(\.localService), [.gmail])
-
-        await center.setService(.googleAnalytics, on: true, account: account.id)
-        await center.waitForConnection(account.id)
-        XCTAssertEqual(agent.opened.count, 1, "No sign-in opens for a service Yardlet's app does not sign in for")
-        let analytics = try XCTUnwrap(center.googleAccounts.first?.record(.googleAnalytics))
-        XCTAssertEqual(analytics.status, .signInRequired)
-        XCTAssertEqual(center.failures[analytics.id], GoogleSignInError.needsOwnApp([.googleAnalytics]).errorDescription)
-        XCTAssertEqual(center.googleAccounts.first?.record(.gmail)?.status, .connected)
-        let tools = await center.connectorTools(for: ConnectorToolContext()).compactMap { $0["name"]?.stringValue }
-        XCTAssertTrue(tools.contains { $0.hasPrefix("gmail_") }, "\(tools)")
-        XCTAssertFalse(tools.contains { $0.hasPrefix("analytics_") }, "\(tools)")
-
-        try await center.saveGoogleApp(clientID: FakeGoogle.clientID, secret: FakeGoogle.clientSecret)
-        XCTAssertEqual(center.signInServices(.google), GoogleOAuth.BuiltInApp.services, "Yardlet's app saved as one's own")
-    }
-
-    /// An account that turned Analytics on with Yardlet's app, from before that app was kept to
-    /// Gmail, Calendar, and Drive, keeps Gmail as it was; Analytics waits for an app of the
-    /// person's own, and signing the account in again with one brings it back.
-    func testAnalyticsTurnedOnWithTheBuiltInAppWaitsForAnAppOfYourOwn() async throws {
-        let google = FakeGoogle()
-        google.grantedScope = GoogleOAuth.scope(for: [.gmail, .googleAnalytics])
-        let agent = FakeUserAgent()
+    func testTurningOffLastChipKeepsOnlyClientAndCalendarUntilRemoval() async throws {
         let credentials = InMemoryConnectorCredentialStore()
-        let gmail = ConnectorRecord(name: "Gmail", slug: "gmail", serverURL: FakeGoogle.endpoints.gmailAPI, authorization: .oauth,
-                                    status: .connected, toolsUpdatedAt: Date(), presetID: "gmail", scope: GmailToolCatalog.scope,
-                                    localService: .gmail, account: "person@example.test")
-        let analytics = ConnectorRecord(name: "Google Analytics", slug: "analytics",
-                                        serverURL: FakeGoogle.endpoints.analyticsAdminAPI, authorization: .oauth,
-                                        status: .connected, toolsUpdatedAt: Date(), presetID: "google-analytics",
-                                        scope: GoogleAnalyticsToolCatalog.scopes.joined(separator: " "),
-                                        localService: .googleAnalytics, account: "person@example.test", accountSignInID: gmail.id)
-        try credentials.save(ConnectorCredential(kind: .oauth, accessToken: "access-old", refreshToken: "1//refresh-old",
-                                                 expiresAt: .distantFuture, scope: google.grantedScope,
-                                                 clientID: Self.otherClientID, clientSecret: "GOCSPX-builtin",
-                                                 tokenEndpoint: FakeGoogle.endpoints.token), for: gmail.id)
-        let center = makeCenter(builtIn: .init(clientID: Self.otherClientID, clientSecret: "GOCSPX-builtin"), google: google,
-                                agent: agent, credentials: credentials, records: [gmail, analytics])
-
-        try await waitUntil { center.record(analytics.id)?.status == .signInRequired }
-        XCTAssertEqual(center.failures[analytics.id], GoogleSignInError.needsOwnApp([.googleAnalytics]).errorDescription)
-        XCTAssertEqual(center.record(gmail.id)?.status, .connected)
-        XCTAssertNil(center.failures[gmail.id])
-        let tools = await center.connectorTools(for: ConnectorToolContext()).compactMap { $0["name"]?.stringValue }
-        XCTAssertTrue(tools.contains { $0.hasPrefix("gmail_") }, "\(tools)")
-        XCTAssertFalse(tools.contains { $0.hasPrefix("analytics_") }, "\(tools)")
-
-        try await center.saveGoogleApp(clientID: FakeGoogle.clientID, secret: FakeGoogle.clientSecret)
-        center.reconnect(gmail.id)
-        await center.waitForConnection(gmail.id)
-        let scope = URLComponents(url: try XCTUnwrap(agent.opened.first), resolvingAgainstBaseURL: false)?
-            .queryItems?.first { $0.name == "scope" }?.value
-        XCTAssertEqual(scope, GoogleOAuth.scope(for: [.gmail, .googleAnalytics]))
-        XCTAssertEqual(center.record(analytics.id)?.status, .connected)
-        XCTAssertNil(center.failures[analytics.id])
-        XCTAssertEqual(try credentials.load(gmail.id)?.clientID, FakeGoogle.clientID)
+        var row = ConnectorRecord(name: "Gmail", slug: "gmail", serverURL: FakeGoogle.endpoints.gmailAPI,
+                                  authorization: .oauth, status: .connected, localService: .gmail, account: "person@example.test")
+        row.googleOAuthClientID = Self.otherClientID
+        row.hasGoogleUISignIn = true
+        var saved = ConnectorCredential(kind: .oauth, accessToken: "agent", refreshToken: "agent-refresh",
+                                        clientID: Self.otherClientID, clientSecret: "client-secret")
+        saved.uiAccessToken = "calendar"
+        saved.uiRefreshToken = "calendar-refresh"
+        saved.uiClientID = FakeGoogle.clientID
+        try credentials.save(saved, for: row.id)
+        let center = makeCenter(builtIn: .init(clientID: FakeGoogle.clientID, clientSecret: nil),
+                                credentials: credentials, records: [row])
+        await center.setService(.gmail, on: false, account: row.id)
+        XCTAssertEqual(center.googleAccounts.first?.enabled, [])
+        let kept = try XCTUnwrap(credentials.load(row.id))
+        XCTAssertEqual(kept.accessToken, "")
+        XCTAssertNil(kept.refreshToken)
+        XCTAssertEqual(kept.uiRefreshToken, saved.uiRefreshToken)
+        XCTAssertEqual(kept.uiAccessToken, saved.uiAccessToken)
+        XCTAssertEqual(kept.clientID, saved.clientID)
+        XCTAssertEqual(kept.clientSecret, saved.clientSecret)
+        center.removeAccount(row.id)
+        await center.waitForPendingDeletions()
+        XCTAssertNil(try credentials.load(row.id))
     }
 
-    func testWithoutEitherAppNoAccountCanSignIn() {
-        XCTAssertFalse(makeCenter(builtIn: nil).canSignInWithGoogle)
-    }
-
-    /// The setup page's assistant: with the built-in app, signing in is the only step.
-    func testTheAssistantWithTheBuiltInAppIsOnlyTheSignIn() {
-        let builtIn = ConnectorSetupAssistant.google(opened: [], appSaved: false, connectedAccounts: 0, builtIn: true)
-        XCTAssertEqual(builtIn.steps.map(\.id), [.googleSignIn])
-        XCTAssertEqual(builtIn.current, .googleSignIn)
-        XCTAssertTrue(ConnectorSetupAssistant.google(opened: [], appSaved: false, connectedAccounts: 1, builtIn: true).isComplete)
-        XCTAssertEqual(ConnectorSetupAssistant.google(opened: [], appSaved: false, connectedAccounts: 0).steps.count, 7)
+    func testPersonalModeMismatchExplainsWhichAccountCanSignIn() throws {
+        for query in ["error=client_user_mismatch", "error=access_denied&error_description=client_user_mismatch"] {
+            let callback = try XCTUnwrap(URL(string: "http://localhost/?state=s&" + query))
+            XCTAssertThrowsError(try ConnectorOAuth.code(fromCallback: callback, expectedState: "s")) { error in
+                XCTAssertEqual(error.localizedDescription, ConnectorOAuthError.authorizationDenied(L10n.string("Only the Google Account that created this Personal Mode client can sign in. Open Personal Mode with the account you want to connect and create a client for it.")).localizedDescription)
+            }
+        }
     }
 }

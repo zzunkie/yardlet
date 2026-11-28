@@ -250,7 +250,7 @@ final class CodexApprovalParityTests: XCTestCase {
     func testAYardletConnectorApprovalNamesTheAccountTheCallActsIn() {
         ConnectorToolLabels.shared.update([ConnectorRecord(
             name: "Gmail", slug: "gmail", serverURL: URL(string: "https://gmail.googleapis.com/gmail/v1/")!,
-            status: .connected, presetID: "gmail", localService: .gmail, account: "person@example.test")])
+            status: .connected, tools: [.object(["name": .string("send_message")])], presetID: "gmail", localService: .gmail, account: "person@example.test")])
         defer { ConnectorToolLabels.shared.update([]) }
         func approval(server: String, account: String?) -> CodexServerRequestState {
             var parameters: [String: JSONValue] = ["to": .string("bob@example.com")]

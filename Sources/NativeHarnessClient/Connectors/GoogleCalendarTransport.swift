@@ -1,10 +1,8 @@
 import Foundation
 import YardletAgentTools
 
-/// The Google Calendar API v3 requests (developers.google.com/workspace/calendar/api/v3/reference) that the
-/// calendar (`GoogleCalendarTransport`) and the agents' Calendar tools (`GoogleCalendarToolRunner`) share, for one
-/// account through its connector sign-in. IDs are encoded here, so a calendar ID with `@` and `#` is one path
-/// segment, and refused before any request when no request can carry them.
+/// Calendar API v3 requests used by the native calendar. IDs are validated and encoded as
+/// individual path segments before a request is sent.
 struct GoogleCalendarAPI: Sendable {
     let rest: GoogleREST
 

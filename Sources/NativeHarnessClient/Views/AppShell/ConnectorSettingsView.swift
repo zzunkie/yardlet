@@ -173,7 +173,7 @@ struct ConnectorSetupTiles: View {
             // state, and the way in.
             VStack(spacing: 0) {
                 tile(name: "Google", detail: L10n.string("Gmail · Calendar · Drive"), status: googleStatus,
-                     done: center.canSignInWithGoogle && googleConnected > 0, preset: "gmail")
+                     done: googleConnected > 0, preset: "gmail")
                 Divider().padding(.leading, 42)
                 tile(name: "Microsoft 365", detail: L10n.string("Outlook · OneDrive · Teams"), status: microsoftStatus,
                      done: center.canSignInWithMicrosoft && microsoftConnected > 0, preset: "outlook-mail")
@@ -195,10 +195,9 @@ struct ConnectorSetupTiles: View {
     }
 
     private var googleStatus: String {
-        guard center.canSignInWithGoogle else { return L10n.string("Not set up") }
         let count = center.googleAccounts.count
         guard count == 0 else { return L10n.format("%lld Google accounts", Int64(count)) }
-        return center.googleAppClientID == nil ? L10n.string("Sign in to start") : L10n.string("App saved · no account yet")
+        return center.googleAppClientID == nil ? L10n.string("Not set up") : L10n.string("App saved · no account yet")
     }
 
     private var microsoftConnected: Int {
@@ -694,12 +693,7 @@ private struct ConnectorRow: View {
                     entering = .client
                 }
             }
-            if record.isGoogle {
-                Button(L10n.string("Add another Google account")) {
-                    center.addAccount(services: Set(LocalConnectorService.googleDefaults))
-                }
-                .disabled(!center.canSignInWithGoogle)
-            }
+
             if record.localService?.isMicrosoft == true {
                 Button(L10n.string("Add another Microsoft account")) {
                     center.addAccount(services: [.outlookMail, .outlookCalendar, .oneDrive])

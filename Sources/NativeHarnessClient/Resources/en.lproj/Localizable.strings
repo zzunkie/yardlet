@@ -4556,3 +4556,16 @@
 "Create an app password for Yardlet in Google App Passwords." = "Create an app password for Yardlet in Google App Passwords.";
 "Paste the 16-character app password below. Spaces are ignored." = "Paste the 16-character app password below. Spaces are ignored.";
 "An app password connects Mailbox and basic mail_* tools without Google Cloud setup. For full Gmail tools, use the Google connector. Some Workspace organizations disable app passwords." = "An app password connects Mailbox and basic mail_* tools without Google Cloud setup. For full Gmail tools, use the Google connector. Some Workspace organizations disable app passwords.";
+"Agent tools" = "Agent tools";
+"Change OAuth client for this account…" = "Change OAuth client for this account…";
+"Connect Gmail with an app password in Mail (IMAP)" = "Connect Gmail with an app password in Mail (IMAP)";
+"Create a Personal Mode client" = "Create a Personal Mode client";
+"Create a Personal Mode client for each Google account you use with agent tools." = "Create a Personal Mode client for each Google account you use with agent tools.";
+"Enter the client ID and secret" = "Enter the client ID and secret";
+"Only the Google Account that created this Personal Mode client can sign in. Open Personal Mode with the account you want to connect and create a client for it." = "Only the Google Account that created this Personal Mode client can sign in. Open Personal Mode with the account you want to connect and create a client for it.";
+"Open Google Cloud with the account you want to connect, then paste its client ID and secret." = "Open Google Cloud with the account you want to connect, then paste its client ID and secret.";
+"Shared app for Workspace, Analytics, or Ads" = "Shared app for Workspace, Analytics, or Ads";
+"Sign in to Google for Yardlet Calendar" = "Sign in to Google for Yardlet Calendar";
+"Yardlet Calendar and Mailbox" = "Yardlet Calendar and Mailbox";
+"Yardlet Calendar connected" = "Yardlet Calendar connected";
+"For Workspace agent tools, select AI-powered agent when creating the desktop client. Use an Internal app for accounts in your organization." = "For Workspace agent tools, select AI-powered agent when creating the desktop client. Use an Internal app for accounts in your organization.";

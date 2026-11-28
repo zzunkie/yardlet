@@ -49,6 +49,7 @@ final class ConnectorsEasyQARenderingTests: XCTestCase {
             repository: InMemoryConnectorRepository(records: records, googleAppClientID: app ? FakeGoogle.clientID : nil),
             credentials: InMemoryConnectorCredentialStore(), http: FakeGoogleWorkspace(), userAgent: FakeUserAgent(),
             sha256: MacOAuthUserAgent.sha256, clientVersion: "9.9")
+        environment.googleWorkspaceTransport = environment.http
         environment.google = FakeGoogleWorkspace.endpoints
         environment.nativeHomes = { homes }
         return ConnectorCenter(environment: environment)
@@ -79,44 +80,14 @@ final class ConnectorsEasyQARenderingTests: XCTestCase {
 
     // MARK: - The assistants
 
-    func testTheGoogleAssistantDrawsEachStepWithItsPageAndCopies() throws {
-        let directory = try WindowlessRender.directory(Self.folder)
+    func testGoogleValidatesThePersonalClientInline() throws {
         let empty = center([], app: false)
-        let fresh = try defaults(opened: [])
-        let size = NSSize(width: 580, height: 1_120)
-        let captures = try WindowlessRender.hostedInBothAppearances("assistant-google-empty", in: directory, size: size,
-                                                                     passes: 10) { appearance in
-            page(GoogleSetupPage(center: empty), size: size, appearance: appearance, defaults: fresh)
-        }
-        for capture in captures { XCTAssertTrue(WindowlessRender.drawsContent(capture.bitmap, step: 6)) }
-        let text = spoken(page(GoogleSetupPage(center: empty), size: size, appearance: .light, defaults: fresh), size: size)
-        expect([L10n.string("Set up Google"), L10n.format("%lld of %lld done", Int64(0), Int64(7)),
-                L10n.string("Create a Google Cloud project"), L10n.string("New project"),
-                L10n.string("Turn on the Gmail, Calendar, and Drive APIs"), L10n.string("Enable APIs"),
-                L10n.string("Set up Google Auth Platform"), L10n.format("Copy %@", L10n.string("App name")),
-                L10n.string("Publish the app (External only)"), L10n.string("Add the scopes"),
-                L10n.format("Copy %@", L10n.string("Scopes")), L10n.string("Create a client and paste it here"),
-                L10n.format("Copy %@", L10n.string("Redirect URL")), L10n.string("OAuth client ID"),
-                L10n.string("Sign in with each Google account"), "Gmail", "Calendar", "Drive",
-                L10n.string("What Yardlet asks Google for"), "gmail.modify", "drive.readonly",
-                L10n.string("restricted"), L10n.string("non-sensitive"), L10n.string("Mark as done")], in: text, "empty")
-
-        // Under way: three pages opened, a value pasted into the ID field that is the secret.
-        let underway = try defaults(opened: [.project, .apis, .consent])
-        try WindowlessRender.hostedInBothAppearances("assistant-google-underway", in: directory, size: size,
-                                                     passes: 10) { appearance in
-            page(GoogleSetupPage(center: empty, clientID: "GOC" + "SPX-pasted-in-the-wrong-field"),
-                 size: size, appearance: appearance, defaults: underway)
-        }
-        let underwayText = spoken(page(GoogleSetupPage(center: empty, clientID: "GOC" + "SPX-pasted-in-the-wrong-field"),
-                                       size: size, appearance: .light, defaults: underway), size: size)
-        expect([L10n.format("%lld of %lld done", Int64(3), Int64(7)),
+        let size = NSSize(width: 540, height: 590)
+        let content = GoogleSetupPage(center: empty, clientID: "GOC" + "SPX-pasted-in-the-wrong-field")
+        let text = spoken(page(content, size: size, appearance: .light, defaults: try defaults(opened: [])), size: size)
+        expect([L10n.string("OAuth client ID"),
                 L10n.string("That is the client secret; the client ID ends with .apps.googleusercontent.com.")],
-               in: underwayText, "underway")
-        // Each opened page's step is done: its mark offers to undo that. (A step's "Done" or "Not done"
-        // reaches VoiceOver as its group's value description, which the listed values leave out.)
-        XCTAssertEqual(underwayText.filter { $0.trimmingCharacters(in: .whitespaces) == L10n.string("Mark as not done") }.count,
-                       3, "underway: \(underwayText)")
+               in: text, "personal client")
     }
 
     func testTheSlackAssistantDrawsFreshAndFilledIn() throws {
@@ -157,10 +128,8 @@ final class ConnectorsEasyQARenderingTests: XCTestCase {
             page(GoogleSetupPage(center: saved), size: size, appearance: appearance, defaults: store)
         }
         let text = spoken(page(GoogleSetupPage(center: saved), size: size, appearance: .light, defaults: store), size: size)
-        expect([L10n.string("Google OAuth app saved in your keychain"), FakeGoogle.clientID, "person@example.test",
-                "developer@company.test", "Google Calendar \(L10n.string("Connected"))", "Gmail \(L10n.string("Off"))",
-                "Google Drive \(L10n.string("Needs sign-in"))", L10n.string("Reconnect"),
-                L10n.string("Add another Google account"), L10n.string("All set")],
+        expect(["person@example.test", "developer@company.test", "Google Calendar \(L10n.string("Connected"))",
+                "Gmail \(L10n.string("Off"))", "Google Drive \(L10n.string("Needs sign-in"))", L10n.string("Reconnect")],
                in: text, "accounts")
 
         // The settings list has a row per service and account.
@@ -172,7 +141,7 @@ final class ConnectorsEasyQARenderingTests: XCTestCase {
         let settings = spoken(page(ConnectorSettingsView(center: saved), size: settingsSize, appearance: .light,
                                    defaults: store), size: settingsSize)
         expect(["Google Calendar · person@example.test", "Google Drive · developer@company.test",
-                L10n.format("%lld tools", Int64(9)), L10n.string("Set up in one go")], in: settings, "settings")
+                L10n.format("%lld tools", Int64(saved.connectors[0].tools.count)), L10n.string("Set up in one go")], in: settings, "settings")
     }
 
     // MARK: - Used elsewhere

@@ -164,33 +164,6 @@ struct GmailMessage {
         return formatter.string(from: internalDate)
     }
 
-    /// The fields one format returns.
-    func output(_ format: GmailToolCatalog.Format, bodyLimit: Int = GmailText.bodyLimit) -> ToolJSON {
-        var fields: [String: ToolJSON] = [:]
-        func put(_ key: String, _ value: String?) {
-            if let value, !value.isEmpty { fields[key] = .string(value) }
-        }
-        put("id", id)
-        put("threadId", threadId)
-        put("date", date)
-        put("from", header("From"))
-        put("to", header("To"))
-        put("cc", header("Cc"))
-        put("bcc", header("Bcc"))
-        fields["labelIds"] = .array(labelIds.map { .string($0) })
-        fields["unread"] = .bool(labelIds.contains("UNREAD"))
-        guard format != .metadataOnly else { return .object(fields) }
-        put("subject", header("Subject"))
-        put("snippet", snippet)
-        guard format == .plainText || format == .fullContent else { return .object(fields) }
-        let parts = GmailMessage.parts(json["payload"])
-        let plain = GmailText.bodyText(plain: parts.plain, html: parts.html)
-        put("body", plain.map { GmailText.limited($0, to: bodyLimit) })
-        if format == .fullContent { put("htmlBody", parts.html.map { GmailText.limited($0, to: bodyLimit) }) }
-        if !parts.attachments.isEmpty { fields["attachments"] = .array(parts.attachments) }
-        return .object(fields)
-    }
-
     /// The first plain-text and HTML parts, and the attachments, from a payload's part tree.
     static func parts(_ payload: ToolJSON?) -> (plain: String?, html: String?, attachments: [ToolJSON]) {
         var plain: String?

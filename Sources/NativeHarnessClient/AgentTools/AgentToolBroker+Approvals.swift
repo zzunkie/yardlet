@@ -242,9 +242,9 @@ extension AgentToolBroker {
             guard !harnessAsked else { return nil }
             let claudeName = Self.claudeName(tool)
             let input = JSONValue(arguments)
-            let draft = GmailToolApproval.readsDraft(toolName: claudeName)
-                ? await GmailToolApproval.draft(toolName: claudeName, input: input) : nil
-            let detail = GoogleToolApproval.request(toolName: claudeName, input: input, mailDraft: draft)?.detail
+            let draft = MailDraftApproval.readsDraft(toolName: claudeName)
+                ? await MailDraftApproval.draft(toolName: claudeName, input: input) : nil
+            let detail = LocalConnectorApproval.request(toolName: claudeName, input: input, mailDraft: draft)?.detail
                 ?? Self.argumentPreview(arguments)
             // The account it acts in leads the card: the one the call names, for a tool the accounts share.
             let named = arguments[ConnectorToolNaming.accountArgument]?.stringValue?

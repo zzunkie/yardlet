@@ -22,9 +22,13 @@ struct ConnectorSetupGuide: Equatable {
                     Link(title: L10n.string("Create in Slack"), url: SlackAppManifest.createURL),
                     Link(title: L10n.string("Slack's MCP guide"), url: URL(string: "https://docs.slack.dev/ai/mcp-server")!)
                 ])
-        case "gmail", "google-calendar", "google-drive", "google-analytics", "google-ads":
+        case "gmail", "google-calendar", "google-drive":
             return ConnectorSetupGuide(steps: ConnectorSetupAssistant.google(opened: [], appSaved: false, connectedAccounts: 0)
                 .steps.map(\.title), links: [
+                    Link(title: L10n.string("Create a Personal Mode client"), url: GoogleOAuth.personalModeURL)
+                ])
+        case "google-analytics", "google-ads":
+            return ConnectorSetupGuide(steps: [L10n.string("Enable APIs"), L10n.string("Create client"), L10n.string("Sign in with Google")], links: [
                     Link(title: L10n.string("Enable APIs"), url: ConnectorSetupAssistant.googleAPIs),
                     Link(title: L10n.string("Create client"), url: ConnectorSetupAssistant.googleClients)
                 ])
@@ -296,7 +300,6 @@ struct ConnectorAddSheet: View {
             .filter { ConnectorSetupGuide.matches($0, query: query) && center.isAvailable($0) }
         let keys = ConnectorSetupGuide.Kind.key.presets(gitHubSignIn: gitHubSignIn)
             .filter { ConnectorSetupGuide.matches($0, query: query) }
-        let googleSignsIn = googleBuiltIn && ConnectorSetupGuide.matchesGoogle(query: query)
         let microsoftSignsIn = microsoftBuiltIn && ConnectorSetupGuide.matchesMicrosoft(query: query)
         let searching = !query.trimmingCharacters(in: .whitespaces).isEmpty
         return VStack(alignment: .leading, spacing: 22) {
@@ -318,20 +321,13 @@ struct ConnectorAddSheet: View {
             .padding(.horizontal, 10)
             .frame(height: 30)
             .parityCard(cornerRadius: 8)
-            if !oneClick.isEmpty || googleSignsIn || microsoftSignsIn {
+            if !oneClick.isEmpty || microsoftSignsIn {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(L10n.string("Connect in one click")).font(.headline)
                     Text(L10n.string("Yardlet adds the service at once. For one with a sign-in, your browser opens: sign in and allow, and that is all."))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    // A build with Yardlet's own Google app signs in to Google without a setup.
-                    if googleSignsIn {
-                        googleRow
-                            .padding(.horizontal, 12)
-                            .parityCard()
-                            .padding(.top, 2)
-                    }
                     if microsoftSignsIn {
                         microsoftRow
                             .padding(.horizontal, 12)
@@ -356,7 +352,7 @@ struct ConnectorAddSheet: View {
             if !searching || ownAppMatches {
                 ownAppSection
             }
-            if searching, oneClick.isEmpty, keys.isEmpty, !googleSignsIn, !microsoftSignsIn, !ownAppMatches {
+            if searching, oneClick.isEmpty, keys.isEmpty, !microsoftSignsIn, !ownAppMatches {
                 Text(L10n.string("No service in the directory has that name. Add it by its address below."))
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -375,14 +371,11 @@ struct ConnectorAddSheet: View {
         }
     }
 
-    /// The build carries Yardlet's own Google app, so Google signs in without an app of the person's own.
-    private var googleBuiltIn: Bool { center.googleBuiltInApp != nil }
-    /// The same for Yardlet's own Microsoft app.
     private var microsoftBuiltIn: Bool { center.microsoftBuiltInApp != nil }
 
     /// The services under "Needs an OAuth app of your own" that the search names.
     private var ownAppMatches: Bool {
-        (!googleBuiltIn && ConnectorSetupGuide.matchesGoogle(query: query))
+        ConnectorSetupGuide.matchesGoogle(query: query)
             || (!microsoftBuiltIn && ConnectorSetupGuide.matchesMicrosoft(query: query))
             || ConnectorPreset.preset(id: "slack").map { ConnectorSetupGuide.matches($0, query: query) } == true
             || ConnectorSetupGuide.matchesZoom(query: query)
@@ -390,8 +383,7 @@ struct ConnectorAddSheet: View {
 
     /// The names under "Needs an OAuth app of your own", for its folded heading.
     private var ownAppNames: String {
-        var names: [String] = []
-        if !googleBuiltIn { names.append(L10n.string("Google (Gmail, Calendar, Drive)")) }
+        var names = [L10n.string("Google (Gmail, Calendar, Drive)")]
         if !microsoftBuiltIn { names.append("Microsoft 365") }
         names += ["Slack", "Zoom"]
         return names.joined(separator: ", ")
@@ -454,12 +446,12 @@ struct ConnectorAddSheet: View {
                 .fixedSize(horizontal: false, vertical: true)
             // A search that names one of these opens the heading.
             if showsOwnApps || !query.trimmingCharacters(in: .whitespaces).isEmpty {
-                if !googleBuiltIn {
+                if ConnectorSetupGuide.matchesGoogle(query: query) {
                     googleNote
                         .padding(.top, 2)
                 }
                 VStack(spacing: 0) {
-                    if !googleBuiltIn {
+                    if ConnectorSetupGuide.matchesGoogle(query: query) {
                         googleRow
                         Divider().padding(.leading, 34)
                     }
@@ -490,7 +482,7 @@ struct ConnectorAddSheet: View {
                 Image(systemName: "info.circle")
                     .foregroundStyle(.orange)
             }
-            Text(L10n.string("Register one Google OAuth app in your own Google Cloud project, then sign in once with each account; Yardlet runs its own Gmail, Calendar, and Drive servers with it. For Claude tasks you can instead turn on “Use claude.ai account connectors”, and each Claude account's tasks use what it connected on claude.ai."))
+            Text(L10n.string("Create a Personal Mode client for each Google account you use with agent tools."))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -585,21 +577,19 @@ struct ConnectorAddSheet: View {
         return ConnectorSetupGuide.summary(preset, gitHubSignIn: center.canSignInToGitHub)
     }
 
-    /// Gmail, Calendar, and Drive in one row: one Google OAuth app and one page sets up all three.
+    /// Gmail, Calendar, and Drive share an account setup page.
     private var googleRow: some View {
         HStack(spacing: 10) {
             ConnectorIcon(name: "Google", sources: .google, size: 24)
             VStack(alignment: .leading, spacing: 1) {
                 Text(L10n.string("Google · Gmail, Calendar, Drive")).font(.callout.weight(.medium))
-                Text(googleBuiltIn && center.googleAccounts.isEmpty
-                     ? L10n.string("Sign in with Google · personal and Workspace accounts")
-                     : ConnectorPreset.preset(id: "gmail").flatMap(rowSummary) ?? "")
+                Text(ConnectorPreset.preset(id: "gmail").flatMap(rowSummary) ?? "")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
-            Button(googleBuiltIn ? L10n.string("Connect") : L10n.string("Set up…")) { open(ConnectorPreset.preset(id: "gmail")) }
+            Button(L10n.string("Set up…")) { open(ConnectorPreset.preset(id: "gmail")) }
                 .controlSize(.small)
         }
         .padding(.vertical, 8)
@@ -715,15 +705,11 @@ struct ConnectorAddSheet: View {
                     Text(google ? L10n.string("Connect Google") : microsoft ? L10n.string("Connect Microsoft 365")
                          : preset.isZoom ? L10n.string("Connect Zoom") : L10n.format("Connect %@", preset.name))
                         .font(.title3.weight(.semibold))
-                    if google {
-                        Text(googleBuiltIn ? L10n.string("Gmail, Google Calendar, and Google Drive with one sign-in per account")
-                             : L10n.string("Gmail, Google Calendar, and Google Drive with one Google OAuth app"))
-                            .font(.caption).foregroundStyle(.secondary)
-                    } else if microsoft {
+                    if microsoft {
                         Text(microsoftBuiltIn ? L10n.string("Outlook, OneDrive, and Teams with one sign-in per account")
                              : L10n.string("Outlook, OneDrive, and Teams with one Microsoft app"))
                             .font(.caption).foregroundStyle(.secondary)
-                    } else if kind == .ownApp {
+                    } else if kind == .ownApp && !google {
                         Text(L10n.string("Needs an OAuth app of your own"))
                             .font(.caption.weight(.medium))
                             .foregroundStyle(.orange)
@@ -733,7 +719,9 @@ struct ConnectorAddSheet: View {
                 }
             }
             if google {
-                GoogleSetupPage(center: center, showsSteps: showsGoogleSteps, service: preset.localService)
+                GoogleSetupPage(center: center, showsSteps: showsGoogleSteps, service: preset.localService) {
+                    open(ConnectorPreset.preset(id: "imap-mail"))
+                }
             } else if microsoft {
                 MicrosoftSetupPage(center: center, service: preset.localService)
             } else if preset.isZoom {

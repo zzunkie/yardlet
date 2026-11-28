@@ -4351,3 +4351,16 @@
 "Create an app password for Yardlet in Google App Passwords." = "Google 앱 비밀번호에서 Yardlet용 앱 비밀번호를 만듭니다.";
 "Paste the 16-character app password below. Spaces are ignored." = "아래에 16자리 앱 비밀번호를 붙여 넣습니다. 공백은 자동으로 제거됩니다.";
 "An app password connects Mailbox and basic mail_* tools without Google Cloud setup. For full Gmail tools, use the Google connector. Some Workspace organizations disable app passwords." = "앱 비밀번호를 사용하면 Google Cloud 설정 없이 메일함과 기본 mail_* 도구를 연결할 수 있습니다. Gmail 도구 전체를 쓰려면 Google 커넥터를 연결하세요. 일부 Workspace 조직에서는 앱 비밀번호를 허용하지 않습니다.";
+"Agent tools" = "에이전트 도구";
+"Change OAuth client for this account…" = "이 계정의 OAuth 클라이언트 변경…";
+"Connect Gmail with an app password in Mail (IMAP)" = "메일(IMAP)에서 앱 비밀번호로 Gmail 연결";
+"Create a Personal Mode client" = "Personal Mode 클라이언트 만들기";
+"Create a Personal Mode client for each Google account you use with agent tools." = "에이전트 도구에 사용할 Google 계정마다 Personal Mode 클라이언트를 만드세요.";
+"Enter the client ID and secret" = "클라이언트 ID와 보안 비밀번호 입력";
+"Only the Google Account that created this Personal Mode client can sign in. Open Personal Mode with the account you want to connect and create a client for it." = "이 Personal Mode 클라이언트를 만든 Google 계정으로만 로그인할 수 있습니다. 연결하려는 계정으로 Personal Mode를 열고 새 클라이언트를 만드세요.";
+"Open Google Cloud with the account you want to connect, then paste its client ID and secret." = "연결할 계정으로 Google Cloud를 열고, 발급받은 클라이언트 ID와 보안 비밀번호를 여기에 붙여 넣으세요.";
+"Shared app for Workspace, Analytics, or Ads" = "Workspace, 애널리틱스, Google Ads용 공용 앱";
+"Sign in to Google for Yardlet Calendar" = "Yardlet 캘린더용 Google 로그인";
+"Yardlet Calendar and Mailbox" = "Yardlet 캘린더 및 메일함";
+"Yardlet Calendar connected" = "Yardlet 캘린더 연결됨";
+"For Workspace agent tools, select AI-powered agent when creating the desktop client. Use an Internal app for accounts in your organization." = "Workspace 에이전트 도구를 사용하려면 데스크톱 클라이언트를 만들 때 ‘AI-powered agent’를 선택하세요. 조직 내 계정에는 내부(Internal) 앱을 사용하세요.";

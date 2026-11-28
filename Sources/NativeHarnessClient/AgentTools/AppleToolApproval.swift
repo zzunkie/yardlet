@@ -3,8 +3,7 @@ import YardletAgentTools
 
 /// What Claude Code's request card says for an Apple service's write: a TestFlight tester invited or
 /// removed, a build given to a group, a review answered, or a version submitted for App Review; an
-/// event created, changed, or deleted in the Mac's calendars; a reminder added or marked done. Like
-/// a Google write's (`GoogleToolApproval`), it is asked each time, with no "always allow".
+/// event created, changed, or deleted in the Mac's calendars; a reminder added or marked done.
 enum AppleToolApproval {
     static func request(_ service: LocalConnectorService, tool: String, account: String?,
                         input: JSONValue) -> (title: String, detail: String)? {

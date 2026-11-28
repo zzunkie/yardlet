@@ -13,12 +13,14 @@ import XCTest
 final class NotificationRoutingTests: XCTestCase {
     func testDisconnectingMailWhileMailboxIsOffWithdrawsDeliveredNotifications() async throws {
         let (model, notifications, _) = makeModel(sessions: [])
-        func record(_ address: String) -> ConnectorRecord {
-            ConnectorRecord(name: "Gmail", slug: "gmail", serverURL: URL(string: "https://example.org")!,
-                            authorization: .oauth, status: .connected, localService: .gmail,
-                            account: address, accountSignInID: UUID())
-        }
-        let first = record("first@example.org"), other = record("other@example.org")
+        let first = ConnectorRecord(name: "Outlook Mail", slug: "outlook", serverURL: LocalConnectorService.outlookMail.address,
+                                    authorization: .oauth, status: .connected, localService: .outlookMail,
+                                    account: "first@example.org", accountSignInID: UUID())
+        var other = ConnectorRecord(name: "Gmail", slug: "gmail", serverURL: LocalConnectorService.gmail.address,
+                                    authorization: .oauth, status: .connected, localService: .gmail,
+                                    account: "other@example.org", accountSignInID: UUID())
+        other.hasGoogleUISignIn = false
+        other.googleMailboxSignIn = true
         let center = ConnectorCenter(environment: .init(
             repository: InMemoryConnectorRepository(records: [first, other]), credentials: InMemoryConnectorCredentialStore(),
             http: FakeAppStoreConnect(), userAgent: nil, sha256: MacOAuthUserAgent.sha256, clientVersion: "1"))
@@ -29,6 +31,9 @@ final class NotificationRoutingTests: XCTestCase {
         let firstID = "yardlet-mail-\(first.credentialID.uuidString)-thread"
         let otherID = "yardlet-mail-\(other.credentialID.uuidString)-thread"
         notifications.delivered = [firstID, otherID, "yardlet-mail-batch", "another-notification"]
+        // Signing out of agent tools leaves this Google account in the native mailbox.
+        center.disconnect(other.id)
+        XCTAssertTrue(center.mailAccounts().contains { $0.0.id == other.credentialID })
         center.disconnect(first.id)
         try await waitUntil { notifications.removed.contains(firstID) }
         XCTAssertEqual(notifications.removed, [firstID])

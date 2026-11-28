@@ -25,6 +25,7 @@ final class PlusConnectorsQARenderingTests: XCTestCase {
         var environment = ConnectorCenter.Environment(
             repository: InMemoryConnectorRepository(records: records), credentials: InMemoryConnectorCredentialStore(),
             http: FakeConnectorServer(), userAgent: FakeUserAgent(), sha256: MacOAuthUserAgent.sha256, clientVersion: "9.9")
+        environment.googleWorkspaceTransport = environment.http
         environment.nativeHomes = { [NativeMCPHome(kind: .claude(file: claude), account: "developer@example.test")] }
         if googleBuiltIn {
             environment.googleBuiltInApp = .init(clientID: FakeGoogle.clientID, clientSecret: FakeGoogle.clientSecret)
@@ -279,10 +280,8 @@ final class PlusConnectorsQARenderingTests: XCTestCase {
                             L10n.string("Slack client ID"), L10n.string("Sign in to Slack")]),
             // Google's: one OAuth app for Gmail, Calendar, and Drive, then accounts.
             Case(name: "add-oauth-app-gmail", start: .preset(gmail),
-                 expected: [L10n.string("Set up Google"), L10n.string("Create a Google Cloud project"),
-                            L10n.string("Turn on the Gmail, Calendar, and Drive APIs"),
-                            L10n.format("Copy %@", L10n.string("Redirect URL")), L10n.string("Save"),
-                            L10n.string("Sign in with Google")]),
+                 expected: [L10n.string("Agent tools"), L10n.string("Create a Personal Mode client"),
+                            L10n.string("OAuth client ID"), L10n.string("Sign in with Google")]),
             // Mercury, read only: its row says so under its name.
             Case(name: "add-directory-mercury", query: "Mercury", expected: ["Mercury", L10n.string("Read-only")]),
             Case(name: "add-custom-url", expandedRow: ConnectorAddSheet.customID,
@@ -308,9 +307,7 @@ final class PlusConnectorsQARenderingTests: XCTestCase {
         }
     }
 
-    /// The directory of 2026-10-21 is long: a search narrows it, and a build with Yardlet's own
-    /// Google app lists Google with the one-click services instead of under an app of one's own.
-    func testTheDirectorySearchesAndGoogleConnectsInOneClickWithTheBuiltInApp() throws {
+    func testDirectorySearchRoutesGoogleAgentToolsToSetupEvenWithTheBuiltInApp() throws {
         let directory = try WindowlessRender.directory(Self.directory)
         let size = NSSize(width: 580, height: 660)
         let stripe = try XCTUnwrap(ConnectorPreset.preset(id: "stripe"))
@@ -339,11 +336,9 @@ final class PlusConnectorsQARenderingTests: XCTestCase {
             Case(name: "add-github-signin", googleBuiltIn: false, gitHubApp: true, query: "git",
                  expected: ["GitHub", L10n.string("Sign in with GitHub"), L10n.string("Connect in one click")],
                  absent: [L10n.string("Paste a key or token")]),
-            Case(name: "add-builtin-google", googleBuiltIn: true, query: "",
-                 expected: [L10n.string("Google · Gmail, Calendar, Drive"),
-                            L10n.string("Sign in with Google · personal and Workspace accounts"),
-                            L10n.string("Needs an OAuth app of your own")],
-                 absent: [L10n.string("Gmail, Google Calendar, and Google Drive can't be connected with a plain Google sign-in.")])
+            Case(name: "add-builtin-google", googleBuiltIn: true, query: "drive",
+                 expected: [L10n.string("Google · Gmail, Calendar, Drive"), L10n.string("Set up…")],
+                 absent: [L10n.string("Sign in with Google · personal and Workspace accounts")])
         ]
         for item in cases {
             let center = try center([], googleBuiltIn: item.googleBuiltIn, gitHubApp: item.gitHubApp)

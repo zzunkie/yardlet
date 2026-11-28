@@ -50,7 +50,7 @@ final class CodexToolApprovalRenderingTests: XCTestCase {
         // A Yardlet connector's tool its service's accounts share: the card names the account the call acts in.
         ConnectorToolLabels.shared.update([ConnectorRecord(
             name: "Gmail", slug: "gmail", serverURL: URL(string: "https://gmail.googleapis.com/gmail/v1/")!,
-            status: .connected, presetID: "gmail", localService: .gmail, account: "person@example.test")])
+            status: .connected, tools: [.object(["name": .string("send_message")])], presetID: "gmail", localService: .gmail, account: "person@example.test")])
         defer { ConnectorToolLabels.shared.update([]) }
         let gmail = CodexRequestResponseProjection.request(CodexServerRequestState(
             id: "s:gmail", method: "mcpServer/elicitation/request", kind: .mcpElicitation,

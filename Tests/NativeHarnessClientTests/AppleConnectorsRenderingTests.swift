@@ -279,7 +279,7 @@ final class AppleConnectorsRenderingTests: XCTestCase {
         labels.update([ConnectorRecord(name: "App Store Connect", slug: "app_store_connect", serverURL: FakeAppStoreConnect.base,
                                        presetID: "app-store-connect", localService: .appStoreConnect, account: "2X9R4HXF34")])
         let input: JSONValue = .object(["versionId": .string("6741234567")])
-        let text = try XCTUnwrap(GoogleToolApproval.request(toolName: "mcp__yardlet__app_store_connect_submit_for_review",
+        let text = try XCTUnwrap(LocalConnectorApproval.request(toolName: "mcp__yardlet__app_store_connect_submit_for_review",
                                                             input: input, labels: labels))
         let request = PermissionRequest(id: "perm-asc", title: text.title, detail: text.detail, command: nil, toolCallID: "toolu_submit")
         let start = Date(timeIntervalSince1970: 1_793_000_000)

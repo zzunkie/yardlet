@@ -30,6 +30,8 @@ final class GoogleWorkspaceMCPClientTests: XCTestCase {
             XCTAssertEqual(requests.count, 2)
             for request in requests {
                 XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Mcp-Method"), "tools/call")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Mcp-Name"), "send_message")
                 XCTAssertEqual(request.url, endpoint)
                 XCTAssertEqual(request.timeoutInterval, 150)
                 XCTAssertNil(request.value(forHTTPHeaderField: "Mcp-Session-Id"))
@@ -65,6 +67,8 @@ final class GoogleWorkspaceMCPClientTests: XCTestCase {
         let request = try XCTUnwrap(requests.first)
         XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
         XCTAssertEqual(request.value(forHTTPHeaderField: "MCP-Protocol-Version"), "2026-07-28")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Mcp-Method"), "tools/list")
+        XCTAssertNil(request.value(forHTTPHeaderField: "Mcp-Name"))
         XCTAssertEqual(request.value(forHTTPHeaderField: "Accept-Language"), "ko-KR")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json, text/event-stream")

@@ -185,7 +185,7 @@ struct MailAccountToolRunner {
         .array(files.map { .object(["filename": .string($0.name), "size": .integer(Int64($0.size))]) })
     }
 
-    /// What a draft holds, for the request card before it is sent (`GmailToolApproval`).
+    /// What a draft holds, for the request card before it is sent (`MailDraftApproval`).
     func draftPreview(_ arguments: [String: ToolJSON]) async throws -> MailDraftPreview? {
         try await transport.thread(try Arguments.required(arguments, "draftId")).messages.last.map(MailDraftPreview.init)
     }

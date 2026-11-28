@@ -38,7 +38,14 @@ final class MacAgentToolService: NativeSurfaceResource {
     static func startPreparing() {
         guard case .none = preparation else { return }
         let repository = FileConnectorRepository.live()
-        preparation = .reading(Task.detached(priority: .userInitiated) { repository.loadSettings() })
+        let builtIn = GoogleOAuth.BuiltInApp.from(info: Bundle.main.infoDictionary)
+        let secrets = GoogleAccountCredentials(store: connectorCredentials().bound(to: ConnectorAccountProvider.google.credentialDestination),
+                                              tokenEndpoint: GoogleOAuth.Endpoints.live.token, builtInClientID: builtIn?.clientID)
+        preparation = .reading(Task.detached(priority: .userInitiated) {
+            var saved = repository.loadSettings()
+            saved.googleMigrations = secrets.migrations(in: saved, builtIn: builtIn)
+            return saved
+        })
     }
 
     /// Waits for the connector settings, so `shared` starts from them instead of reading them on the
