@@ -220,7 +220,9 @@ final class PersonalAgentRenderingTests: XCTestCase {
         await model.togglePinned(other)
         _ = await model.openTask(from: SystemNotificationTarget(sessionID: other.id))
         await host.settle(until: { !showsPersonalAgents() })
-        host.settle(passes: 10)
+        // Waits for the reveal rather than a fixed number of passes: the lazy list scrolls to its estimate of the row's
+        // place first, and in an async test a view's tasks finish only while the test awaits.
+        await host.settle(until: { (list()?.contentView.bounds.minY ?? .infinity) <= 40 })
         let revealed = try XCTUnwrap(list()).contentView.bounds.minY
         XCTAssertLessThanOrEqual(revealed, 40, "The new selection starts in the first viewport")
         await switchAndBack(returningTo: other)

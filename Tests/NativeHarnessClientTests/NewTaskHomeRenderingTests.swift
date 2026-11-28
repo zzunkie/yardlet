@@ -913,7 +913,9 @@ final class NewTaskHomeRenderingTests: XCTestCase {
                 let projects = try XCTUnwrap(controls(in: host, role: .radioButton).first { $0.label == L10n.string("Projects") },
                                              report)
                 try click(projects, in: host)
-                host.settle(passes: 10)
+                // Waits for the columns rather than a fixed number of passes: in an async test a view's tasks finish only
+                // while the test awaits.
+                await host.settle(until: { host.accessibilityElements().contains { $0.label.hasPrefix("example-web") } })
                 if name == "reply-1040" {
                     try WindowlessRender.writePNG(try host.capture().bitmap,
                                                   to: directory.appending(path: "projects-1040-\(appearance.suffix).png"))
