@@ -92,7 +92,9 @@ Pi's explicit provider sign-in keeps the existing
 Antigravity CLI uses `agy acp --login` when the selected CLI lists that option. Older versions open their login
 method picker, where Yardlet confirms the default Google OAuth choice. The console shows the browser handoff
 while `agy` signs in. For an older CLI that stays in chat, Yardlet checks authentication once a second.
-After sign-in the account list reads quota separately, so returning to the task does not wait for usage. The
+When the login command exits successfully, Yardlet checks the stored sign-in. If the CLI still reports a signed-out
+account, the console stays open with its CLI details available. A confirmed sign-in returns to the task or account
+list while the quota reading runs in the background. The
 console's terminal keeps its size while the CLI details are hidden, since a full-screen picker such as `agy`'s draws
 nothing in a terminal one row tall.
 

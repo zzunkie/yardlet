@@ -1175,21 +1175,27 @@ final class ProviderConnectionStore {
         return await broker.snapshot(for: descriptor, executableURL: executableURL)
     }
 
-    /// Finish the account reading after browser sign-in, even if its sheet has already closed.
-    func refreshAntigravityAfterLogin(_ descriptor: HarnessDescriptor, verified: HarnessAccountSnapshot?,
-                                      runtimeSelections: RuntimeSelectionStore) {
-        guard let executable = runtimeSelections.selectedURL(for: descriptor.id) else { return }
-        _ = schedule(AccountSnapshotCache.defaultKey(for: descriptor.id), policy: .restart) { isLatest in
-            let auth: HarnessAccountSnapshot
-            if let verified { auth = verified }
-            else {
-                auth = await self.readDefault(descriptor, executableURL: executable, authOnly: true)
-                guard isLatest(), runtimeSelections.selectedURL(for: descriptor.id) == executable else { return }
-                self.applyDefault(auth)
-            }
-            guard auth.state == .signedIn, self.defaultLoader == nil else { return }
-            let usage = await HarnessAccountBroker().antigravityUsage(executableURL: executable)
-            guard isLatest(), runtimeSelections.selectedURL(for: descriptor.id) == executable else { return }
+    /// Publish the login the CLI actually stored before the console returns to the account list.
+    func verifyAntigravityLogin(_ descriptor: HarnessDescriptor, executableURL: URL,
+                                runtimeSelections: RuntimeSelectionStore) async -> Bool {
+        while !Task.isCancelled, runtimeSelections.selectedURL(for: descriptor.id) == executableURL {
+            let read = beginRead(ofDefault: descriptor.id)
+            let auth = await readDefault(descriptor, executableURL: executableURL, authOnly: true)
+            guard !Task.isCancelled, runtimeSelections.selectedURL(for: descriptor.id) == executableURL else { break }
+            guard finishRead(read, with: auth) else { continue }
+            guard auth.state == .signedIn else { return false }
+            refreshAntigravityUsage(auth, executableURL: executableURL, runtimeSelections: runtimeSelections)
+            return true
+        }
+        return false
+    }
+
+    func refreshAntigravityUsage(_ auth: HarnessAccountSnapshot, executableURL: URL,
+                                 runtimeSelections: RuntimeSelectionStore) {
+        guard defaultLoader == nil else { return }
+        _ = schedule(AccountSnapshotCache.defaultKey(for: auth.harness), policy: .restart) { isLatest in
+            let usage = await HarnessAccountBroker().antigravityUsage(executableURL: executableURL)
+            guard isLatest(), runtimeSelections.selectedURL(for: auth.harness) == executableURL else { return }
             self.applyDefault(auth.replacingUsage(usage))
         }
     }

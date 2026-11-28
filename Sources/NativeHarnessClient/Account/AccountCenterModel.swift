@@ -55,15 +55,19 @@ final class AccountCenterModel {
               let command = await (connection.map { HarnessAccountBroker(connection: $0) } ?? broker).loginCommand(
                 for: descriptor.id,
                 executableURL: executableURL
-              ) else { return }
+              ), runtimeSelections.selectedURL(for: descriptor.id) == executableURL else { return }
         stopConnectionVerification()
         activeConnection = connection
         activeHarness = descriptor.id
-        loginController.start(command) { [weak self] in
-            guard let self, descriptor.id == .antigravityCLI,
-                  runtimeSelections.selectedURL(for: descriptor.id) == executableURL else { return }
-            self.connections.refreshAntigravityAfterLogin(descriptor, verified: self.loginController.connectionVerified
-                ? self.connections.defaultSnapshots[descriptor.id] : nil, runtimeSelections: runtimeSelections)
+        if descriptor.id == .antigravityCLI {
+            loginController.start(command) { [weak self] in
+                guard let self else { return false }
+                self.stopConnectionVerification()
+                return await self.connections.verifyAntigravityLogin(descriptor, executableURL: executableURL,
+                                                                    runtimeSelections: runtimeSelections)
+            }
+        } else {
+            loginController.start(command)
         }
         // Pi and older Antigravity versions stay in their editor after signing in.
         if descriptor.id == .pi || (descriptor.id == .antigravityCLI && command.initialInput != nil) {
@@ -148,6 +152,10 @@ final class AccountCenterModel {
                     // only this result and keep following.
                     if let read, !self.connections.finishRead(read, with: snapshot) { continue }
                     guard isDone(snapshot) else { continue }
+                    if descriptor.id == .antigravityCLI, snapshot.state == .signedIn {
+                        self.connections.refreshAntigravityUsage(snapshot, executableURL: executableURL,
+                                                               runtimeSelections: runtimeSelections)
+                    }
                     self.loginController.completeVerifiedConnection()
                 }
                 if self.loginController.phase == .completed, let next { await next() }

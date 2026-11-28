@@ -1287,15 +1287,16 @@ struct ConnectionCenterContent: View {
         }
         .onChange(of: model.loginController.isRunning) { wasRunning, isRunning in
             guard wasRunning, !isRunning else { return }
-            if descriptor.id == .antigravityCLI, model.loginController.phase == .completed {
-                if model.loginController.operation == .connect {
+            if descriptor.id == .antigravityCLI {
+                if model.loginController.phase == .completed, model.loginController.operation == .connect {
                     model.useFinishedSignIn()
                     model.closeConsole()
-                    onFinish()
-                } else if !model.loginController.connectionVerified {
-                    Task { await recheckAccounts(of: descriptor.id) }
+                    if returnsSetupToTask { onFinish() }
+                    return
                 }
-                return
+                // A verified sign-out or a sign-in verification already published its reading.
+                if model.loginController.connectionVerified
+                    || (model.loginController.operation == .connect && model.loginController.exitCode == 0) { return }
             }
             Task { await recheckAccounts(of: descriptor.id) }
         }

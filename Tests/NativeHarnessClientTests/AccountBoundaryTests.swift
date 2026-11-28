@@ -90,6 +90,33 @@ final class AccountBoundaryTests: XCTestCase {
         XCTAssertNotNil(logout?.initialInputTrigger)
     }
 
+    func testChangingRuntimeDuringLoginDiscoveryDoesNotOpenTheOldConsole() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cli = root.appending(path: "agy")
+        try Data("""
+        #!/bin/sh
+        cd "$(dirname "$0")" || exit 1
+        touch checking
+        while [ ! -f release ]; do sleep 0.02; done
+        echo '  --login    Sign in'
+        """.utf8).write(to: cli)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: cli.path)
+        let descriptor = try XCTUnwrap(HarnessCatalog.descriptor(for: .antigravityCLI))
+        let model = AccountCenterModel(connections: ProviderConnectionStore())
+        let runtime = RuntimeSelectionStore(defaults: SuggestionVolatileDefaults(), discoversRuntimes: false,
+                                            loadsPersistedSelections: false)
+        runtime.select(cli, for: descriptor.id)
+        let login = Task { await model.login(descriptor: descriptor, runtimeSelections: runtime) }
+        try await waitUntil { FileManager.default.fileExists(atPath: root.appending(path: "checking").path) }
+        runtime.select(URL(filePath: "/usr/bin/true"), for: descriptor.id)
+        try Data().write(to: root.appending(path: "release"))
+        await login.value
+        XCTAssertNil(model.activeHarness)
+        XCTAssertFalse(model.loginController.isRunning)
+    }
+
     func testOpenCodeProviderStateRequiresStoredConnectionInsteadOfInheritedEnvironmentKey() {
         let environmentBackedProvider = """
         Credentials ~/.local/share/opencode/auth.json

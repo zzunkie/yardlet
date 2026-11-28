@@ -29,12 +29,16 @@ final class AccountLoginController: NSObject, @MainActor LocalProcessTerminalVie
     @ObservationIgnored private var pendingInitialInputTrigger: String?
     private var opensBrowser = false
     private var automaticPrompt: String?
-    @ObservationIgnored private var onSuccess: (() -> Void)?
+    @ObservationIgnored private var verifySuccessfulExit: (() async -> Bool)?
+    @ObservationIgnored private var verificationTask: Task<Void, Never>?
+    private var verificationFailed = false
     private let outputLimit = 256 * 1024
 
     var phase: AccountConnectionPhase {
         if connectionVerified { return .completed }
         if wasCancelled { return .cancelled }
+        if verificationFailed { return .failed }
+        if isRunning, exitCode != nil { return .preparing }
         if isRunning {
             if detectedURL != nil { return .browserHandoff }
             if interaction == .terminalRequired || Self.outputRequiresInput(output, automaticPrompt: automaticPrompt) {
@@ -53,9 +57,9 @@ final class AccountLoginController: NSObject, @MainActor LocalProcessTerminalVie
 
     /// Prepares a command for the interactive SwiftTerm surface. The process starts
     /// when the view attaches on the next SwiftUI render pass.
-    func start(_ command: AccountInteractiveCommand, onSuccess: (() -> Void)? = nil) {
+    func start(_ command: AccountInteractiveCommand, verifySuccessfulExit: (() async -> Bool)? = nil) {
         stop()
-        self.onSuccess = onSuccess
+        self.verifySuccessfulExit = verifySuccessfulExit
         output = command.startupMessage ?? ""
         detectedURL = nil
         detectedCode = nil
@@ -80,7 +84,7 @@ final class AccountLoginController: NSObject, @MainActor LocalProcessTerminalVie
         view.onOutput = { [weak self, weak view] in
             // While the process runs, the terminal poll reads its output. The last lines can
             // arrive after the exit is reported, once the poll has stopped.
-            guard let self, let view, view === self.terminalView, !self.isRunning else { return }
+            guard let self, let view, view === self.terminalView, self.exitCode != nil else { return }
             self.refreshTerminalOutput()
         }
 
@@ -144,7 +148,6 @@ final class AccountLoginController: NSObject, @MainActor LocalProcessTerminalVie
     func completeVerifiedConnection() {
         guard isRunning, !wasCancelled else { return }
         connectionVerified = true
-        onSuccess?()
         stopProcess(clearOutcome: false)
         detectedURL = nil
         detectedCode = nil
@@ -165,12 +168,14 @@ final class AccountLoginController: NSObject, @MainActor LocalProcessTerminalVie
     }
 
     private func stopProcess(clearOutcome: Bool) {
-        onSuccess = nil
+        verificationTask?.cancel()
+        verificationTask = nil
+        verifySuccessfulExit = nil
         terminalPollTask?.cancel()
         terminalPollTask = nil
         if let terminalView {
             let terminalPID = terminalView.process.shellPid
-            if terminalPID > 0 {
+            if terminalView.process.running, terminalPID > 0 {
                 NativeProcessTree.terminate(rootPID: terminalPID)
             }
             if terminalView.process.running {
@@ -184,6 +189,7 @@ final class AccountLoginController: NSObject, @MainActor LocalProcessTerminalVie
         processIdentifier = nil
         isRunning = false
         if clearOutcome {
+            verificationFailed = false
             connectionVerified = false
             detectedURL = nil
             detectedCode = nil
@@ -216,7 +222,6 @@ final class AccountLoginController: NSObject, @MainActor LocalProcessTerminalVie
     private func refreshTerminalOutput() {
         guard let terminalView else { return }
         let terminalText = terminalView.getTerminal().unwrappedText
-        output = terminalOutputPrefix + terminalText
         if let trigger = pendingInitialInputTrigger,
            terminalText.contains(trigger),
            let input = pendingInitialInput {
@@ -224,11 +229,15 @@ final class AccountLoginController: NSObject, @MainActor LocalProcessTerminalVie
             pendingInitialInputTrigger = nil
             send(input)
         }
-        if detectedURL == nil { detectedURL = Self.firstHTTPSURL(in: output) }
-        if detectedCode == nil { detectedCode = Self.firstDeviceCode(in: output) }
-        if output.utf8.count > outputLimit {
-            output = String(decoding: output.utf8.suffix(outputLimit), as: UTF8.self)
+        let text = terminalOutputPrefix + terminalText
+        let bounded = text.utf8.count > outputLimit ? String(decoding: text.utf8.suffix(outputLimit), as: UTF8.self) : text
+        guard bounded != output else { return }
+        output = bounded
+        if detectedURL.map(Self.isSignInURL) != true, let url = Self.firstHTTPSURL(in: output),
+           detectedURL == nil || Self.isSignInURL(url) {
+            detectedURL = url
         }
+        if detectedCode == nil { detectedCode = Self.firstDeviceCode(in: output) }
     }
 
     private func didTerminate(exitCode: Int32?) {
@@ -239,10 +248,21 @@ final class AccountLoginController: NSObject, @MainActor LocalProcessTerminalVie
         pendingInitialInput = nil
         pendingInitialInputTrigger = nil
         processIdentifier = nil
-        isRunning = false
         self.exitCode = exitCode ?? -1
-        if exitCode == 0 { onSuccess?() }
-        onSuccess = nil
+        guard exitCode == 0, let verifySuccessfulExit else {
+            isRunning = false
+            return
+        }
+        self.verifySuccessfulExit = nil
+        verificationTask = Task { [weak self] in
+            guard !Task.isCancelled else { return }
+            let verified = await verifySuccessfulExit()
+            guard let self, !Task.isCancelled else { return }
+            self.connectionVerified = verified
+            self.verificationFailed = !verified
+            self.isRunning = false
+            self.verificationTask = nil
+        }
     }
 
     func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
@@ -260,14 +280,22 @@ final class AccountLoginController: NSObject, @MainActor LocalProcessTerminalVie
         guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
         else { return nil }
         let range = NSRange(value.startIndex..<value.endIndex, in: value)
-        return detector.matches(in: value, range: range)
+        let candidates = detector.matches(in: value, range: range)
             .compactMap(\.url)
-            .first { url in
+            .filter { url in
                 guard url.scheme == "https" else { return false }
                 let parts = (url.host?.lowercased().components(separatedBy: ".") ?? [])
                     + url.path.lowercased().components(separatedBy: "/")
                 return !parts.contains { $0.hasPrefix("terms") || $0.contains("privacy")
                     || ["docs", "documentation", "policies", "tos"].contains($0) }
             }
+        return candidates.first(where: isSignInURL) ?? candidates.first
+    }
+
+    private static func isSignInURL(_ url: URL) -> Bool {
+        let hostLabel = url.host?.lowercased().split(separator: ".").first
+        if let hostLabel, ["accounts", "auth", "login"].contains(String(hostLabel)) { return true }
+        let authPaths = ["oauth", "oauth2", "authorize", "login", "device", "signin", "sso", "auth"]
+        return url.path.lowercased().split(separator: "/").contains { authPaths.contains(String($0)) }
     }
 }
