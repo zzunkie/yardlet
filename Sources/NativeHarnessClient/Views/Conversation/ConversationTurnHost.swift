@@ -324,7 +324,7 @@ extension ConversationTurn {
 /// SwiftUI propagates each value to its readers without replacing the hosted turn or its size cache.
 @MainActor
 @Observable
-private final class ConversationTurnControls {
+final class ConversationTurnControls {
     var focus = ControlActiveState.key
     var revealsActions = false
     var shell: ClaudeShellCommandActions?

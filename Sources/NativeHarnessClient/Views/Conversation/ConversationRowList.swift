@@ -358,7 +358,7 @@ final class ConversationRowListController: NSObject {
     /// coming into view is laid out a little before it does.
     static let overscan: CGFloat = 1
 
-    let scrollView = ConversationRowListScrollView()
+    let scrollView: ConversationRowListScrollView
     private let rowsView = ConversationRowsView()
     private var parent: ConversationRowList?
     private var environment = EnvironmentValues()
@@ -386,6 +386,10 @@ final class ConversationRowListController: NSObject {
     /// The view is moving for this controller, not for the reader.
     private var adjusting = 0
     private var animatedScrolls = 0
+    /// Returns false when the destination should be reached immediately.
+    typealias ScrollAnimation = @MainActor (NSClipView, NSPoint, @escaping @MainActor @Sendable () -> Void) -> Bool
+    private let animateScroll: ScrollAnimation
+    private var pendingResizes = Set<String>()
     private var lastSize = CGSize.zero
     /// The viewport and the rows' height when the view last moved, or the list last changed them: a new
     /// width or rows that grew below leave the view where it was, and tell nothing that it moved.
@@ -403,7 +407,10 @@ final class ConversationRowListController: NSObject {
         ParityTheme.conversationColumnWidth(in: width)
     }
 
-    override init() {
+    init(scrollView: ConversationRowListScrollView = ConversationRowListScrollView(),
+         animateScroll: @escaping ScrollAnimation = ConversationRowListController.animateIfVisible) {
+        self.scrollView = scrollView
+        self.animateScroll = animateScroll
         super.init()
         scrollView.documentView = rowsView
         scrollView.drawsBackground = false
@@ -506,7 +513,11 @@ final class ConversationRowListController: NSObject {
         }
         cells = [:]
         freeCells = []
-        for hosting in hostings.values { release(hosting) }
+        for hosting in hostings.values {
+            release(hosting)
+            DeferredHostingRelease.enqueue(hosting)
+        }
+        pendingResizes.removeAll()
         hostings = [:]
         parent?.readingTracker.hide()
         parent?.readingTracker.rowFrame = nil
@@ -544,7 +555,7 @@ final class ConversationRowListController: NSObject {
         case let .row(id, placement, animated):
             guard let index = geometry.index(of: id) else { return }
             pendingPlace = nil
-            change { measure(index) }
+            change { _ = measure(index) }
             let frame = contentFrame(ofRow: index)
             let y = placement == .center ? frame.midY - viewport / 2 : frame.minY
             scroll(toY: y, animated: animated) { [weak self] in
@@ -609,14 +620,18 @@ final class ConversationRowListController: NSObject {
         index == geometry.count - 1 ? ConversationLayout.bottomPadding : 0
     }
 
-    private func measure(_ index: Int) {
-        guard let parent else { return }
+    @discardableResult
+    private func measure(_ index: Int) -> Bool {
+        guard let parent else { return false }
         let id = geometry.ids[index]
         let hosting = hosting(for: id)
         hosting.show(parent.row(index), environment: environment)
         let height = hosting.size(forWidth: Self.columnWidth(in: rowsView.bounds.width)).height
         measuredContent[id] = height
-        geometry.setHeight(gap(index) + height + bottom(index), ofRow: index)
+        let total = gap(index) + height + bottom(index)
+        guard total != geometry.heights[index] else { return false }
+        geometry.setHeight(total, ofRow: index)
+        return true
     }
 
     /// Where row `id`'s turn is drawn in the list's document, or nil while the row is not in the list.
@@ -644,26 +659,48 @@ final class ConversationRowListController: NSObject {
         // The reader's gesture over a followed conversation: what arrives below waits for it to end.
         let holdsForGesture = followState.isFollowing && scrollView.isLiveScrolling
         let atEnd = geometry.distanceFromEnd(offset: before, viewportHeight: clip.bounds.height) <= 1
-        let anchor = geometry.anchor(offset: before, following: (!scrolling || atEnd) && followState.isFollowing && !holdsForGesture)
+        let pinsEnd = scrolling ? atEnd : followState.isFollowing
+        let anchor = geometry.anchor(offset: before, following: pinsEnd && !holdsForGesture)
         body()
         let viewport = clip.bounds.height
-        if Self.columnWidth(in: rowsView.bounds.width) >= 80, viewport > 0 {
-            var visited = IndexSet()
-            while true {
-                let offset = geometry.offset(for: anchor, viewportHeight: viewport, scales: scales, fallback: before)
-                let near = nearRows(offset: offset, viewport: viewport)
-                var needed = IndexSet(integersIn: near)
-                for row in heldRows(besides: near) where cells[geometry.ids[row]] != nil { needed.insert(row) }
-                needed.subtract(visited)
-                guard !needed.isEmpty else { break }
-                for row in needed where refresh || cells[geometry.ids[row]] == nil { measure(row) }
-                visited.formUnion(needed)
+        var visited = IndexSet()
+        func prepare(at offset: CGFloat) -> Bool {
+            guard viewport > 0, Self.columnWidth(in: rowsView.bounds.width) >= 80 else { return false }
+            let near = nearRows(offset: offset, viewport: viewport)
+            var needed = IndexSet(integersIn: near)
+            for row in heldRows(besides: near) where cells[geometry.ids[row]] != nil { needed.insert(row) }
+            needed.subtract(visited)
+            visited.formUnion(needed)
+            var changed = false
+            for row in needed where refresh || cells[geometry.ids[row]] == nil {
+                if measure(row) { changed = true }
             }
+            return changed
+        }
+
+        // During a scroll AppKit owns the clip bounds, including their elastic extension. Correct
+        // the anchor only if refining a row actually moved the content.
+        var placeAnchor = !scrolling
+        while true {
+            let offset = placeAnchor ? geometry.offset(for: anchor, viewportHeight: viewport, scales: scales, fallback: before)
+                : clip.bounds.minY
+            if prepare(at: offset) {
+                placeAnchor = true
+                continue
+            }
+            if placeAnchor {
+                if rowsView.frame.height != geometry.contentHeight {
+                    rowsView.setFrameSize(NSSize(width: rowsView.frame.width, height: geometry.contentHeight))
+                }
+                scroll(toY: offset)
+            }
+            // The clip can round a proposed origin or keep its old subpixel origin. Mount only
+            // after measuring the rows reached by its actual bounds.
+            if clip.bounds.minY == offset || !prepare(at: clip.bounds.minY) { break }
+            placeAnchor = true
         }
         let height = geometry.contentHeight
-        if rowsView.frame.height != height { rowsView.setFrameSize(NSSize(width: rowsView.frame.width, height: height)) }
         if holdsForGesture { arrivedUnderGesture += max(0, height - endBefore) }
-        scroll(toY: geometry.offset(for: anchor, viewportHeight: clip.bounds.height, scales: scales, fallback: before))
         tile()
         adjusting -= 1
         if scrolling { return }
@@ -700,6 +737,7 @@ final class ConversationRowListController: NSObject {
         }
         for row in near {
             let id = geometry.ids[row]
+            guard let hosting = hostings[id] else { continue }
             let cell = cells[id] ?? {
                 let cell = freeCells.popLast() ?? ConversationRowCell()
                 cells[id] = cell
@@ -709,7 +747,7 @@ final class ConversationRowListController: NSObject {
             if cell.frame != frame { cell.frame = frame }
             if cell.content == nil {
                 cell.rowID = id
-                cell.show(hosting(for: id).controller.view)
+                cell.show(hosting.controller.view)
                 rowsView.addSubview(cell)
             }
         }
@@ -755,8 +793,27 @@ final class ConversationRowListController: NSObject {
 
     /// A turn grew or shrank on its own: a fold opened, a line streamed. Only it and the rows below it move.
     private func rowResized(_ id: String) {
-        guard !isUpdating, adjusting == 0, cells[id] != nil, let index = geometry.index(of: id) else { return }
-        change { measure(index) }
+        if isUpdating || adjusting > 0 {
+            if pendingResizes.isEmpty { schedulePendingResizes() }
+            pendingResizes.insert(id)
+            return
+        }
+        guard cells[id] != nil, let index = geometry.index(of: id) else { return }
+        change { _ = measure(index) }
+    }
+
+    private func schedulePendingResizes() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !pendingResizes.isEmpty else { return }
+            guard !isUpdating, adjusting == 0 else { return schedulePendingResizes() }
+            let rows = pendingResizes
+            pendingResizes.removeAll()
+            change {
+                for id in rows where cells[id] != nil {
+                    if let index = geometry.index(of: id) { measure(index) }
+                }
+            }
+        }
     }
 
     // MARK: - Scrolling
@@ -778,7 +835,7 @@ final class ConversationRowListController: NSObject {
     }
 
     @objc private func boundsChanged() {
-        guard adjusting == 0 else { return }
+        guard animatedScrolls == 0, adjusting == 0 else { return }
         let oldBounds = scrollView.contentView.bounds
         let moved = lastSeen.map {
             $0.height == geometry.contentHeight && $0.visible.size == oldBounds.size && abs($0.visible.minY - oldBounds.minY) > 1
@@ -845,23 +902,18 @@ final class ConversationRowListController: NSObject {
         let clip = scrollView.contentView
         let target = min(max(0, y), geometry.maximumOffset(viewportHeight: clip.bounds.height))
         guard abs(clip.bounds.minY - target) >= 0.5 else { return }
-        if animated, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
-           scrollView.window?.occlusionState.contains(.visible) == true {
+        if animated {
             animatedScrolls += 1
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.16
-                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                clip.animator().setBoundsOrigin(NSPoint(x: 0, y: target))
-            } completionHandler: { [weak self] in
-                MainActor.assumeIsolated {
-                    guard let self else { return }
-                    self.scrollView.reflectScrolledClipView(clip)
-                    self.animatedScrolls -= 1
-                    self.change(scrolling: true) {}
-                    completion?()
-                }
-            }
-            return
+            if animateScroll(clip, NSPoint(x: 0, y: target), { [weak self] in
+                guard let self else { return }
+                animatedScrolls -= 1
+                guard animatedScrolls == 0, parent != nil else { return }
+                scrollView.reflectScrolledClipView(clip)
+                change(scrolling: true) {}
+                reportScroll()
+                completion?()
+            }) { return }
+            animatedScrolls -= 1
         }
         adjusting += 1
         clip.scroll(to: NSPoint(x: 0, y: target))
@@ -872,5 +924,19 @@ final class ConversationRowListController: NSObject {
             reportScroll()
         }
         completion?()
+    }
+
+    private static func animateIfVisible(_ clip: NSClipView, to origin: NSPoint,
+                                         completion: @escaping @MainActor @Sendable () -> Void) -> Bool {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+              clip.window?.occlusionState.contains(.visible) == true else { return false }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.16
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            clip.animator().setBoundsOrigin(origin)
+        } completionHandler: {
+            MainActor.assumeIsolated { completion() }
+        }
+        return true
     }
 }

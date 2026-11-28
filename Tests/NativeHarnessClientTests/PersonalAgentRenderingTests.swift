@@ -1644,6 +1644,27 @@ final class PersonalAgentRenderingTests: XCTestCase {
         XCTAssertEqual(rootAfter, rootBefore, accuracy: 2, "The first message being read stays where it was")
     }
 
+    func testAnUnchangedReplyRowReceivesActionVisibilityChanges() {
+        struct Actions: View {
+            @Environment(\.revealsSentMessageActions) var revealed
+            var body: some View { Text(verbatim: revealed ? "Actions shown" : "Actions hidden") }
+        }
+
+        let row = PersonalAgentReplyRowHosting()
+        var environment = EnvironmentValues()
+        environment.revealsSentMessageActions = false
+        func show() -> Bool {
+            row.show(.other("reply"), identity: "reply", environment: environment) { AnyView(Actions()) }
+        }
+        XCTAssertTrue(show())
+        let host = WindowlessRender.Host(row.controller.rootView, size: NSSize(width: 360, height: 80))
+        defer { host.close() }
+        host.settle { host.accessibilityElements().contains { $0.description.contains("Actions hidden") } }
+        environment.revealsSentMessageActions = true
+        XCTAssertFalse(show())
+        host.settle { host.accessibilityElements().contains { $0.description.contains("Actions shown") } }
+    }
+
     /// The reply list draws only the messages in view, each in a view of its own: an answer that arrives,
     /// a deletion and the option it chooses draw only the messages they change. A form scrolled out of
     /// view and back shows the words its request keeps, and a field being typed in keeps its control,
