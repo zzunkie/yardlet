@@ -92,6 +92,7 @@ final class MailboxCenter {
     /// Shows these accounts, read through their transports. Accounts no longer listed are forgotten
     /// with everything read from them.
     func setAccounts(_ entries: [(MailAccount, any MailAccountTransport)]) {
+        keepCursors(for: Set(entries.map { $0.0.id }))
         generation += 1
         accounts = entries.map(\.0)
         transports = Dictionary(entries.map { ($0.0.id, $0.1) }, uniquingKeysWith: { $1 })
@@ -108,6 +109,29 @@ final class MailboxCenter {
         for (id, watch) in watches { watch.cancel(); watches[id] = nil }
         if isWatching { for (id, transport) in transports { watches[id] = watch(id, transport) } }
         merge()
+    }
+
+    func forgetAccount(_ accountID: UUID) {
+        pruneCursors { $0 != accountID.uuidString }
+        if transports[accountID] != nil {
+            setAccounts(accounts.compactMap { account in
+                guard account.id != accountID, let transport = transports[account.id] else { return nil }
+                return (account, transport)
+            })
+        }
+    }
+
+    func keepCursors(for accounts: Set<UUID>) {
+        let ids = Set(accounts.map(\.uuidString))
+        pruneCursors { ids.contains($0) }
+    }
+
+    private func pruneCursors(keeping keep: (String) -> Bool) {
+        memoryCursors = memoryCursors.filter { keep($0.key) }
+        guard let saved = defaults?.dictionary(forKey: MailboxPreference.cursorsKey) else { return }
+        let remaining = saved.filter { keep($0.key) }
+        if remaining.isEmpty { defaults?.removeObject(forKey: MailboxPreference.cursorsKey) }
+        else if remaining.count != saved.count { defaults?.set(remaining, forKey: MailboxPreference.cursorsKey) }
     }
 
     func account(_ id: UUID) -> MailAccount? { accounts.first { $0.id == id } }
@@ -415,7 +439,7 @@ final class MailboxCenter {
                         guard !Task.isCancelled else { return }
                         // The cursor moves on only once the inbox was read, so what arrived is told.
                         let read = changes.changed ? await self.reread(id, arrived: changes.arrivedThreadIDs) : true
-                        if read { self.setCursor(changes.cursor, for: id) }
+                        if read, !Task.isCancelled { self.setCursor(changes.cursor, for: id) }
                     } else {
                         let cursor = try await transport.changeCursor()
                         guard !Task.isCancelled else { return }
@@ -590,10 +614,14 @@ final class MailWindowState {
     @ObservationIgnored private var searching: Task<Void, Never>?
     @ObservationIgnored private var sending: Task<Void, Never>?
     @ObservationIgnored private var lastSave: Task<Void, Never>?
-    /// What the message held when it was opened, so one left as it was is not saved as a draft.
-    @ObservationIgnored private var openedContent: [UUID: [String]] = [:]
-    /// The draft each message being written was saved as.
-    @ObservationIgnored private var draftIDs: [UUID: String] = [:]
+    @ObservationIgnored private var saves: [UUID: (accountID: UUID, task: Task<Void, Never>)] = [:]
+    @ObservationIgnored private var sendingAccount: UUID?
+    private struct DraftState {
+        var openedContent: [String]?
+        var draftID: String?
+    }
+
+    @ObservationIgnored private var drafts: [UUID: [UUID: DraftState]] = [:]
 
     /// How long Undo stays after Send.
     @ObservationIgnored var undoWindow: Duration = .seconds(5)
@@ -609,20 +637,24 @@ final class MailWindowState {
     }
 
     private func open(_ started: MailComposition) {
-        openedContent[started.id] = started.content
+        drafts[started.accountID, default: [:]][started.id] = DraftState(openedContent: started.content, draftID: started.draftID)
         composition = started
     }
 
     /// Whether the message holds anything other than what it was opened with.
     func isChanged(_ composition: MailComposition) -> Bool {
-        openedContent[composition.id].map { $0 != composition.content } ?? true
+        drafts[composition.accountID]?[composition.id]?.openedContent.map { $0 != composition.content } ?? true
     }
 
     /// Opens a thread's draft to go on writing it.
     func edit(_ message: MailMessage, in thread: MailThread, center: MailboxCenter) {
         writingFailure = nil
         Task {
-            do { open(try await center.composition(editing: message, in: thread)) }
+            do {
+                let draft = try await center.composition(editing: message, in: thread)
+                guard center.account(draft.accountID) != nil else { return }
+                open(draft)
+            }
             catch { failure = error as? MailFailure ?? MailFailure(kind: .unavailable, message: error.localizedDescription) }
         }
     }
@@ -639,17 +671,20 @@ final class MailWindowState {
     @discardableResult
     private func enqueueSave(_ snapshot: MailComposition, in center: MailboxCenter) -> Task<Void, Never> {
         let previous = lastSave
+        let saveID = UUID()
         let task = Task { [weak self] in
             await previous?.value
             guard let self else { return }
+            defer { self.saves[saveID] = nil }
+            guard !Task.isCancelled else { return }
             var snapshot = snapshot
-            if snapshot.draftID == nil { snapshot.draftID = self.draftIDs[snapshot.id] }
+            if snapshot.draftID == nil { snapshot.draftID = self.drafts[snapshot.accountID]?[snapshot.id]?.draftID }
             self.isSaving = true
-            defer { self.isSaving = false }
+            defer { if !Task.isCancelled { self.isSaving = false } }
             do {
                 let saved = try await center.save(snapshot)
-                self.draftIDs[snapshot.id] = saved.draftID
-                self.openedContent[snapshot.id] = snapshot.content
+                guard !Task.isCancelled else { return }
+                self.drafts[snapshot.accountID, default: [:]][snapshot.id] = DraftState(openedContent: snapshot.content, draftID: saved.draftID)
                 if self.composition?.id == snapshot.id, self.composition?.draftID != saved.draftID {
                     self.composition?.draftID = saved.draftID
                 }
@@ -663,6 +698,7 @@ final class MailWindowState {
                 if self.composition?.id == snapshot.id { self.writingFailure = error.localizedDescription }
             }
         }
+        saves[saveID] = (snapshot.accountID, task)
         lastSave = task
         return task
     }
@@ -682,7 +718,7 @@ final class MailWindowState {
         Task { [weak self] in
             await previous?.value
             var current = current
-            if current.draftID == nil { current.draftID = self?.draftIDs[current.id] }
+            if current.draftID == nil { current.draftID = self?.drafts[current.accountID]?[current.id]?.draftID }
             try? await center.discard(current)
         }
     }
@@ -697,21 +733,24 @@ final class MailWindowState {
         writingFailure = nil
         let wait = undoWindow
         sendsAt = .now.addingTimeInterval(Double(wait.components.seconds))
+        sendingAccount = current.accountID
         sending = Task { [weak self] in
             try? await Task.sleep(for: wait)
             guard let self, !Task.isCancelled, self.sendsAt != nil else { return }
             // From here the message goes: Undo is gone and nothing takes it back.
             self.sendsAt = nil
             self.isSending = true
-            defer { self.isSending = false }
+            defer { if !Task.isCancelled { self.isSending = false } }
             await self.lastSave?.value
+            guard !Task.isCancelled else { return }
             var current = current
-            if current.draftID == nil { current.draftID = self.draftIDs[current.id] }
+            if current.draftID == nil { current.draftID = self.drafts[current.accountID]?[current.id]?.draftID }
             do {
                 // A draft sent as it was saved is not saved over, so a draft an agent wrote in HTML goes as it is.
                 if current.draftID == nil || self.isChanged(current) {
                     let saved = try await center.save(current)
-                    self.draftIDs[current.id] = saved.draftID
+                    guard !Task.isCancelled else { return }
+                    self.drafts[current.accountID, default: [:]][current.id] = DraftState(openedContent: current.content, draftID: saved.draftID)
                     current.draftID = saved.draftID
                     if self.composition?.id == current.id { self.composition?.draftID = saved.draftID }
                 }
@@ -737,7 +776,9 @@ final class MailWindowState {
     func sendDraft(_ message: MailMessage, in thread: MailThread, center: MailboxCenter) {
         Task {
             do {
-                open(try await center.composition(editing: message, in: thread))
+                let draft = try await center.composition(editing: message, in: thread)
+                guard center.account(draft.accountID) != nil else { return }
+                open(draft)
                 send(in: center)
             } catch {
                 failure = error as? MailFailure ?? MailFailure(kind: .unavailable, message: error.localizedDescription)
@@ -780,8 +821,42 @@ final class MailWindowState {
         Task { await center.load(mailbox) }
     }
 
+    func forgetAccounts(keeping kept: Set<UUID>) {
+        if let id = selection?.accountID, !kept.contains(id) {
+            opening?.cancel()
+            opening = nil
+            selection = nil
+            thread = nil
+            failure = nil
+            isOpening = false
+        }
+        if let id = mailbox.accountID, !kept.contains(id) {
+            mailbox = .allInboxes
+            searchText = ""
+            clearSearch()
+        }
+        searchResults = searchResults?.filter { kept.contains($0.id.accountID) }
+        toggledAccounts.formIntersection(kept)
+        foldedLabels.formIntersection(kept)
+        drafts = drafts.filter { kept.contains($0.key) }
+        for save in saves.values where !kept.contains(save.accountID) { save.task.cancel() }
+        if saves.values.allSatisfy({ $0.task.isCancelled }) { isSaving = false }
+        if let id = sendingAccount, !kept.contains(id) {
+            sending?.cancel()
+            sending = nil
+            sendingAccount = nil
+            sendsAt = nil
+            isSending = false
+        }
+        if let id = composition?.accountID, !kept.contains(id) {
+            composition = nil
+            writingFailure = nil
+        }
+    }
+
     /// Forgets all the window read and wrote, as when the mailbox is turned off.
     func reset() {
+        forgetAccounts(keeping: [])
         for task in [opening, searching, sending, lastSave] { task?.cancel() }
         mailbox = .allInboxes
         showsFolders = false
@@ -796,8 +871,6 @@ final class MailWindowState {
         sendsAt = nil
         isSending = false
         writingFailure = nil
-        draftIDs = [:]
-        openedContent = [:]
     }
 
     /// Shows a thread; choosing the one shown reads it again.
@@ -854,7 +927,7 @@ final class MailWindowState {
         searching = Task { [weak self] in
             let found = await center.search(query, accountID: account)
             guard let self, !Task.isCancelled, self.searchText.trimmingCharacters(in: .whitespacesAndNewlines) == query else { return }
-            self.searchResults = found
+            self.searchResults = found.filter { center.account($0.id.accountID) != nil }
             self.isSearching = false
         }
     }

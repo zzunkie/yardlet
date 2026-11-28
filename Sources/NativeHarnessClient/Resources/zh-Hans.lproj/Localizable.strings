@@ -4335,3 +4335,7 @@
 "Cursor Agent can run code and access files in %@. It runs there only once you trust the folder's contents, and remembers your answer for the folder." = "Cursor Agent 可以在 %@ 中运行代码并访问文件。只有在你信任该文件夹的内容后，它才会在其中运行，并会记住你对该文件夹的选择。";
 "Trust this folder" = "信任此文件夹";
 "Don't trust" = "不信任";
+"Turn on 2-Step Verification in your Google Account." = "在 Google 账号中启用两步验证。";
+"Create an app password for Yardlet in Google App Passwords." = "在 Google 应用专用密码页面为 Yardlet 创建密码。";
+"Paste the 16-character app password below. Spaces are ignored." = "在下方粘贴 16 位应用专用密码。空格会自动移除。";
+"An app password connects Mailbox and basic mail_* tools without Google Cloud setup. For full Gmail tools, use the Google connector. Some Workspace organizations disable app passwords." = "使用应用专用密码即可连接邮箱和基本的 mail_* 工具，无需设置 Google Cloud。如需完整的 Gmail 工具，请使用 Google 连接器。部分 Workspace 组织停用了应用专用密码。";

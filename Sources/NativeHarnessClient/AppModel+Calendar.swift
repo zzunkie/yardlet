@@ -25,23 +25,36 @@ extension AppModel {
     func followCalendar(defaults: UserDefaults = .yardlet) {
         let isOn = CalendarPreference.isOn(in: defaults)
         calendar.setEnabled(isOn)
-        guard isOn, let connectorCenter else { return }
+        guard let connectorCenter else { return }
         let entries: [(CalendarAccount, any CalendarAccountTransport)]
-        if calendarFollowsConnectors {
+        if calendarAccountWatch.isObserving {
             entries = connectorCenter.calendarAccounts()
         } else {
-            calendarFollowsConnectors = true
+            calendarAccountWatch.isObserving = true
             nonisolated(unsafe) let defaults = defaults
             entries = withObservationTracking {
-                connectorCenter.calendarAccounts()
+                _ = connectorCenter.cannotReadSavedSettings
+                return connectorCenter.calendarAccounts()
             } onChange: { [weak self] in
                 Task { @MainActor in
-                    self?.calendarFollowsConnectors = false
+                    self?.calendarAccountWatch.isObserving = false
                     self?.followCalendar(defaults: defaults)
                 }
             }
         }
-        guard entries.map(\.0) != calendar.accounts else { return }
+        let ids = Set(entries.map { $0.0.id })
+        let firstSnapshot = calendarAccountWatch.accountIDs == nil
+        if firstSnapshot, entries.isEmpty, connectorCenter.cannotReadSavedSettings { return }
+        if ids != calendarAccountWatch.accountIDs {
+            let removed = (calendarAccountWatch.accountIDs ?? []).subtracting(ids)
+            calendarAccountWatch.accountIDs = ids
+            if !isOn {
+                if firstSnapshot { calendar.setAccounts(entries) }
+                for id in removed { calendar.forgetAccount(id) }
+            }
+        }
+        guard isOn else { return }
+        guard firstSnapshot || entries.map(\.0) != calendar.accounts else { return }
         calendar.setAccounts(entries)
     }
 }

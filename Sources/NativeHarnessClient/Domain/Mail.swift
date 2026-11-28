@@ -143,6 +143,8 @@ struct MailThread: Codable, Hashable, Sendable {
     var messages: [MailMessage]
     /// The thread on the service's own web mail.
     var webURL: URL?
+    /// Gmail's API thread ID when an IMAP server supplies X-GM-THRID.
+    var gmailThreadID: String? = nil
 }
 
 /// One page of a list or a search.

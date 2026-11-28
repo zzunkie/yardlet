@@ -30,26 +30,51 @@ extension AppModel {
         let isOn = MailboxPreference.isOn(in: defaults)
         mailbox.setEnabled(isOn)
         if !isOn { closeMailBrowser() }
-        guard isOn, let connectorCenter else { return }
+        guard let connectorCenter else { return }
         let entries: [(MailAccount, any MailAccountTransport)]
-        if mailboxFollowsConnectors {
+        if mailboxAccountWatch.isObserving {
             entries = connectorCenter.mailAccounts()
         } else {
-            mailboxFollowsConnectors = true
+            mailboxAccountWatch.isObserving = true
             nonisolated(unsafe) let defaults = defaults
             entries = withObservationTracking {
-                connectorCenter.mailAccounts()
+                _ = connectorCenter.cannotReadSavedSettings
+                return connectorCenter.mailAccounts()
             } onChange: { [weak self] in
                 Task { @MainActor in
-                    self?.mailboxFollowsConnectors = false
+                    self?.mailboxAccountWatch.isObserving = false
                     self?.followMailbox(defaults: defaults)
                 }
             }
         }
+        let ids = Set(entries.map { $0.0.id })
+        let firstSnapshot = mailboxAccountWatch.accountIDs == nil
+        if firstSnapshot, entries.isEmpty, connectorCenter.cannotReadSavedSettings { return }
+        if ids != mailboxAccountWatch.accountIDs {
+            let removed = (mailboxAccountWatch.accountIDs ?? []).subtracting(ids)
+            mailboxAccountWatch.accountIDs = ids
+            if !isOn {
+                if firstSnapshot { mailbox.keepCursors(for: ids) }
+                for id in removed { mailbox.forgetAccount(id) }
+            }
+            if !removed.isEmpty {
+                Task { await removeMailNotifications(accounts: removed) }
+            }
+        }
+        guard isOn else { return }
         defer { mailbox.startWatching() }
-        guard entries.map(\.0) != mailbox.accounts else { return }
+        guard firstSnapshot || entries.map(\.0) != mailbox.accounts else { return }
         mailbox.setAccounts(entries)
         Task { await mailbox.refresh() }
+    }
+
+    private func removeMailNotifications(accounts removed: Set<UUID>) async {
+        let delivered = await systemNotificationCenter.deliveredIdentifiers()
+        let prefixes = removed.map { "yardlet-mail-\($0.uuidString)-" }
+        let identifiers = delivered.filter { id in
+            (id == "yardlet-mail-batch" && mailboxAccountWatch.accountIDs?.isEmpty == true) || prefixes.contains(where: id.hasPrefix)
+        }
+        systemNotificationCenter.removeNotifications(identifiers: identifiers)
     }
 
     /// New mail as system notifications, through the same permission as task notifications: each
@@ -57,24 +82,32 @@ extension AppModel {
     /// a window shows the mailbox and Yardlet is the active app, or with Settings › Notifications ›
     /// New mail off.
     func postMailNotifications(_ threads: [MailThreadSummary], defaults: UserDefaults = .yardlet) async {
-        guard MailboxPreference.notifies(in: defaults), let newest = threads.first,
+        guard MailboxPreference.notifies(in: defaults),
               !(mailbox.isShown && applicationAttention?.isActive == true),
               (await systemNotificationCenter.authorization()).isDeliverable else { return }
+        let threads = threads.filter { mailbox.account($0.id.accountID) != nil }
+        guard let newest = threads.first else { return }
         if threads.count > Self.mailNotificationsAtOnce {
             await systemNotificationCenter.post(SystemNotification(
                 title: L10n.format("%lld new messages", threads.count),
                 body: threads.prefix(4).map { MailText.senders($0) }.joined(separator: ", "),
                 identifier: "yardlet-mail-batch", target: SystemNotificationTarget(mailThread: newest.id)))
+            if mailboxAccountWatch.accountIDs?.isEmpty == true {
+                systemNotificationCenter.removeNotifications(identifiers: ["yardlet-mail-batch"])
+            }
             return
         }
         for thread in threads {
-            let account = mailbox.account(thread.id.accountID)
-            let sender = MailText.senders(thread, me: account?.address)
-            let title = mailbox.accounts.count > 1 ? "\(sender) · \(account?.shortName ?? "")" : sender
+            guard let account = mailbox.account(thread.id.accountID) else { continue }
+            let sender = MailText.senders(thread, me: account.address)
+            let title = mailbox.accounts.count > 1 ? "\(sender) · \(account.shortName)" : sender
+            let identifier = "yardlet-mail-\(thread.id.accountID.uuidString)-\(thread.id.threadID)"
             await systemNotificationCenter.post(SystemNotification(
                 title: title, body: MailText.subject(thread.subject) + "\n" + thread.snippet,
-                identifier: "yardlet-mail-\(thread.id.accountID.uuidString)-\(thread.id.threadID)",
-                target: SystemNotificationTarget(mailThread: thread.id)))
+                identifier: identifier, target: SystemNotificationTarget(mailThread: thread.id)))
+            if mailboxAccountWatch.accountIDs?.contains(thread.id.accountID) == false {
+                systemNotificationCenter.removeNotifications(identifiers: [identifier])
+            }
         }
     }
 

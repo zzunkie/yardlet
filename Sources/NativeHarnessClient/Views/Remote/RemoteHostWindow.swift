@@ -270,6 +270,9 @@ struct RemoteHostView: View {
         // The mailbox shown here has been seen; a window leaves the mailbox when the host turns it off.
         .onChange(of: showsMail, initial: true) { _, shown in model.mailbox.setVisible(shown, window: shell.id) }
         .onDisappear { model.mailbox.setVisible(false, window: shell.id) }
+        .onChange(of: model.mailbox.accounts) { _, accounts in
+            shell.mailWindow.forgetAccounts(keeping: Set(accounts.map(\.id)))
+        }
         .onChange(of: model.mailbox.isEnabled) { _, enabled in
             guard !enabled else { return }
             shell.mailWindow.reset()

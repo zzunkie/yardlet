@@ -120,7 +120,16 @@ final class MacAgentToolService: NativeSurfaceResource {
         Self.preparation = .made
         connectors = ConnectorCenter(environment: connectorEnvironment, saved: saved)
         broker.connectors = connectors
-        connectors.onToolsChanged = { [weak broker = self.broker] in broker?.toolsMayHaveChanged() }
+        connectors.onToolsChanged = { [weak broker = self.broker, weak connectors] in
+            if let connectors {
+                let services = connectors.connectors.filter { $0.status == .connected }.map { record in
+                    if let service = record.localService, service.sharesToolsAcrossAccounts { return service.name }
+                    return record.name
+                }
+                broker?.keepConnectorReadApprovals(for: Set(services))
+            }
+            broker?.toolsMayHaveChanged()
+        }
         vault = MacVault.makeCenter()
         broker.vault = vault
         vault.onToolsChanged = { [weak broker = self.broker] in broker?.toolsMayHaveChanged() }

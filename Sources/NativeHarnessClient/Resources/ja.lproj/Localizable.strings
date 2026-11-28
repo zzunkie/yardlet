@@ -4335,3 +4335,7 @@
 "Cursor Agent can run code and access files in %@. It runs there only once you trust the folder's contents, and remembers your answer for the folder." = "Cursor Agent は %@ でコードを実行し、ファイルにアクセスできます。フォルダの内容を信頼した場合にのみそこで実行され、このフォルダへの回答は記憶されます。";
 "Trust this folder" = "このフォルダを信頼";
 "Don't trust" = "信頼しない";
+"Turn on 2-Step Verification in your Google Account." = "Google アカウントで 2 段階認証を有効にします。";
+"Create an app password for Yardlet in Google App Passwords." = "Google のアプリ パスワードで Yardlet 用のパスワードを作成します。";
+"Paste the 16-character app password below. Spaces are ignored." = "16 文字のアプリ パスワードを下に貼り付けます。スペースは無視されます。";
+"An app password connects Mailbox and basic mail_* tools without Google Cloud setup. For full Gmail tools, use the Google connector. Some Workspace organizations disable app passwords." = "アプリ パスワードを使うと、Google Cloud の設定なしでメールボックスと基本の mail_* ツールに接続できます。Gmail の全ツールには Google コネクタを使います。Workspace の組織によってはアプリ パスワードを利用できません。";

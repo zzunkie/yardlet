@@ -311,7 +311,9 @@ actor IMAPMailSession {
         let ref = try IMAPMessageRef.parse(threadID)
         return try await run { client in
             try await self.open(client, ref)
-            guard let head = try await client.fetch(uids: [ref.uid], items: "UID FLAGS INTERNALDATE RFC822.SIZE BODYSTRUCTURE").first else {
+            var items = "UID FLAGS INTERNALDATE RFC822.SIZE BODYSTRUCTURE"
+            if await client.capabilities.contains("X-GM-EXT-1") { items += " X-GM-THRID" }
+            guard let head = try await client.fetch(uids: [ref.uid], items: items).first else {
                 throw Self.gone
             }
             let flags = Set(head.flags.map { $0.lowercased() })
@@ -327,7 +329,8 @@ actor IMAPMailSession {
                 id: MailThreadKey(accountID: self.id, threadID: threadID), subject: message.subject, senders: [message.from],
                 snippet: message.snippet, date: date, messageCount: 1, isUnread: message.isUnread,
                 isStarred: flags.contains("\\flagged"), hasAttachments: !message.attachments.isEmpty, hasDraft: message.isDraft)
-            return MailThread(summary: summary, messages: [message], webURL: nil)
+            return MailThread(summary: summary, messages: [message], webURL: nil,
+                              gmailThreadID: head.gmailThreadID.map { String($0, radix: 16) })
         }
     }
 

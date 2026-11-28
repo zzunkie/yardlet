@@ -368,7 +368,7 @@ final class ConnectorTests: XCTestCase {
         XCTAssertTrue(afterwards?.text.contains("needs the user to sign in again") == true, afterwards?.text ?? "")
         center.disconnect(record.id)
         let disconnected = await center.callConnectorTool(named: "example_whoami", arguments: .object([:]), for: ConnectorToolContext())
-        XCTAssertTrue(disconnected?.text.contains("is not connected in Yardlet") == true)
+        XCTAssertNil(disconnected, "Disconnecting forgets the remote tool list")
         let afterDisconnect = await center.connectorTools(for: ConnectorToolContext())
         XCTAssertTrue(afterDisconnect.isEmpty, "A connector the user disconnected leaves the list")
     }
@@ -751,8 +751,15 @@ final class ConnectorTests: XCTestCase {
         let record = try await center.add(name: "Example", serverURL: FakeConnectorServer.mcpURL)
         center.connect(record.id)
         await center.waitForConnection(record.id)
+        let kept = UUID()
+        for id in [kept, record.id] {
+            center.appCalls.record(.null, connector: id, task: UUID(), tool: "example", arguments: nil)
+        }
         center.disconnect(record.id)
         XCTAssertEqual(center.record(record.id)?.status, .notConnected)
+        XCTAssertEqual(center.record(record.id)?.tools, [])
+        XCTAssertNil(center.record(record.id)?.toolsUpdatedAt)
+        XCTAssertEqual(center.appCalls.entries.map(\.connector), [kept])
         XCTAssertFalse(center.offersTools)
         // Connecting right away signs in again rather than finding the credential being deleted.
         let signInsBefore = server.requests.filter { $0.url?.path() == "/register" }.count
@@ -766,7 +773,9 @@ final class ConnectorTests: XCTestCase {
         center.connect(record.id)
         await center.waitForConnection(record.id)
         XCTAssertNotNil(try credentials.load(record.id))
+        center.appCalls.record(.null, connector: record.id, task: UUID(), tool: "example", arguments: nil)
         center.remove(record.id)
+        XCTAssertEqual(center.appCalls.entries.map(\.connector), [kept])
         await center.waitForPendingDeletions()
         XCTAssertNil(try credentials.load(record.id))
         XCTAssertTrue(center.connectors.isEmpty)

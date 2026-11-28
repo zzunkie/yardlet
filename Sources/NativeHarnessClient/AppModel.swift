@@ -1,6 +1,12 @@
 import Foundation
 import Observation
 
+/// The connected accounts a feature last saw, including while its screen is disabled.
+struct ConnectorAccountWatch {
+    var isObserving = false
+    var accountIDs: Set<UUID>?
+}
+
 @MainActor
 @Observable
 final class AppModel {
@@ -400,12 +406,12 @@ final class AppModel {
     @ObservationIgnored var tokenUsagePreferenceObserver: (any NSObjectProtocol)?
     @ObservationIgnored var mailboxPreferenceObserver: (any NSObjectProtocol)?
     /// Whether a change to the connectors will have the mailbox follow them again.
-    @ObservationIgnored var mailboxFollowsConnectors = false
+    @ObservationIgnored var mailboxAccountWatch = ConnectorAccountWatch()
     /// The app's one calendar, while Settings › Calendar has it on.
     @ObservationIgnored let calendar = CalendarCenter()
     @ObservationIgnored var calendarPreferenceObserver: (any NSObjectProtocol)?
     /// Whether a change to the connectors will have the calendar follow them again.
-    @ObservationIgnored var calendarFollowsConnectors = false
+    @ObservationIgnored var calendarAccountWatch = ConnectorAccountWatch()
     /// The main windows that show Tasks rather than another sidebar section. With none, no task
     /// counts as seen, so its updates stay unread and are announced.
     private(set) var taskWindowIDs = Set<UUID>()

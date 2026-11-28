@@ -573,7 +573,7 @@ struct MainWindow: View {
                     discardDraft: { thread, message in mailWindow.discardDraft(message, in: thread, center: model.mailbox) },
                     askAgent: { thread in
                         guard let account = model.mailbox.account(thread.summary.id.accountID) else { return }
-                        newTaskDraft.takeReference(MailText.handoff(thread, account: account))
+                        newTaskDraft.takeReference(MailText.handoff(thread, account: account, accounts: model.mailbox.accounts))
                         showNewTask()
                     },
                     openOriginal: { url in model.openMailLink(url, elsewhere: OutsideBrowser.open) },
@@ -2365,6 +2365,9 @@ struct MainWindow: View {
             if sidebarSection == .calendar { selectSection(.tasks) }
         }
         // A window leaves the mailbox when it is turned off.
+        .onChange(of: model.mailbox.accounts) { _, accounts in
+            mailWindow.forgetAccounts(keeping: Set(accounts.map(\.id)))
+        }
         .onChange(of: model.mailbox.isEnabled) { _, enabled in
             guard !enabled else { return }
             mailWindow.reset()
