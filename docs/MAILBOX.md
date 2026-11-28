@@ -17,16 +17,11 @@ service: the mailbox reads it when it is shown and keeps it in memory only.
 
 ## Accounts
 
-- Every Gmail, Outlook Mail and Mail (IMAP) connector that is connected is an account of the mailbox
-  (`ConnectorCenter.mailAccounts`). The mailbox uses the connector's own sign-in and session
-  (`OAuthAPISession`), so a token is refreshed one at a time for both and never leaves Yardlet. It asks for
-  nothing beyond the connector's permissions: Gmail's `gmail.modify` (docs/CONNECTORS.md, "Google") and
-  Graph's `Mail.ReadWrite` and `Mail.Send` (docs/CONNECTORS.md, "Microsoft 365").
-- Each service is read the way it supports best: Gmail through the Gmail API, Microsoft 365 and
-  Outlook.com through Microsoft Graph, and every other service over IMAP and SMTP with an app password
-  (see "Mail accounts over IMAP"). The sections below say where they differ.
-- Connecting, disconnecting or removing a Gmail account in Settings › Connectors adds it to or removes
-  it from the mailbox at once; what was read from a removed account is forgotten.
+- For Gmail, choose Settings › Connectors › Add connector › **Mail (IMAP)** and enter a Google App Password.
+  An account with an existing custom, non-agentic Google OAuth grant for the mailbox can also use the Gmail API.
+  Signing in for agent tools alone does not connect the native mailbox.
+- Outlook Mail uses Microsoft Graph. Mail (IMAP) accounts use IMAP for reading and SMTP for sending.
+  When an account leaves the mailbox, Yardlet clears its cached mail and sync cursor.
 
 ## What is kept
 
@@ -81,7 +76,7 @@ service: the mailbox reads it when it is shown and keeps it in memory only.
 
 ## Mail accounts over IMAP
 
-Services without an API Yardlet reads (Naver, Daum, Kakao, NAVER WORKS, iCloud, Yahoo, AOL, Zoho,
+IMAP accounts (Gmail, Naver, Daum, Kakao, NAVER WORKS, iCloud, Yahoo, AOL, Zoho,
 Fastmail, Proton Mail through its Bridge, or any IMAP server) are added in Settings › Connectors › Add
 connector › **Mail (IMAP)**, as Apple Mail and Thunderbird add them.
 
@@ -89,12 +84,13 @@ connector › **Mail (IMAP)**, as Apple Mail and Thunderbird add them.
   (iCloud's is the part before the `@`) and what the person does first on the service's website, each step
   with a link: turn on two-step verification, make an app password, and turn on IMAP where the service has
   a switch for it (Naver, Daum, Kakao, Zoho). **Other IMAP server** takes the servers, ports, TLS or
-  STARTTLS and the user name by hand. A Gmail or Outlook.com address is pointed to its own connector.
+  STARTTLS and the user name by hand. Outlook.com, Hotmail, Live and MSN addresses use Microsoft 365.
   **Connect** signs in to the IMAP server and to the SMTP server once and out again, reading and sending
   nothing; only then is the account added. A refused sign-in says to check the app password and the steps.
 
   | Service | IMAP | SMTP |
   |---|---|---|
+  | Gmail | `imap.gmail.com:993` | `smtp.gmail.com:465` |
   | Naver Mail | `imap.naver.com:993` | `smtp.naver.com:465` |
   | Daum Mail | `imap.daum.net:993` | `smtp.daum.net:465` |
   | Kakao Mail | `imap.kakao.com:993` | `smtp.kakao.com:465` |
@@ -150,7 +146,7 @@ connector › **Mail (IMAP)**, as Apple Mail and Thunderbird add them.
   account again and stops the account's watch; adding the same address again replaces the password.
 - **Agents** read and draft through the connector's tools (`mail_search_messages`, `mail_get_message`,
   `mail_list_folders`, `mail_create_draft`, `mail_send_draft`), named like Outlook's; sending asks the
-  person each time through the harness's approval. **Ask an agent** names the message and `get_message`.
+  person each time through the harness's approval. See "Ask an agent" for the tool used to read the message.
 
 ## Reading
 
@@ -230,13 +226,14 @@ connector › **Mail (IMAP)**, as Apple Mail and Thunderbird add them.
   word is marked while no window has shown what came.
 - Clicking a notification brings Yardlet forward and shows the thread in All inboxes.
 
-## Agents
+## Ask an agent
 
-- **Ask an agent** starts a chat whose composer names the thread: its subject, sender, account, thread ID
-  and the connector tool that reads it (`gmail_get_thread`, which takes the account's address). The message's words are not put in the
-  prompt; the agent reads them with the account's Gmail connector, and the person writes what to do.
-- Agents read and draft through the Gmail connector's tools as before (docs/CONNECTORS.md, "Google");
-  the mailbox shows the drafts they make.
+**Ask an agent** starts a chat with the subject, sender, account, identifier and suggested reader in the
+composer. The message body stays out of the prompt. For a Gmail API mailbox, the reader is
+`gmail_get_thread`. For Gmail over IMAP, Yardlet uses the same reader when Gmail supplies its thread ID
+(`X-GM-THRID`) and the mailbox account list includes a Gmail connector with the same address. It converts
+the decimal IMAP thread ID to Gmail's hexadecimal ID. Otherwise, for an IMAP-only account, the handoff
+names `mail_get_message` and the latest non-draft message. Outlook uses its own message reader.
 
 ## From another Mac
 
