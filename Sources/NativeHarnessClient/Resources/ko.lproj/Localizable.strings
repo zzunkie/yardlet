@@ -1452,6 +1452,10 @@
 "The saved image attachment is unavailable." = "저장된 이미지 첨부를 사용할 수 없습니다.";
 "This edited attachment cannot be sent." = "편집한 첨부를 보낼 수 없습니다.";
 "Claude Code did not report plan limits for this login." = "Claude Code가 이 로그인의 요금제 한도를 알려 주지 않았습니다.";
+"Sign-in expires in %lld days" = "%lld일 후 로그인 만료";
+"Sign-in expires tomorrow" = "내일 로그인 만료";
+"Sign-in expires today" = "오늘 로그인 만료";
+"Sign-in expired" = "로그인 만료됨";
 "This account is not signed in. Sign in from Accounts, then choose it again." = "이 계정은 로그인되어 있지 않습니다. 계정에서 로그인한 뒤 다시 선택하세요.";
 "No other account shares this task's conversation history." = "이 작업의 대화 기록을 공유하는 다른 계정이 없습니다.";
 "Install Update…" = "업데이트 설치…";

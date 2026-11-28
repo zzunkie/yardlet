@@ -28,7 +28,7 @@ import XCTest
             "Fable · " + HarnessAccountBroker.usageWindowLabel(minutes: 10_080, fallback: "")
         ], "The newer rows win and an unknown window is not shown as a plan limit")
         XCTAssertEqual(usage.map(\.usedFraction), [0.02, 0.95, 0.03])
-        XCTAssertEqual(usage[0].resetsAt, Date(timeIntervalSince1970: 1_791_309_600))
+        XCTAssertEqual(try XCTUnwrap(usage[0].resetsAt).timeIntervalSince1970, 1_791_309_600.123456, accuracy: 0.001)
         XCTAssertEqual(usage[1].resetsAt, Date(timeIntervalSince1970: 1_791_781_200))
         XCTAssertNil(usage[2].resetsAt)
         XCTAssertTrue(usage.allSatisfy { $0.evidence == .exactQuota })
@@ -55,9 +55,10 @@ import XCTest
         echo '{"type":"control_response","response":{"subtype":"success","request_id":"usage","response":{"rate_limits_available":true,"rate_limits":{"seven_day":{"utilization":25}}}}}'
         sleep 30
         """)
-        let usage = try await ClaudeUsageProbe.read(executableURL: cli, environment: [
+        let reading = await ClaudeUsageProbe.read(executableURL: cli, environment: [
             "PROBE_RECORD": record.path, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"])
-        XCTAssertEqual(usage?.map(\.usedFraction), [0.25])
+        guard case let .limits(usage) = reading else { return XCTFail("Expected subscription limits") }
+        XCTAssertEqual(usage.map(\.usedFraction), [0.25])
         let lines = try String(contentsOf: record, encoding: .utf8).split(separator: "\n").map(String.init)
         let fields = lines[0].split(separator: "|", omittingEmptySubsequences: false).map(String.init)
         XCTAssertTrue(fields[0].contains("Yardlet-ClaudeUsage-"))

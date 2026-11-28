@@ -435,9 +435,17 @@ final class ProviderConnectionStore {
         let shown: HarnessAccountSnapshot
         switch snapshot.state {
         case .signedIn, .signedOut:
-            cache.remember(snapshot, key: key)
-            readingStatus[key] = .current
-            shown = snapshot
+            let usageFailed = snapshot.state == .signedIn && snapshot.usageProbeFailed == true
+            if usageFailed,
+               let current, current.state == .signedIn, current.accountLabel == snapshot.accountLabel,
+               current.accountOrganization == snapshot.accountOrganization,
+               current.usage.contains(where: { $0.evidence == .exactQuota }) {
+                shown = snapshot.replacingUsage(current.usage, checkedAt: current.checkedAt)
+            } else {
+                shown = snapshot
+            }
+            readingStatus[key] = usageFailed ? .checkFailed : .current
+            cache.remember(shown, key: key)
         case .unknown:
             if let current, current.state == .signedIn {
                 readingStatus[key] = .checkFailed

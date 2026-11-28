@@ -1516,6 +1516,10 @@
 "The saved image attachment is unavailable." = "The saved image attachment is unavailable.";
 "This edited attachment cannot be sent." = "This edited attachment cannot be sent.";
 "Claude Code did not report plan limits for this login." = "Claude Code did not report plan limits for this login.";
+"Sign-in expires in %lld days" = "Sign-in expires in %lld days";
+"Sign-in expires tomorrow" = "Sign-in expires tomorrow";
+"Sign-in expires today" = "Sign-in expires today";
+"Sign-in expired" = "Sign-in expired";
 "This account is not signed in. Sign in from Accounts, then choose it again." = "This account is not signed in. Sign in from Accounts, then choose it again.";
 "No other account shares this task's conversation history." = "No other account shares this task's conversation history.";
 "Install Update…" = "Install Update…";

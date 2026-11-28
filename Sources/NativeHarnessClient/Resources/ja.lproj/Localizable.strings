@@ -1452,6 +1452,10 @@
 "The saved image attachment is unavailable." = "保存された画像添付ファイルは利用できません。";
 "This edited attachment cannot be sent." = "この編集済みの添付ファイルは送信できません。";
 "Claude Code did not report plan limits for this login." = "Claude Code からこのログインのプラン上限が報告されませんでした。";
+"Sign-in expires in %lld days" = "ログインは%lld日後に期限切れになります";
+"Sign-in expires tomorrow" = "ログインは明日期限切れになります";
+"Sign-in expires today" = "ログインは今日期限切れになります";
+"Sign-in expired" = "ログインの有効期限が切れました";
 "This account is not signed in. Sign in from Accounts, then choose it again." = "このアカウントはサインインしていません。「アカウント」からサインインしてから、もう一度選択してください。";
 "No other account shares this task's conversation history." = "このタスクの会話履歴を共有している他のアカウントはありません。";
 "Install Update…" = "アップデートをインストール…";

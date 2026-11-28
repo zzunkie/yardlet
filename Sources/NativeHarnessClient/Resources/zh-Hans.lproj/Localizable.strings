@@ -1452,6 +1452,10 @@
 "The saved image attachment is unavailable." = "已保存的图片附件不可用。";
 "This edited attachment cannot be sent." = "无法发送此已编辑的附件。";
 "Claude Code did not report plan limits for this login." = "Claude Code 未报告此登录账户的套餐限额。";
+"Sign-in expires in %lld days" = "登录将在 %lld 天后到期";
+"Sign-in expires tomorrow" = "登录将于明天到期";
+"Sign-in expires today" = "登录将于今天到期";
+"Sign-in expired" = "登录已过期";
 "This account is not signed in. Sign in from Accounts, then choose it again." = "此账户尚未登录。请先在“账户”中登录，然后再重新选择。";
 "No other account shares this task's conversation history." = "没有其他账户共享此任务的对话历史记录。";
 "Install Update…" = "安装更新…";

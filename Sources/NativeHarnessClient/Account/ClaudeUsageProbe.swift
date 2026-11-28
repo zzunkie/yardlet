@@ -19,14 +19,20 @@ enum ClaudeUsageProbe {
         }
     }
 
+    enum Reading: Sendable {
+        case limits([AccountUsageMetric])
+        case notAvailable
+        case failed
+    }
+
     static func read(
         executableURL: URL,
         environment: [String: String],
         timeout: Duration = .seconds(20),
         exitGrace: Duration = .seconds(20)
-    ) async throws -> [AccountUsageMetric]? {
+    ) async -> Reading {
         await LoginShellPath.ready()
-        return try await Task.detached(priority: .utility) {
+        let probe = Task.detached(priority: .utility) { () throws -> Reading in
             // An empty private folder keeps the probe out of every project's settings and history.
             let folder = FileManager.default.temporaryDirectory
                 .appending(path: "Yardlet-ClaudeUsage-\(UUID().uuidString)", directoryHint: .isDirectory)
@@ -57,7 +63,6 @@ enum ClaudeUsageProbe {
             // login for everything that shares it. So the CLI is never stopped first: the end of its
             // input ends it, once it has saved what it is saving, and only one that stays past
             // `exitGrace` is stopped.
-            let started = ContinuousClock.now
             let timeoutTask = Task {
                 do { try await Task.sleep(for: timeout) } catch { return }
                 try? input.fileHandleForWriting.close()
@@ -87,13 +92,15 @@ enum ClaudeUsageProbe {
                     guard let value = try? JSONDecoder().decode(JSONValue.self, from: Data(line)),
                           value["type"]?.stringValue == "control_response",
                           value["response"]?["request_id"]?.stringValue == "usage" else { continue }
-                    guard value["response"]?["subtype"]?.stringValue == "success" else { return nil }
-                    return usage(from: value["response"]?["response"])
+                    guard value["response"]?["subtype"]?.stringValue == "success" else { return .failed }
+                    let payload = value["response"]?["response"]
+                    if payload?["rate_limits_available"]?.boolValue == false { return .notAvailable }
+                    return usage(from: payload).map(Reading.limits) ?? .failed
                 }
             }
-            if ContinuousClock.now - started >= timeout { throw AccountCommandError.timedOut }
-            return nil
-        }.value
+            return .failed
+        }
+        return (try? await probe.value) ?? .failed
     }
 
     /// Projects the CLI's `limits` rows, or its older `five_hour`/`seven_day` objects when the
@@ -185,9 +192,8 @@ enum ClaudeUsageProbe {
         }
     }
 
-    /// The CLI writes microsecond timestamps, which the ISO 8601 formatter does not accept.
     static func date(_ value: String) -> Date? {
-        let trimmed = value.replacingOccurrences(of: #"\.\d+"#, with: "", options: .regularExpression)
-        return ISO8601DateFormatter().date(from: trimmed)
+        (try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(value))
+            ?? (try? Date.ISO8601FormatStyle().parse(value))
     }
 }

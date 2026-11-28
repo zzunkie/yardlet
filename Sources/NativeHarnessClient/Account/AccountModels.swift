@@ -231,6 +231,9 @@ struct HarnessAccountSnapshot: Identifiable, Codable, Equatable, Sendable {
     /// A display-ready plan or subscription line the runtime reported. Optional so
     /// older stored snapshots keep decoding unchanged.
     let accountPlan: String?
+    let loginExpiresAt: Date?
+    /// A failed usage lookup can still leave a verified login. Older readings omit this field.
+    let usageProbeFailed: Bool?
     let detail: String
     let credentialOwner: String
     let checkedAt: Date
@@ -248,6 +251,8 @@ struct HarnessAccountSnapshot: Identifiable, Codable, Equatable, Sendable {
         accountLabel: String?,
         accountOrganization: String? = nil,
         accountPlan: String? = nil,
+        loginExpiresAt: Date? = nil,
+        usageProbeFailed: Bool? = nil,
         detail: String,
         credentialOwner: String,
         checkedAt: Date,
@@ -263,6 +268,8 @@ struct HarnessAccountSnapshot: Identifiable, Codable, Equatable, Sendable {
         self.accountLabel = accountLabel
         self.accountOrganization = accountOrganization
         self.accountPlan = accountPlan
+        self.loginExpiresAt = loginExpiresAt
+        self.usageProbeFailed = usageProbeFailed
         self.detail = detail
         self.credentialOwner = credentialOwner
         self.checkedAt = checkedAt
@@ -273,12 +280,26 @@ struct HarnessAccountSnapshot: Identifiable, Codable, Equatable, Sendable {
     }
 
     /// The same reading with other usage rows, as when a session reported its limits between
-    /// checks. When the account was last checked stays as it was.
-    func replacingUsage(_ usage: [AccountUsageMetric]) -> HarnessAccountSnapshot {
+    /// checks. Retaining older quota rows also retains the time they were last measured.
+    func replacingUsage(_ usage: [AccountUsageMetric], checkedAt: Date? = nil) -> HarnessAccountSnapshot {
         HarnessAccountSnapshot(id: id, harness: harness, providerID: providerID, state: state,
             accountLabel: accountLabel, accountOrganization: accountOrganization, accountPlan: accountPlan,
-            detail: detail, credentialOwner: credentialOwner, checkedAt: checkedAt, usage: usage,
+            loginExpiresAt: loginExpiresAt, usageProbeFailed: usageProbeFailed,
+            detail: detail, credentialOwner: credentialOwner, checkedAt: checkedAt ?? self.checkedAt, usage: usage,
             usageResets: usageResets, canLogin: canLogin, canLogout: canLogout)
+    }
+
+    func expiryWarning(now: Date = Date(), calendar: Calendar = .current) -> String? {
+        guard harness == .claudeCode, state == .signedIn, let loginExpiresAt,
+              loginExpiresAt.timeIntervalSince(now) <= 10 * 86_400 else { return nil }
+        guard loginExpiresAt > now else { return L10n.string("Sign-in expired") }
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: now),
+                                           to: calendar.startOfDay(for: loginExpiresAt)).day ?? 0
+        switch days {
+        case 0: return L10n.string("Sign-in expires today")
+        case 1: return L10n.string("Sign-in expires tomorrow")
+        default: return L10n.format("Sign-in expires in %lld days", Int64(min(days, 10)))
+        }
     }
 
     static func unavailable(for descriptor: HarnessDescriptor) -> HarnessAccountSnapshot {

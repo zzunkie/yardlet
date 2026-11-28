@@ -80,7 +80,8 @@ import XCTest
             let reading = try claude("owner@example.test", short: short, weekly: 40, at: now)
             store.publish(HarnessAccountSnapshot(id: id, harness: .claudeCode, providerID: nil, state: .signedIn,
                 accountLabel: "owner@example.test", accountOrganization: organization,
-                accountPlan: L10n.format("Claude %@ plan", id == "team" ? "Team" : "Max"), detail: "", credentialOwner: "",
+                accountPlan: L10n.format("Claude %@ plan", id == "team" ? "Team" : "Max"),
+                loginExpiresAt: id == "team" ? now.addingTimeInterval(2 * 86_400) : nil, detail: "", credentialOwner: "",
                 checkedAt: now, usage: reading.usage, canLogin: false, canLogout: true), for: connection)
         }
         await store.findUnsavedAccountHomes()
