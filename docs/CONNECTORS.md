@@ -611,12 +611,13 @@ it.
   - Your connectors: connected first, then in progress, needs sign-in and error (with a red reason line). The state is a
     dot and one word (`ConnectorSettingsState`), and there is one action button (Reconnect, Connect, Set up…, Try again
     or Cancel). A line under the list says when changes reach tasks (the "Tool lists of running tasks" section).
-  - The row's `…`: Reload tools, Reconnect, Disconnect and Remove…, which asks first, naming the connector and its
+  - The row's `…` includes connection actions and Remove…, which asks first, naming the connector and its
     account, because it signs out (unless another service of the same account still uses the sign-in). Connecting with
     an access token or with your own OAuth client is there only when the service accepts it (the directory's token and
     client services, or servers outside the directory). For Google services, "Google accounts and services…" opens
     the Google page instead of Disconnect. For App Store Connect, "App Store Connect keys…" opens the keys page, and for
-    the three Mac services, "Open Privacy & Security…" opens that pane of System Settings. Xcode also offers Reload tools.
+    the three Mac services, "Open Privacy & Security…" opens that pane of System Settings. The menu offers **Reload tools** for connected remote MCP servers, program connectors and Xcode.
+    Google, Microsoft 365, Mail (IMAP) and the other Apple connector rows omit this item.
   - A connected connector keeps its place while it signs in again or reloads its tools. If that attempt fails, it stays
     "Connected", and the reason is one gray line (`ConnectorSettingsState.note`, with a help tooltip when it does not
     fit). The Codex app and the Claude app also leave the row as it is in this case. The account rows on the Google page
@@ -720,7 +721,7 @@ What the person does (per service):
 
 ## 9. Google
 
-### Connectors that run in Yardlet
+### Google services and endpoints
 
 | Connector | Tools | Where a call goes from your Mac |
 |---|---:|---|
@@ -754,7 +755,7 @@ Yardlet keeps the agent and native screen grants separately. Each service has it
 Accounts share the service's tool names. The `account` argument selects the address. Gmail tools request
 `gmail.modify` and `gmail.settings.basic`. Calendar uses the three calendar scopes above. Drive requests
 `drive`, `documents`, `spreadsheets` and `presentations` to read and edit files the account can access.
-Analytics uses `analytics.readonly` and Ads uses `adwords` for reporting.
+Analytics uses `analytics.readonly` and Ads uses `adwords` for reporting. Both request `userinfo.email` to identify the account.
 
 ### Tools
 
@@ -811,8 +812,8 @@ own retention terms apply to results it receives.
 
 ## 10. Apple
 
-App Store Connect, the Mac's calendars, reminders and contacts, and Xcode are not remote MCP servers either, but servers
-that Yardlet runs inside the app (`appStoreConnect`, `appleCalendar`, `appleReminders`, `appleContacts` and `xcode` of
+Yardlet runs the connectors for App Store Connect, the Mac's calendars, reminders and contacts, and Xcode
+inside the app (`appStoreConnect`, `appleCalendar`, `appleReminders`, `appleContacts` and `xcode` of
 `LocalConnectorService`). Like Google, they go into the tasks of every harness and account through the one `yardlet` MCP
 server, and the per-task switch and tool row labels work as for other connectors.
 
@@ -1132,7 +1133,7 @@ registered OAuth app can offer a sign-in button. Yardlet signs in with the devic
 | `Sources/NativeHarnessClient/Connectors/GoogleOAuth.swift` | Google endpoints, the app in the build (`BuiltInApp`), the Keychain item ID of the Google app, authorization parameters, scope checks | engine |
 | `Sources/NativeHarnessClient/Connectors/OAuthAPISession.swift` | One account's bearer token for a REST API Yardlet calls itself (Google's, Microsoft Graph): refresh a minute before expiry and once after a 401, one at a time | engine |
 | `Sources/NativeHarnessClient/Connectors/ConnectorToolSupport.swift` | Argument reading (`ConnectorToolArguments`) and schema pieces (`ConnectorToolSchema`) shared by Yardlet's own servers | engine |
-| `GoogleWorkspaceEndpoint.swift`, `GoogleWorkspaceMCPClient.swift`, `GoogleWorkspaceMCPBridge.swift`, `GoogleWorkspaceForm.swift` | Workspace discovery, calls, tool arguments and approval cards | engine |
+| `Sources/NativeHarnessClient/Connectors/GoogleWorkspaceEndpoint.swift`, `GoogleWorkspaceMCPClient.swift`, `GoogleWorkspaceMCPBridge.swift`, `GoogleWorkspaceForm.swift`, `GoogleAccountCredentials.swift`, `GoogleWorkspaceMCPError.swift` | Workspace discovery, calls, tool arguments, approval cards, account grants and error messages | engine |
 | `Sources/NativeHarnessClient/Connectors/GoogleAnalyticsToolCatalog.swift`, `GoogleAnalyticsToolRunner.swift`, `GoogleAdsToolCatalog.swift`, `GoogleAdsToolRunner.swift` | Analytics and Ads tools and scopes; Admin, Data and Google Ads API requests, report rows, the `SELECT` check | engine |
 | `Sources/NativeHarnessClient/Connectors/MicrosoftOAuth.swift`, `GraphAPI.swift` | Microsoft's endpoints per tenant, the app in the build, the person's app, permissions and grant checks, sign-in errors; the Graph client (headers, page links only into Graph, uploads) and shared shapes (`GraphShape`) | engine |
 | `Sources/NativeHarnessClient/Connectors/OutlookMailToolCatalog.swift`, `OutlookMailToolRunner.swift`, `OutlookCalendarToolCatalog.swift`, `OutlookCalendarToolRunner.swift`, `OutlookCalendarTransport.swift`, `OneDriveToolCatalog.swift`, `OneDriveToolRunner.swift`, `TeamsToolCatalog.swift`, `TeamsToolRunner.swift` | The Microsoft 365 tools, permissions and tools that ask; Graph requests and answers | engine |
@@ -1145,6 +1146,7 @@ registered OAuth app can offer a sign-in button. Yardlet signs in with the devic
 | `Sources/NativeHarnessClient/Connectors/ConnectorIcons.swift` | `MCPServerIcon` (`serverInfo.icons`), icon source order (`ConnectorIconSources`), own-site check (`ConnectorIconSite`), directory icon addresses | engine |
 | `Sources/NativeHarnessClient/Connectors/MCPAppViews.swift`, `MCPAppBridge.swift`, `ConnectorViewHost.swift` | MCP Apps: a tool's view and who may call it (`MCPAppTool`), the checked view (`MCPAppView`) and its policy (`MCPAppCSP`), the kept results (`ConnectorAppCalls`), a row's view (`ConversationConnectorView`), the JSON-RPC a view speaks (`MCPAppBridge`, `MCPAppHostContext`), one task's views (`ConnectorViewHost`) | engine |
 | `Sources/NativeHarnessClient/AgentTools/AgentToolBroker.swift` | `tools/list` and the connector call path, per-task scope, injection conditions, `tools/watch` | engine |
+| `Sources/NativeHarnessClient/AgentTools/LocalConnectorApproval.swift`, `MicrosoftToolApproval.swift`, `AppleToolApproval.swift`, `MailDraftApproval.swift` | Approval cards for local connector actions, including Microsoft and Apple tools and draft previews for Outlook and IMAP | engine |
 | `Sources/NativeHarnessClient/AgentTools/AgentToolInjection.swift` | Injection documents, the `deniedMcpServers` setting, `ClaudeAIConnectorPreference` | engine |
 | `Sources/YardletAgentTools/MCPServer.swift` | `listChanged: true`, the list the client got (`MCPToolListing`), watching the list and `notifications/tools/list_changed` (`watchToolList`) | engine |
 | `Sources/NativeHarnessClient/Adapters/Claude/ClaudeProcessTransport.swift` | `ENABLE_CLAUDEAI_MCP_SERVERS=false` | engine |
@@ -1153,7 +1155,7 @@ registered OAuth app can offer a sign-in button. Yardlet signs in with the devic
 | `Sources/NativeHarnessClient/Views/AppShell/ConnectorSettingsView.swift` | Settings → Connectors, the one-word state (`ConnectorSettingsState`), the "Set up in one go" cards | views |
 | `Sources/NativeHarnessClient/Views/AppShell/ConnectorAddSheet.swift` | The "Add connector" sheet, steps and links per service (`ConnectorSetupGuide`) | views |
 | `Sources/NativeHarnessClient/Views/AppShell/ConnectorRegistryViews.swift` | "From MCP registries" (`ConnectorRegistrySection`) and a program's page (`ConnectorProgramPage`) | views |
-| `Sources/NativeHarnessClient/Views/AppShell/GoogleSetupPage.swift`, `MicrosoftSetupPage.swift`, `SlackSetupPage.swift`, `ZoomSetupPage.swift`, `ServiceAccountList.swift`, `ConnectorSetupAssistantViews.swift` | Google, Microsoft 365, Slack and Zoom setup assistants (step rows, copy buttons, checked fields), and the account list with per-account service chips that Google and Microsoft share | views |
+| `Sources/NativeHarnessClient/Views/AppShell/GoogleSetupPage.swift`, `MicrosoftSetupPage.swift`, `SlackSetupPage.swift`, `ZoomSetupPage.swift`, `ServiceAccountList.swift`, `ConnectorSetupAssistantViews.swift` | Google agent client setup and separate Calendar sign-in, Microsoft 365 and Zoom setup, the Slack setup steps, and the shared Google and Microsoft account list | views |
 | `Sources/NativeHarnessClient/Views/AppShell/AppStoreConnectSetupPage.swift` | The App Store Connect page (steps, key type, choosing the `.p8`, ID fields, key list, the Trash question) | views |
 | `Sources/NativeHarnessClient/Views/AppShell/MailAccountSetupPage.swift` | The Mail (IMAP) page (the service from the address, its steps, the app password, other servers, the account list) | views |
 | `Sources/NativeHarnessClient/Views/Composer/ComposerPlusMenu.swift` | Rows and keys of the composer "+" menu (`ComposerMenuList`), the "+" order (`ComposerPlusMenu`), the connector list (`ComposerConnectorsMenu`) | views |
@@ -1168,6 +1170,7 @@ Tests:
 | `Tests/NativeHarnessClientTests/ConnectorDirectoryTests.swift` | The directory, discovery with real metadata shapes, your own client, public clients and the key in the address, the per-task switch, duplicate exclusion and standing in for Claude harness servers (`--settings`), settings parsing (fake values), import, the claude.ai environment, injection documents, tool rows |
 | `Tests/NativeHarnessClientTests/ConnectorLiveToolsTests.swift` | `list_changed` and list refresh with a fake MCP client, `tools/watch` over the socket, per-task changes in a real `ConnectorCenter`, clients that re-read and clients that do not, notification at the end of a turn, per-harness text |
 | `Tests/NativeHarnessClientTests/GmailConnectorTests.swift`, `GoogleCalendarDriveConnectorTests.swift`, `GoogleBuiltInAppTests.swift`, `GoogleAnalyticsAdsConnectorTests.swift` | With a fake Google (`FakeGoogle`, `FakeGoogleWorkspace`, `FakeAnalyticsAds`): sign-in, scopes, accounts, and the requests and asking for each tool; Calendar UI grants; Analytics reports and Ads reading only |
+| `Tests/NativeHarnessClientTests/GoogleWorkspaceMCPClientTests.swift`, `GoogleWorkspaceMCPBridgeTests.swift`, `GoogleWorkspaceMCPApprovalRenderingTests.swift` | Workspace tool discovery and pagination, attachments and file IDs, and Google approval choices in the conversation, notifications and remote views |
 | `Tests/NativeHarnessClientTests/MicrosoftConnectorTests.swift` | With a fake identity platform and Graph (`FakeMicrosoft`): the public-client sign-in, a tenant of the person's app, rotated refresh tokens, the requests of mail, calendar, OneDrive and Teams tools, and a request card |
 | `Tests/NativeHarnessClientTests/AppleConnectorTests.swift` | The whole flow with a fake App Store Connect (checking the token signature on every request), a fake Mac store and a fake `mcpbridge`: team key and individual key tokens, the key only in Keychain, the request and reply for each tool, refused keys, asking only for writes and the card text, Mac permissions and calendars, reminders and contacts, finding, connecting, restarting and removing Xcode, stdio with a real shell process |
 | `Tests/NativeHarnessClientTests/GitHubDeviceSignInTests.swift` | Device code request, waiting, refusal and expiry, sending it to MCP as a bearer token |
