@@ -1463,9 +1463,7 @@ final class ConnectorCenter: ConnectorToolProviding {
                 return .error("Unknown tool: \(tool)")
             }
         } catch OAuthAPISession.Failure.signInRequired {
-            for other in accountRecords(record.credentialID) { update(other.id) { $0.status = .signInRequired } }
-            return .error("\(record.displayName) needs the user to sign in again: Yardlet Settings → Connectors → "
-                + "\(record.name) → Reconnect.")
+            return googleSignInRequired(record)
         } catch let failure as GmailAPI.Failure {
             return .error("\(record.name): \(failure.localizedDescription)")
         } catch let failure as GoogleREST.Failure {
@@ -1473,6 +1471,12 @@ final class ConnectorCenter: ConnectorToolProviding {
         } catch {
             return .error("Could not reach \(record.name): \(error.localizedDescription)")
         }
+    }
+
+    private func googleSignInRequired(_ record: ConnectorRecord) -> AgentToolResult {
+        for other in accountRecords(record.credentialID) { update(other.id) { $0.status = .signInRequired } }
+        return .error("\(record.displayName) needs the user to sign in again: Yardlet Settings → Connectors → "
+            + "\(record.name) → Reconnect.")
     }
 
     private func callMicrosoftTool(_ record: ConnectorRecord, tool: String, arguments: ToolJSON,
@@ -2251,6 +2255,8 @@ final class ConnectorCenter: ConnectorToolProviding {
                     try await session.refreshedAccessToken(replacing: rejected)
                 }, responder: context.taskID.flatMap { googleWorkspaceResponder($0) })
                 return Self.toolResult(result, server: record.name)
+            } catch OAuthAPISession.Failure.signInRequired {
+                return googleSignInRequired(record)
             } catch {
                 return .error(error.localizedDescription)
             }

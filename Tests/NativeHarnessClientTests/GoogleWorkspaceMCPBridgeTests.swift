@@ -55,6 +55,21 @@ final class GoogleWorkspaceMCPBridgeTests: XCTestCase {
         }
     }
 
+    func testVisibleAttachmentsInsideHiddenWorktreeParent() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let task = folder.appending(path: ".yardlet/worktrees/repo/task")
+        try FileManager.default.createDirectory(at: task.appending(path: ".private"), withIntermediateDirectories: true)
+        let file = task.appending(path: "report.pdf")
+        try Data([1]).write(to: file)
+        let visible = try Bridge.prepareArguments(name: "reply", arguments: arguments([["path": .string(file.nativePath)]]),
+                                                  taskFolders: [task])
+        XCTAssertEqual(visible["attachments"]?.arrayValue?.first?["content"], .string("AQ=="))
+        let traversal = task.nativePath + "/.private/../report.pdf"
+        XCTAssertThrowsError(try Bridge.prepareArguments(name: "reply", arguments: arguments([["path": .string(traversal)]]),
+                                                        taskFolders: [task]))
+    }
+
     func testRawBudgetIncludesEncodedAndLocalAttachmentsTogether() throws {
         let file = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try Data().write(to: file)
@@ -82,7 +97,8 @@ final class GoogleWorkspaceMCPBridgeTests: XCTestCase {
             XCTAssertEqual(output[key], .string("my-ID"))
             XCTAssertEqual(output["text"], .string(url))
         }
-        for id in ["existing_id", "https://example.test/document/d/my-ID/edit"] {
+        for id in ["existing_id", "https://example.test/document/d/my-ID/edit", "https://drive.google.com/open?id=",
+                   "https://drive.google.com/open?id=.", "https://docs.google.com/document/d/../edit"] {
             let args: ToolJSON = .object(["documentId": .string(id)])
             XCTAssertEqual(try Bridge.prepareArguments(name: "get", arguments: args, taskFolders: []), args)
         }

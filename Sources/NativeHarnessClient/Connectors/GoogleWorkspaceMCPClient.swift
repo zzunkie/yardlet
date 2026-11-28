@@ -27,15 +27,18 @@ struct GoogleWorkspaceMCPClient: Sendable {
         var bearer = token
         var cursor: String?
         var seen: Set<String> = []
+        let limit = 2_000
         var tools: [ToolJSON] = []
         repeat {
             let params = cursor.map { ["cursor": ToolJSON.string($0)] } ?? [:]
             let result = try await post("tools/list", params, token: &bearer, refreshToken: refreshToken)
             guard let page = result["tools"]?.arrayValue else { throw MCPHTTPError.invalidResponse("missing tools") }
-            tools += page.map(GoogleWorkspaceMCPBridge.exposedTool)
-            cursor = result["nextCursor"]?.stringValue
-            if let cursor, !seen.insert(cursor).inserted { throw MCPHTTPError.invalidResponse("repeated cursor") }
-        } while cursor != nil
+            tools += page.prefix(limit - tools.count).map(GoogleWorkspaceMCPBridge.exposedTool)
+            guard tools.count < limit, let next = result["nextCursor"]?.stringValue, !next.isEmpty else { break }
+            guard seen.insert(next).inserted else { throw MCPHTTPError.invalidResponse("repeated cursor") }
+            guard seen.count < limit else { throw MCPHTTPError.invalidResponse("too many tool pages") }
+            cursor = next
+        } while true
         return tools
     }
 

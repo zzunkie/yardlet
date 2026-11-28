@@ -4346,4 +4346,4 @@
 "Enable the Workspace MCP service and its underlying API in Google Cloud, or use Personal Mode." = "Google Cloud에서 Workspace MCP 서비스와 해당 API를 모두 켜거나 Personal Mode를 사용하세요.";
 "Google's MCP quota was reached. Gmail search has a daily free quota of 500 searches per project. Separate Personal Mode projects give each account its own quota." = "Google MCP 사용 한도에 도달했습니다. Gmail 검색의 일일 무료 한도는 프로젝트당 500회입니다. 계정별로 Personal Mode 프로젝트를 만들면 각 계정에 별도 한도가 적용됩니다.";
 "Retry after %@." = "%@ 후에 다시 시도하세요.";
-"%ld seconds" = "%ld초";
+"%lld seconds" = "%lld초";

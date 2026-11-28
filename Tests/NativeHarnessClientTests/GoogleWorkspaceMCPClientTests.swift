@@ -75,6 +75,19 @@ final class GoogleWorkspaceMCPClientTests: XCTestCase {
         XCTAssertEqual(meta?["io.modelcontextprotocol/clientCapabilities"], .object(["elicitation": .object(["form": .object([:])])]))
     }
 
+    func testEmptyCursorAndToolLimitEndPagination() async throws {
+        let emptyCursor = #"{"id":1,"result":{"tools":[],"nextCursor":""}}"#
+        let tools = Array(repeating: #"{"name":"tool"}"#, count: 2_001).joined(separator: ",")
+        let oversized = #"{"id":1,"result":{"tools":["# + tools + #"],"nextCursor":"more"}}"#
+        for (page, count) in [(emptyCursor, 0), (oversized, 2_000)] {
+            let server = GoogleScriptedServer([.init(body: page)])
+            let listed = try await GoogleWorkspaceMCPClient(endpoint: endpoint, transport: server).listTools()
+            XCTAssertEqual(listed.count, count)
+            let requests = await server.requests
+            XCTAssertEqual(requests.count, 1)
+        }
+    }
+
     func testDismissHeadlessAndUnsupportedSchemaCancelOnTheServer() async throws {
         for mode in ["dismiss", "headless", "unsupported"] {
             let server = GoogleScriptedServer([.form(extraField: mode == "unsupported"), .denied])
@@ -144,7 +157,7 @@ final class GoogleWorkspaceMCPClientTests: XCTestCase {
             ([.init(body: #"{"result":{"tools":[{"description":""# + String(repeating: "a", count: 51_200) + #""}]}}"#, status: 403)],
              .serviceDisabled(project: nil)),
             ([.init(body: "RESOURCE_EXHAUSTED", status: 429, headers: ["Retry-After": "42"])],
-             .quota(retryAfter: L10n.format("%ld seconds", 42)))
+             .quota(retryAfter: L10n.format("%lld seconds", Int64(42))))
         ]
         for (frames, expected) in cases {
             let server = GoogleScriptedServer(frames)
@@ -177,7 +190,7 @@ actor GoogleScriptedServer: ConnectorHTTPTransport {
             return Self(body: """
             {"id":1,"result":{"resultType":"input_required","requestState":"opaque","inputRequests":{"request":{
               "method":"elicitation/create","params":{"mode":"form","message":"**Attachment:** \u{60}report_v1.pdf\u{60}",
-              "requestedSchema":{"type":"object","properties":{"choice":{"title":"Send","oneOf":[
+              "requestedSchema":{"type":"object","title":"Send","properties":{"choice":{"oneOf":[
               {"const":"ALLOW_ONCE","title":"Once"},{"const":"DENY_ONCE","title":"Deny"},
               {"const":"ALLOW_AUDIENCE_ALWAYS","title":"Always for audience"}]}\(extra)}}}}}}}
             """)

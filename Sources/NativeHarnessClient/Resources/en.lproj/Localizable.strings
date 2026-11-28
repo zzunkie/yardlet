@@ -4551,4 +4551,4 @@
 "Enable the Workspace MCP service and its underlying API in Google Cloud, or use Personal Mode." = "Enable the Workspace MCP service and its underlying API in Google Cloud, or use Personal Mode.";
 "Google's MCP quota was reached. Gmail search has a daily free quota of 500 searches per project. Separate Personal Mode projects give each account its own quota." = "Google's MCP quota was reached. Gmail search has a daily free quota of 500 searches per project. Separate Personal Mode projects give each account its own quota.";
 "Retry after %@." = "Retry after %@.";
-"%ld seconds" = "%ld seconds";
+"%lld seconds" = "%lld seconds";

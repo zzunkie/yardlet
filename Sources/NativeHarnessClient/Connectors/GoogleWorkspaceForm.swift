@@ -16,7 +16,7 @@ struct GoogleWorkspaceForm {
               let (field, property) = properties.first, !field.isEmpty,
               schema["required"] == nil || schema["required"] == .array([.string(field)]),
               property["type"] == nil || property["type"] == .string("string"),
-              let title = property["title"]?.stringValue, !title.isEmpty else { return nil }
+              let title = property["title"]?.stringValue ?? schema["title"]?.stringValue, !title.isEmpty else { return nil }
 
         let choices: [(ToolJSON?, ToolJSON?)]
         if let options = property["oneOf"]?.arrayValue {

@@ -577,9 +577,11 @@ final class SessionToolCenter {
         return true
     }
 
+    func isBoundForm(_ id: String) -> Bool { cards[id]?.boundToCall == true }
+
     /// A new message closes the outstanding form without choosing any of the server's options.
     func dismissBoundForm(_ id: String) -> Bool {
-        guard cards[id]?.boundToCall == true else { return false }
+        guard isBoundForm(id) else { return false }
         return answer(id, allow: false)
     }
 

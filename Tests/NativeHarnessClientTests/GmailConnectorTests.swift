@@ -738,6 +738,26 @@ final class GmailConnectorTests: XCTestCase {
 
     // MARK: - Several accounts
 
+    func testGoogleWorkspaceMCPRevokedRefreshMarksAllServicesForReconnect() async throws {
+        let google = FakeGoogle()
+        google.grantedScope = GoogleOAuth.scope(for: [.gmail, .googleCalendar])
+        let server = GoogleScriptedServer([.init(body: "", status: 401)])
+        let center = makeCenter(google: google, configure: { environment in
+            let client = GoogleWorkspaceMCPClient(endpoint: URL(string: "https://example.test/mcp/v1")!, transport: server)
+            environment.googleWorkspaceClients = [.gmail: ["list_labels": client]]
+        })
+        try await center.saveGoogleApp(clientID: FakeGoogle.clientID, secret: FakeGoogle.clientSecret)
+        let account = try XCTUnwrap(center.addAccount(services: [.gmail, .googleCalendar]))
+        await center.waitForConnection(account.id)
+        XCTAssertEqual(account.services.count, 2)
+        for record in account.services { XCTAssertEqual(center.record(record.id)?.status, .connected) }
+        google.revoke(google.signInAs)
+        let refused = try await call(center, "gmail_list_labels")
+        XCTAssertTrue(refused.isError)
+        XCTAssertTrue(refused.text.contains("Reconnect"), refused.text)
+        for record in account.services { XCTAssertEqual(center.record(record.id)?.status, .signInRequired) }
+    }
+
     func testGoogleWorkspaceMCPRegisteredToolsUseRoundTripDeadlinesAndTaskScope() async throws {
         let google = FakeGoogle()
         let server = GoogleScriptedServer([.form(), .done])

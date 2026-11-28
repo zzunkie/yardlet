@@ -67,8 +67,8 @@ enum GoogleWorkspaceMCPError: LocalizedError, Equatable {
             return MCPHTTPError.http(status: 403, body: String(message.prefix(400)))
         case 429:
             let value = response.value(forHTTPHeaderField: "Retry-After")?.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let value, let seconds = Int(value), seconds >= 0 {
-                return Self.quota(retryAfter: L10n.format("%ld seconds", seconds))
+            if let value, let seconds = Int64(value), seconds >= 0 {
+                return Self.quota(retryAfter: L10n.format("%lld seconds", seconds))
             }
             let formatter = DateFormatter()
             formatter.locale = Locale(identifier: "en_US_POSIX")

@@ -51,7 +51,7 @@ enum GoogleWorkspaceMCPBridge {
                 if let pathValue = item.removeValue(forKey: "path") {
                     guard let path = pathValue.stringValue, item["content"] == nil else { throw Failure.invalidAttachment }
                     let url = try GmailAttachmentFiles.resolve(path, roots: roots)
-                    guard !hasHiddenComponent(path), !hasHiddenComponent(url.path(percentEncoded: false)) else {
+                    guard isVisibleInput(path, under: roots) else {
                         throw GmailOutgoingMessage.Problem.unattachable(path: path, reason: "it is hidden or in a hidden folder.")
                     }
                     let data = try readFile(at: url, roots: roots, remaining: remaining)
@@ -72,9 +72,22 @@ enum GoogleWorkspaceMCPBridge {
         return .object(args)
     }
 
-    private static func hasHiddenComponent(_ path: String) -> Bool {
-        let normalized = PathRules.current.isWindows ? path.replacingOccurrences(of: "\\", with: "/") : path
-        return normalized.split(separator: "/").contains { $0.hasPrefix(".") && $0 != "." && $0 != ".." }
+    /// The resolved destination has already passed Gmail's root check. Check the input spelling
+    /// too, before a symlink or ".." can hide a dot-prefixed name below the task folder.
+    private static func isVisibleInput(_ path: String, under roots: [URL]) -> Bool {
+        let rules = PathRules.current
+        let expanded = (path.trimmingCharacters(in: .whitespaces) as NSString).expandingTildeInPath
+        let names = rules.names(expanded).filter { !$0.isEmpty && $0 != "." }
+        func hidden(_ name: String) -> Bool { name.hasPrefix(".") && name != ".." }
+        guard names.contains(where: hidden) else { return true }
+        for root in roots {
+            for spelling in [root, root.resolvingSymlinksInPath()] {
+                let prefix = rules.names(spelling.nativePath).filter { !$0.isEmpty && $0 != "." }
+                if names.starts(with: prefix, by: { rules.isWindows ? $0.caseInsensitiveCompare($1) == .orderedSame : $0 == $1 }),
+                   !names.dropFirst(prefix.count).contains(where: hidden) { return true }
+            }
+        }
+        return false
     }
 
     private enum Failure: LocalizedError {
@@ -112,10 +125,16 @@ enum GoogleWorkspaceMCPBridge {
               let host = url.host?.lowercased(), ["drive.google.com", "docs.google.com"].contains(host)
         else { return nil }
         let parts = url.path.split(separator: "/")
-        if let marker = parts.firstIndex(where: { $0 == "d" || $0 == "folders" }),
-           parts.indices.contains(marker + 1) { return String(parts[marker + 1]) }
-        if host == "drive.google.com", url.path == "/open" { return url.queryItems?.first { $0.name == "id" }?.value }
-        return nil
+        let id: String?
+        if let marker = parts.firstIndex(where: { $0 == "d" || $0 == "folders" }), parts.indices.contains(marker + 1) {
+            id = String(parts[marker + 1])
+        } else if host == "drive.google.com", url.path == "/open" {
+            id = url.queryItems?.first { $0.name == "id" }?.value
+        } else {
+            return nil
+        }
+        guard let id, !id.isEmpty, id != ".", id != ".." else { return nil }
+        return id
     }
 
     static func augmentResult(name: String, result: ToolJSON,

@@ -4346,4 +4346,4 @@
 "Enable the Workspace MCP service and its underlying API in Google Cloud, or use Personal Mode." = "请在 Google Cloud 中启用 Workspace MCP 服务及其对应的 API，或使用 Personal Mode。";
 "Google's MCP quota was reached. Gmail search has a daily free quota of 500 searches per project. Separate Personal Mode projects give each account its own quota." = "已达到 Google MCP 配额。每个项目每天可免费搜索 Gmail 500 次。为每个账号创建单独的 Personal Mode 项目，即可分别使用配额。";
 "Retry after %@." = "请在 %@ 后重试。";
-"%ld seconds" = "%ld 秒";
+"%lld seconds" = "%lld 秒";
