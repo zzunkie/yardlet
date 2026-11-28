@@ -88,6 +88,11 @@ final class CalendarCenter {
     /// Shows these accounts, read through their transports. Accounts no longer listed are forgotten with everything
     /// read from them, and what a screen shows is read again.
     func setAccounts(_ entries: [(CalendarAccount, any CalendarAccountTransport)]) {
+        let keptIDs = Set(entries.map { $0.0.id.uuidString })
+        pruneChoices { key in
+            guard let id = key.split(separator: " ", maxSplits: 1).first else { return false }
+            return keptIDs.contains(String(id))
+        }
         guard isEnabled else { return }
         generation += 1
         accounts = entries.map(\.0)
@@ -96,10 +101,28 @@ final class CalendarCenter {
         accountCalendars = accountCalendars.filter { kept.contains($0.key) }
         failures = failures.filter { kept.contains($0.key) }
         reads = [:]
-        shownEvents = [:]
+        shownEvents = shownEvents.mapValues { events in events.filter { kept.contains($0.id.calendar.accountID) } }
         loading = []
         mergeCalendars()
         if !viewers.isEmpty { Task { await refresh() } }
+    }
+
+    func forgetAccount(_ accountID: UUID) {
+        pruneChoices { !$0.hasPrefix(accountID.uuidString + " ") }
+        if transports[accountID] != nil {
+            setAccounts(accounts.compactMap { account in
+                guard account.id != accountID, let transport = transports[account.id] else { return nil }
+                return (account, transport)
+            })
+        }
+    }
+
+    private func pruneChoices(keeping keep: (String) -> Bool) {
+        choices = choices.filter { keep($0.key) }
+        guard let saved = defaults?.dictionary(forKey: CalendarPreference.choicesKey) else { return }
+        let remaining = saved.filter { keep($0.key) }
+        if remaining.isEmpty { defaults?.removeObject(forKey: CalendarPreference.choicesKey) }
+        else if remaining.count != saved.count { defaults?.set(remaining, forKey: CalendarPreference.choicesKey) }
     }
 
     func account(_ id: UUID) -> CalendarAccount? { accounts.first { $0.id == id } }

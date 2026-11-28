@@ -59,7 +59,7 @@ extension RemoteHostView {
             discardDraft: { thread, message in window.discardDraft(message, in: thread, center: mailbox) },
             askAgent: { thread in
                 guard let account = mailbox.account(thread.summary.id.accountID) else { return }
-                askAgent(MailText.handoff(thread, account: account))
+                askAgent(MailText.handoff(thread, account: account, accounts: mailbox.accounts))
             },
             openOriginal: { OutsideBrowser.open($0) },
             openLink: { OutsideBrowser.open($0) },

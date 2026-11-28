@@ -66,6 +66,17 @@ final class AgentToolApprovalTests: XCTestCase {
         XCTAssertEqual(approvals.titles.last, L10n.format("Allow this task to use %@ in %@?", "Send", "Gmail"))
     }
 
+    func testRemovingTheLastConnectionForAServiceForgetsItsReadApproval() async throws {
+        let (broker, session, token, _, approvals) = try makeBroker(policy: policy())
+        _ = await direct("gmail_search", broker, session, token)
+        _ = await direct("slack_read", broker, session, token)
+        broker.keepConnectorReadApprovals(for: ["Slack"])
+        _ = await direct("slack_read", broker, session, token)
+        _ = await direct("gmail_search", broker, session, token)
+        XCTAssertEqual(approvals.titles.count, 3)
+        XCTAssertEqual(approvals.titles.last, L10n.format("Allow this task to read from %@?", "Gmail"))
+    }
+
     func testADeclinedCardRunsNothing() async throws {
         let (broker, session, token, connectors, _) = try makeBroker(policy: policy(), answer: false)
         let result = await direct("gmail_send", broker, session, token)

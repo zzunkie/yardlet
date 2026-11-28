@@ -35,10 +35,31 @@ final class MailAccountSetupRenderingTests: XCTestCase {
         expect([L10n.string("Other IMAP server"), L10n.string("IMAP server"), L10n.string("SMTP port"), L10n.string("User name")],
                in: spoken(page(MailAccountSetupPage(center: empty, address: "dana@example.org"), store)), "other")
 
-        try render("imap-setup-gmail", MailAccountSetupPage(center: empty, address: "dana@googlemail.com"), store, directory)
-        expect([L10n.format("%@ accounts connect through their own sign-in, which reads them better. Choose %@ in the list of connectors.",
-                            "Gmail", "Gmail")],
-               in: spoken(page(MailAccountSetupPage(center: empty, address: "dana@googlemail.com"), store)), "Gmail")
+        let address = ["user", "gmail.com"].joined(separator: "@")
+        let gmail = try XCTUnwrap(MailServerPreset.matching(address))
+        let setup = MailAccountSetupPage(center: empty, address: address, password: UUID().uuidString)
+        try render("imap-setup-gmail", setup, store, directory)
+        expect(gmail.steps.map { L10n.string($0.text) } + [L10n.string("Connect")],
+               in: spoken(page(setup, store)), "Gmail")
+
+        let host = WindowlessRender.Host(page(setup, store), size: Self.size)
+        defer { host.close() }
+        host.settle(passes: 10)
+        XCTAssertTrue(host.accessibilityElements(visibleOnly: true).contains {
+            $0.label.contains("imap.gmail.com:993") || $0.value.contains("imap.gmail.com:993")
+        })
+        XCTAssertTrue(WindowlessRender.withAccessibilityTree {
+            func enabledConnect(in node: AnyObject) -> Bool {
+                for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
+                    if child.accessibilityRole?() == .button, WindowlessRender.name(of: child) == L10n.string("Connect") {
+                        return child.isAccessibilityEnabled?() ?? false
+                    }
+                    if enabledConnect(in: child) { return true }
+                }
+                return false
+            }
+            return enabledConnect(in: host.hosting)
+        })
 
         let added = center(Self.records)
         try render("imap-setup-accounts", MailAccountSetupPage(center: added), store, directory)

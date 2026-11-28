@@ -211,6 +211,7 @@ struct ConversationConnectorView: Equatable, Sendable {
 @MainActor
 final class ConnectorAppCalls {
     struct Entry: Equatable {
+        let connector: UUID
         let task: UUID
         let tool: String
         let arguments: String
@@ -222,8 +223,12 @@ final class ConnectorAppCalls {
 
     private(set) var entries: [Entry] = []
 
-    func record(_ result: ToolJSON, task: UUID, tool: String, arguments: ToolJSON?) {
-        entries.append(Entry(task: task, tool: tool, arguments: MCPAppArguments.key(arguments), result: result))
+    func forget(connector: UUID) {
+        entries.removeAll { $0.connector == connector }
+    }
+
+    func record(_ result: ToolJSON, connector: UUID, task: UUID, tool: String, arguments: ToolJSON?) {
+        entries.append(Entry(connector: connector, task: task, tool: tool, arguments: MCPAppArguments.key(arguments), result: result))
         if entries.filter({ $0.task == task }).count > Self.perTask,
            let oldest = entries.firstIndex(where: { $0.task == task }) {
             entries.remove(at: oldest)

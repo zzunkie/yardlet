@@ -4540,3 +4540,7 @@
 "Cursor Agent can run code and access files in %@. It runs there only once you trust the folder's contents, and remembers your answer for the folder." = "Cursor Agent can run code and access files in %@. It runs there only once you trust the folder's contents, and remembers your answer for the folder.";
 "Trust this folder" = "Trust this folder";
 "Don't trust" = "Don't trust";
+"Turn on 2-Step Verification in your Google Account." = "Turn on 2-Step Verification in your Google Account.";
+"Create an app password for Yardlet in Google App Passwords." = "Create an app password for Yardlet in Google App Passwords.";
+"Paste the 16-character app password below. Spaces are ignored." = "Paste the 16-character app password below. Spaces are ignored.";
+"An app password connects Mailbox and basic mail_* tools without Google Cloud setup. For full Gmail tools, use the Google connector. Some Workspace organizations disable app passwords." = "An app password connects Mailbox and basic mail_* tools without Google Cloud setup. For full Gmail tools, use the Google connector. Some Workspace organizations disable app passwords.";

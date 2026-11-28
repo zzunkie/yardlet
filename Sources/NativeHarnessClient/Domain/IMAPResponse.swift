@@ -125,6 +125,7 @@ struct IMAPBodyStructure: Hashable, Sendable {
 struct IMAPFetch: Hashable, Sendable {
     var sequence: UInt32
     var uid: UInt32?
+    var gmailThreadID: UInt64?
     /// The flags as sent: `\Seen`, `\Flagged`, `$Forwarded`.
     var flags: Set<String> = []
     var internalDate: Date?
@@ -141,6 +142,7 @@ struct IMAPFetch: Hashable, Sendable {
     /// items over several responses.
     mutating func merge(_ other: IMAPFetch) {
         uid = other.uid ?? uid
+        gmailThreadID = other.gmailThreadID ?? gmailThreadID
         if !other.flags.isEmpty { flags = other.flags }
         internalDate = other.internalDate ?? internalDate
         size = other.size ?? size
@@ -413,6 +415,7 @@ enum IMAPResponse: Sendable {
             let value = try parser.value()
             switch name {
             case "UID": fetch.uid = value.number32
+            case "X-GM-THRID": fetch.gmailThreadID = value.number
             case "FLAGS": fetch.flags = Set(value.list?.compactMap(\.text) ?? [])
             case "INTERNALDATE": fetch.internalDate = value.text.flatMap(IMAPDate.parse)
             case "RFC822.SIZE": fetch.size = value.number.map { Int(clamping: $0) }
