@@ -106,6 +106,9 @@ final class ConversationTurnWindowRenderingTests: XCTestCase {
     /// items of one turn, so the turn reads as it did drawn whole. Review images go to
     /// `.build/conversation-rows/`.
     func testALongRunningTurnIsDrawnInPartsThatReadAsOneTurn() async throws {
+        let assistiveReading = ConversationAssistiveReading.isOn
+        ConversationAssistiveReading.isOn = { false }
+        defer { ConversationAssistiveReading.isOn = assistiveReading }
         guard case var .object(running) = LongConversationFixture.streamedCodexTurn(id: "turn-2", commands: 6, seconds: 300)
         else { return XCTFail("no turn") }
         running["status"] = .string("inProgress")
@@ -155,19 +158,20 @@ final class ConversationTurnWindowRenderingTests: XCTestCase {
         guard let scroll = conversationScrollView(host.hosting), let document = scroll.documentView else { return [] }
         let clip = scroll.contentView
         let start = clip.bounds.origin
-        let end = max(0, document.frame.height - clip.bounds.height)
         var frames: [ObjectIdentifier: CGRect] = [:]
         var y: CGFloat = 0
         while true {
-            clip.scroll(to: NSPoint(x: 0, y: min(y, end)))
+            clip.scroll(to: NSPoint(x: 0, y: y))
             scroll.reflectScrolledClipView(clip)
             host.settle(passes: 1, interval: 0.01)
             // By the turn's hosting view: the row list hands a cell on to the next row coming into view.
             for view in all(document) where view.window != nil {
                 frames[ObjectIdentifier(view.subviews.first ?? view)] = view.convert(view.bounds, to: document)
             }
-            guard y < end else { break }
-            y += clip.bounds.height
+            // Each new viewport can refine the document height. Read to its measured end.
+            let end = max(0, document.frame.height - clip.bounds.height)
+            guard y < end - 0.5, clip.bounds.minY < end - 0.5 else { break }
+            y = min(clip.bounds.maxY, end)
         }
         clip.scroll(to: start)
         scroll.reflectScrolledClipView(clip)

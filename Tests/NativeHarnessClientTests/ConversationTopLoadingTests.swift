@@ -200,16 +200,18 @@ final class ConversationTopLoadingTests: XCTestCase {
         pump(mounted.hosting, passes: 12)
         // Away from the latest output first: leaving it ends following, which the timeline draws.
         userScroll(scroll, up: 300, in: mounted.hosting)
-        let start = scroll.contentView.bounds.minY
-        XCTAssertGreaterThan(start, 800, "room to scroll up through turns without reaching the top")
+        XCTAssertGreaterThan(scroll.contentView.bounds.minY, 800, "room to scroll up through turns without reaching the top")
 
+        // Visit the stretch once so every row on the return trip has been measured.
+        userScroll(scroll, up: 600, steps: 12, in: mounted.hosting)
+        let start = scroll.contentView.bounds.minY
         ViewBodyCensus.isEnabled = true
         ViewBodyCensus.reset()
-        userScroll(scroll, up: 600, steps: 12, in: mounted.hosting)
+        userScroll(scroll, up: -600, steps: 12, in: mounted.hosting)
         let counts = ViewBodyCensus.counts
         ViewBodyCensus.isEnabled = false
         ViewBodyCensus.reset()
-        XCTAssertLessThan(scroll.contentView.bounds.minY, start - 500, "the conversation moved")
+        XCTAssertGreaterThan(scroll.contentView.bounds.minY, start + 500, "the conversation moved")
         XCTAssertEqual(drawnTurnCount(mounted.hosting), 10, "nothing arrived")
         XCTAssertNil(counts[.conversationTurnPlaced], "a turn told its place again")
         XCTAssertNil(counts[.conversationTimeline], "the timeline was drawn again")
