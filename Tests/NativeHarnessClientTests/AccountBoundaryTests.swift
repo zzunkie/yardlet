@@ -52,6 +52,29 @@ final class AccountBoundaryTests: XCTestCase {
         XCTAssertNil(command?.initialInput)
     }
 
+    func testOpenCodeLogoutOpensItsCredentialSelector() async {
+        let command = await HarnessAccountBroker().logoutCommand(for: .openCode, executableURL: URL(filePath: "/tmp/opencode"))
+        XCTAssertEqual(command?.arguments, ["auth", "logout"])
+        XCTAssertEqual(command?.interaction, .terminalRequired)
+    }
+
+    func testAccountCommandsDisableTheirHarnessUpdater() async {
+        let broker = HarnessAccountBroker()
+        let executable = URL(filePath: "/tmp/test-cli")
+        for (harness, flag) in [(HarnessKind.claudeCode, "DISABLE_AUTOUPDATER"), (.museCode, "MUSE_NO_AUTO_UPDATE")] {
+            let login = await broker.loginCommand(for: harness, executableURL: executable)
+            let logout = await broker.logoutCommand(for: harness, executableURL: executable)
+            XCTAssertEqual(login?.environment[flag], "1")
+            XCTAssertEqual(logout?.environment[flag], "1")
+        }
+    }
+
+    func testCursorStatusNamesOnlyTheReportedEmail() {
+        XCTAssertEqual(HarnessAccountBroker.cursorAccountEmail(from: #"{"status":"authenticated","email":"owner@example.test"}"#),
+                       "owner@example.test")
+        XCTAssertNil(HarnessAccountBroker.cursorAccountEmail(from: #"{"status":"authenticated","message":"owner@example.test"}"#))
+    }
+
     func testAntigravityLoginUsesOfficialAgyAndExplainsQuietBrowserHandoff() async throws {
         let broker = HarnessAccountBroker()
         let command = await broker.loginCommand(
@@ -62,7 +85,6 @@ final class AccountBoundaryTests: XCTestCase {
         XCTAssertEqual(command?.arguments, [])
         XCTAssertEqual(command?.initialInput, "\r")
         XCTAssertEqual(command?.initialInputTrigger, "Select login method:")
-        XCTAssertEqual(command?.usesPseudoTerminal, true)
         XCTAssertEqual(command?.interaction, .guided)
         XCTAssertTrue(command?.startupMessage?.contains("Antigravity") ?? false)
         XCTAssertEqual(command?.environment["AGY_CLI_DISABLE_AUTO_UPDATE"], "true")
@@ -347,6 +369,7 @@ final class AccountBoundaryTests: XCTestCase {
             AccountConnectionPresentation.connectAction(for: .codex),
             L10n.string("Sign in")
         )
+        XCTAssertEqual(AccountConnectionPresentation.connectAction(for: .openCode), L10n.string("Connect provider"))
         XCTAssertEqual(AccountConnectionPresentation.status(for: codex), codex.state.displayName)
         XCTAssertTrue(AccountConnectionPresentation.usesProviderLanguage(.hermes))
     }
@@ -509,7 +532,7 @@ final class AccountBoundaryTests: XCTestCase {
             HarnessAccountBroker.grokCredentialState(
                 environment: ["GROK_HOME": root.path(percentEncoded: false)],
                 fileManager: .default
-            ),
+            ).state,
             .signedOut
         )
         let authURL = root.appending(path: "auth.json")
@@ -518,7 +541,7 @@ final class AccountBoundaryTests: XCTestCase {
             HarnessAccountBroker.grokCredentialState(
                 environment: ["GROK_HOME": root.path(percentEncoded: false)],
                 fileManager: .default
-            ),
+            ).state,
             .signedIn
         )
 
@@ -538,13 +561,11 @@ final class AccountBoundaryTests: XCTestCase {
     }
 
     func testGrokEnvironmentAPIKeyCountsAsConfiguredWithoutPersistedOAuth() {
-        XCTAssertEqual(
-            HarnessAccountBroker.grokCredentialState(
-                environment: ["XAI_API_KEY": "configured"],
-                fileManager: .default
-            ),
-            .signedIn
-        )
+        let home = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        let credential = HarnessAccountBroker.grokCredentialState(
+            environment: ["GROK_HOME": home.path(percentEncoded: false), "XAI_API_KEY": "configured"])
+        XCTAssertEqual(credential.state, .signedIn)
+        XCTAssertFalse(credential.canLogout)
     }
 
     func testStructuredAccountTruthWinsOverUnrelatedCommandNoise() {
@@ -592,6 +613,27 @@ final class AccountBoundaryTests: XCTestCase {
         XCTAssertFalse(AccountLoginController.outputRequiresInput(
             "Preparing browser authentication…"
         ))
+    }
+
+    func testDeviceCodesKeepTheirPrintedFormatAndExcludeProse() {
+        for code in ["123 456", "ABCD-1234", "8F2K-9P1Q", "ABCD-EFGH", "A1B2C3"] {
+            XCTAssertEqual(AccountLoginController.firstDeviceCode(in: "Matching code: \(code)\nCheck the same code.\n\nPress q"), code)
+        }
+        for prose in ["Claude Code login", "OpenCode auth", "Kimi Code needs input", "Muse Code AUTH",
+                      "code.\n\nPRESS", "code: Ab12", "code: ABCD-Efgh", "OpenCode: 123456"] {
+            XCTAssertNil(AccountLoginController.firstDeviceCode(in: prose), prose)
+        }
+    }
+
+    func testInputRecognitionUsesTheCurrentTerminalPrompt() {
+        for prompt in ["◆  Select credential\n│  ● Example\n│", "Select credential", "Continue? [y/N]",
+                       "Continue? [Y/n]", "Enter Start URL:", "Enter Region:", "Press Enter to continue"] {
+            XCTAssertTrue(AccountLoginController.outputRequiresInput(prompt), prompt)
+            XCTAssertFalse(AccountLoginController.outputRequiresInput(prompt + "\nConnecting…"), prompt)
+        }
+        XCTAssertFalse(AccountLoginController.outputRequiresInput("◇  Select credential\n│  Example"))
+        XCTAssertFalse(AccountLoginController.outputRequiresInput("Continue? [Y/n] y"))
+        XCTAssertFalse(AccountLoginController.outputRequiresInput("Enter Region: us-east-1"))
     }
 
     func testSnapshotsEncodeNoCredentialFields() throws {
@@ -806,7 +848,7 @@ final class AccountBoundaryTests: XCTestCase {
         let value = AccountAccessibilityProjection.value(for: snapshot)
         XCTAssertTrue(value.contains(snapshot.state.displayName))
         XCTAssertTrue(value.contains(snapshot.detail))
-        XCTAssertTrue(value.contains(snapshot.providerID ?? ""))
+        XCTAssertTrue(value.contains(ProviderConnection.providerDisplayName(snapshot.providerID)))
         XCTAssertTrue(value.contains(snapshot.credentialOwner))
         XCTAssertTrue(value.contains(snapshot.accountLabel ?? ""))
     }

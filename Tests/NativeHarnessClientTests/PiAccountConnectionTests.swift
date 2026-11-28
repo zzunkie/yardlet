@@ -7,6 +7,14 @@ import XCTest
 
 @MainActor
 final class PiAccountConnectionTests: XCTestCase {
+    func testPiConsoleTitleIncludesTheHarnessOnlyOnce() {
+        var connection = ProviderConnection(id: "pi-test", name: "Pi", harness: .pi,
+            providerID: "openai-codex", homePath: nil, credentialSelector: nil)
+        XCTAssertEqual(connection.consoleTitle, "Pi")
+        connection.name = "Work"
+        XCTAssertEqual(connection.consoleTitle, "Work · Pi")
+    }
+
     func testFailedPiProbeKeepsTheChosenProviderIdentity() async throws {
         let fixture = try PiAccountFixture()
         defer { fixture.remove() }
@@ -16,6 +24,7 @@ final class PiAccountConnectionTests: XCTestCase {
         let result = await HarnessAccountBroker(connection: connection).snapshot(
             for: HarnessCatalog.descriptor(for: .pi)!, executableURL: fixture.executable)
         XCTAssertEqual(result.state, .unknown)
+        XCTAssertEqual(result.detail, L10n.string("Account status could not be confirmed."))
         XCTAssertEqual(result.providerID, "anthropic")
         XCTAssertFalse(result.canLogout)
     }
@@ -39,6 +48,9 @@ final class PiAccountConnectionTests: XCTestCase {
             try fixture.setProbe(output, exitCode: exitCode)
             let snapshot = await broker.snapshot(for: descriptor, executableURL: fixture.executable)
             XCTAssertEqual(snapshot.state, expected, output)
+            if expected == .signedIn || expected == .signedOut {
+                XCTAssertTrue(snapshot.detail.contains(ProviderConnection.providerDisplayName("openai-codex")))
+            }
             XCTAssertEqual(snapshot.id, "pi:openai-codex", output)
             XCTAssertEqual(snapshot.canLogout, expected == .signedIn, output)
         }
@@ -150,6 +162,31 @@ final class PiAccountConnectionTests: XCTestCase {
         XCTAssertEqual(store.defaultSnapshots[.pi]?.state, .signedIn)
     }
 
+
+    func testSuccessfulLogoutExitImmediatelyStartsTheNextLogin() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cli = root.appending(path: "claude")
+        try Data("#!/bin/sh\nexec /bin/sleep 120\n".utf8).write(to: cli)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: cli.path)
+        let descriptor = try XCTUnwrap(HarnessCatalog.descriptor(for: .claudeCode))
+        let runtime = RuntimeSelectionStore(defaults: SuggestionVolatileDefaults(), discoversRuntimes: false,
+                                            loadsPersistedSelections: false)
+        runtime.select(cli, for: .claudeCode)
+        let model = AccountCenterModel(connections: ProviderConnectionStore())
+        defer { model.closeConsole() }
+        await model.logout(descriptor: descriptor, signsInAfter: true, runtimeSelections: runtime)
+        let controller = model.loginController
+        let signOutID = controller.commandID
+        let terminal = attach(controller)
+        XCTAssertEqual(controller.operation, .disconnect)
+        controller.processTerminated(source: terminal, exitCode: 0)
+        XCTAssertNotEqual(controller.commandID, signOutID)
+        XCTAssertEqual(controller.operation, .connect)
+        XCTAssertTrue(controller.isRunning)
+        XCTAssertFalse(model.showsLoginDetails)
+    }
 
     private func attach(_ controller: AccountLoginController) -> LocalProcessTerminalView {
         let view = AccountLoginTerminalView(

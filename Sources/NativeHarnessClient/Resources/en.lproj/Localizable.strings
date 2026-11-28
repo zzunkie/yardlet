@@ -361,6 +361,10 @@
 "Checking account status…" = "Checking account status…";
 "Stored by: %@" = "Stored by: %@";
 "Sign in" = "Sign in";
+"Signing out…" = "Signing out…";
+"Continue signing out in the terminal" = "Continue signing out in the terminal";
+"Sign-out could not be completed" = "Sign-out could not be completed";
+"Sign-out cancelled" = "Sign-out cancelled";
 "Sign out" = "Sign out";
 "Sign out?" = "Sign out?";
 "The selected CLI will remove its own stored account credentials." = "The selected CLI will remove its own stored account credentials.";

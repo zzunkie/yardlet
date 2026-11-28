@@ -926,7 +926,7 @@ private struct NewTaskComposer: View {
             }
 
             if let signIn = accountNeedingSignIn {
-                homeGuidance(signIn.snapshot?.detail ?? ProviderSignIn.neededHere(signIn.harness), action: "Sign in") {
+                homeGuidance(signIn.snapshot?.detail ?? ProviderSignIn.neededHere(signIn.harness), action: AccountConnectionPresentation.connectAction(for: signIn.harness)) {
                     onConnectAccount?(signIn) ?? onShowHarnesses()
                 }
             }

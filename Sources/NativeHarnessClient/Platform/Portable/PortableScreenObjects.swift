@@ -11,6 +11,7 @@ final class AccountLoginController {
     var phase: AccountConnectionPhase { .cancelled }
 
     var connectionVerified: Bool { false }
+    var onSuccessfulCompletion: (() -> Void)?
     func start(_ command: AccountInteractiveCommand, verifySuccessfulExit: (() async -> Bool)? = nil) {}
     func stop() {}
     func completeVerifiedConnection() {}

@@ -101,6 +101,7 @@ import XCTest
         try FileManager.default.createDirectory(at: separate.appending(path: "projects"), withIntermediateDirectories: true)
         try Data().write(to: separate.appending(path: ".signed-in"))
         let cli = try script(shared, """
+        [ "$DISABLE_AUTOUPDATER" = 1 ] || exit 8
         if [ "$1" = "auth" ] && [ -f "$CLAUDE_CONFIG_DIR/.signed-in" ]; then echo '{"loggedIn":true}'; else echo '{"loggedIn":false}'; fi
         """)
         let adapters = AdapterLog()

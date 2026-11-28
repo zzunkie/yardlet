@@ -361,6 +361,10 @@
 "Checking account status…" = "正在检查账号状态…";
 "Stored by: %@" = "存储方：%@";
 "Sign in" = "登录";
+"Signing out…" = "正在退出登录…";
+"Continue signing out in the terminal" = "请在终端中继续退出登录";
+"Sign-out could not be completed" = "未能完成退出登录";
+"Sign-out cancelled" = "已取消退出登录";
 "Sign out" = "退出登录";
 "Sign out?" = "要退出登录吗？";
 "The selected CLI will remove its own stored account credentials." = "所选 CLI 将移除其自身存储的账号凭据。";

@@ -10,6 +10,7 @@ final class AccountCenterModel {
     private(set) var activeHarness: HarnessKind?
     private(set) var activeConnection: ProviderConnection?
     let loginController = AccountLoginController()
+    var showsLoginDetails = false
     @ObservationIgnored let connections: ProviderConnectionStore
 
     @ObservationIgnored private let broker: HarnessAccountBroker
@@ -37,6 +38,7 @@ final class AccountCenterModel {
     ) {
         stopConnectionVerification()
         activeHarness = harness
+        showsLoginDetails = command.interaction == .terminalRequired
         loginController.start(command)
     }
 
@@ -45,18 +47,31 @@ final class AccountCenterModel {
         connection: ProviderConnection? = nil,
         runtimeSelections: RuntimeSelectionStore
     ) async {
+        guard let executableURL = runtimeSelections.selectedURL(for: descriptor.id),
+              let login = await prepareLogin(descriptor: descriptor, connection: connection, executableURL: executableURL),
+              runtimeSelections.selectedURL(for: descriptor.id) == executableURL else { return }
+        startLogin(descriptor: descriptor, connection: login.connection, command: login.command,
+                   executableURL: executableURL, runtimeSelections: runtimeSelections)
+    }
+
+    private func prepareLogin(
+        descriptor: HarnessDescriptor, connection: ProviderConnection?, executableURL: URL
+    ) async -> (command: AccountInteractiveCommand, connection: ProviderConnection?)? {
         var connection = connection
         if descriptor.id == .pi, connection?.providerID == nil,
            let provider = HarnessAccountBroker.piConfiguredProvider(homePath: connection?.homePath) {
             connection = ProviderConnection(id: connection?.id ?? "pi-configured", name: connection?.name ?? "Pi",
                 harness: .pi, providerID: provider, homePath: connection?.homePath, credentialSelector: nil)
         }
-        guard let executableURL = runtimeSelections.selectedURL(for: descriptor.id),
-              let command = await (connection.map { HarnessAccountBroker(connection: $0) } ?? broker).loginCommand(
-                for: descriptor.id,
-                executableURL: executableURL
-              ), runtimeSelections.selectedURL(for: descriptor.id) == executableURL else { return }
+        guard let command = await (connection.map { HarnessAccountBroker(connection: $0) } ?? broker)
+            .loginCommand(for: descriptor.id, executableURL: executableURL) else { return nil }
+        return (command, connection)
+    }
+
+    private func startLogin(descriptor: HarnessDescriptor, connection: ProviderConnection?,
+                            command: AccountInteractiveCommand, executableURL: URL, runtimeSelections: RuntimeSelectionStore) {
         stopConnectionVerification()
+        showsLoginDetails = command.interaction == .terminalRequired
         activeConnection = connection
         activeHarness = descriptor.id
         if descriptor.id == .antigravityCLI {
@@ -72,7 +87,7 @@ final class AccountCenterModel {
         // Pi and older Antigravity versions stay in their editor after signing in.
         if descriptor.id == .pi || (descriptor.id == .antigravityCLI && command.initialInput != nil) {
             follow(descriptor: descriptor, executableURL: executableURL, runtimeSelections: runtimeSelections,
-                   probes: true, until: { [weak self] in
+                   until: { [weak self] in
                        // A Pi login completes for the provider it was opened for.
                        $0.state == .signedIn && (descriptor.id != .pi || self?.activeConnection?.providerID != nil)
                    })
@@ -92,17 +107,27 @@ final class AccountCenterModel {
                 for: descriptor.id,
                 executableURL: executableURL
               ) else { return }
+        let next = signsInAfter
+            ? await prepareLogin(descriptor: descriptor, connection: nil, executableURL: executableURL) : nil
+        guard (!signsInAfter || next != nil), runtimeSelections.selectedURL(for: descriptor.id) == executableURL
+        else { return }
         stopConnectionVerification()
         activeConnection = nil
         activeHarness = descriptor.id
+        showsLoginDetails = command.interaction == .terminalRequired
         loginController.start(command)
-        var signIn: (@MainActor () async -> Void)?
-        if signsInAfter {
-            signIn = { [weak self] in await self?.login(descriptor: descriptor, runtimeSelections: runtimeSelections) }
+        if let next {
+            loginController.onSuccessfulCompletion = { [weak self] in
+                guard runtimeSelections.selectedURL(for: descriptor.id) == executableURL else { return }
+                self?.startLogin(descriptor: descriptor, connection: next.connection, command: next.command,
+                                 executableURL: executableURL, runtimeSelections: runtimeSelections)
+            }
         }
-        // A CLI whose sign-out is a command in its own terminal (`/logout`) stays open after it.
-        follow(descriptor: descriptor, executableURL: executableURL, runtimeSelections: runtimeSelections,
-               probes: command.interaction == .terminalRequired, until: { $0.state == .signedOut }, then: signIn)
+        // A CLI with an in-terminal /logout command stays open after signing out.
+        if command.initialInput != nil {
+            follow(descriptor: descriptor, executableURL: executableURL, runtimeSelections: runtimeSelections,
+                   until: { $0.state == .signedOut })
+        }
     }
 
     func closeConsole() {
@@ -118,19 +143,14 @@ final class AccountCenterModel {
         connectionVerificationID = nil
     }
 
-    /// Follows the console's command until it ends. A CLI that stays open after doing its job is
-    /// finished once its credential-free, no-refresh probe reads `isDone`, without inventing a
-    /// successful exit or relying on terminal text; the probe of the default login is that login's
-    /// reading. `next` runs when the command has completed, by exiting or by the probe.
+    /// A CLI that stays open after changing the account finishes when its read-only probe confirms
+    /// the change. A reading of the default account is also published to the accounts store.
     private func follow(
         descriptor: HarnessDescriptor,
         executableURL: URL,
         runtimeSelections: RuntimeSelectionStore,
-        probes: Bool,
-        until isDone: @escaping @MainActor (HarnessAccountSnapshot) -> Bool = { _ in false },
-        then next: (@MainActor () async -> Void)? = nil
+        until isDone: @escaping @MainActor (HarnessAccountSnapshot) -> Bool
     ) {
-        guard probes || next != nil else { return }
         let verificationID = UUID()
         connectionVerificationID = verificationID
         connectionVerificationTask = Task { @MainActor [weak self] in
@@ -138,27 +158,24 @@ final class AccountCenterModel {
                 do { try await Task.sleep(for: .seconds(1)) } catch { return }
                 guard let self, self.isFollowing(verificationID, descriptor.id, executableURL, runtimeSelections)
                 else { return }
-                if self.loginController.isRunning {
-                    guard probes else { continue }
-                    // A probe of the default login is that login's reading; a saved account's probe
-                    // only tells the console when to finish.
-                    let readsDefault = self.activeConnection?.homePath == nil
-                    let read = readsDefault ? self.connections.beginRead(ofDefault: descriptor.id) : nil
-                    let snapshot = await self.connections.readDefault(descriptor, executableURL: executableURL,
-                        connection: self.activeConnection, authOnly: true)
-                    guard !Task.isCancelled, self.isFollowing(verificationID, descriptor.id, executableURL,
-                        runtimeSelections), self.loginController.isRunning else { return }
-                    // A check can supersede this read while the same console is still open. Discard
-                    // only this result and keep following.
-                    if let read, !self.connections.finishRead(read, with: snapshot) { continue }
-                    guard isDone(snapshot) else { continue }
-                    if descriptor.id == .antigravityCLI, snapshot.state == .signedIn {
-                        self.connections.refreshAntigravityUsage(snapshot, executableURL: executableURL,
-                                                               runtimeSelections: runtimeSelections)
-                    }
-                    self.loginController.completeVerifiedConnection()
+                guard self.loginController.isRunning else { return }
+                // A probe of the default login is that login's reading; a saved account's probe
+                // only tells the console when to finish.
+                let readsDefault = self.activeConnection?.homePath == nil
+                let read = readsDefault ? self.connections.beginRead(ofDefault: descriptor.id) : nil
+                let snapshot = await self.connections.readDefault(descriptor, executableURL: executableURL,
+                    connection: self.activeConnection, authOnly: true)
+                guard !Task.isCancelled, self.isFollowing(verificationID, descriptor.id, executableURL,
+                    runtimeSelections), self.loginController.isRunning else { return }
+                // A check can supersede this read while the same console is still open. Discard
+                // only this result and keep following.
+                if let read, !self.connections.finishRead(read, with: snapshot) { continue }
+                guard isDone(snapshot) else { continue }
+                if descriptor.id == .antigravityCLI, snapshot.state == .signedIn {
+                    self.connections.refreshAntigravityUsage(snapshot, executableURL: executableURL,
+                                                           runtimeSelections: runtimeSelections)
                 }
-                if self.loginController.phase == .completed, let next { await next() }
+                self.loginController.completeVerifiedConnection()
                 return
             }
         }

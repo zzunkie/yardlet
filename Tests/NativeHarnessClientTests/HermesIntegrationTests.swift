@@ -19,7 +19,6 @@ final class HermesIntegrationTests: XCTestCase {
         let command = await broker.loginCommand(for: .hermes, executableURL: executable)
         XCTAssertEqual(command?.arguments, ["acp", "--setup"])
         XCTAssertNil(command?.initialInput)
-        XCTAssertEqual(command?.usesPseudoTerminal, true)
         XCTAssertEqual(command?.interaction, .terminalRequired)
         let logout = await broker.logoutCommand(for: .hermes, executableURL: executable)
         XCTAssertNil(logout)
@@ -39,7 +38,7 @@ final class HermesIntegrationTests: XCTestCase {
         XCTAssertEqual(snapshot.state, .unknown)
         XCTAssertTrue(snapshot.canLogin)
         XCTAssertFalse(snapshot.canLogout)
-        XCTAssertEqual(snapshot.detail, L10n.string("This runtime does not expose a structured account probe."))
+        XCTAssertEqual(snapshot.detail, L10n.string("Account status could not be confirmed."))
         let missing = await HarnessAccountBroker().snapshot(for: descriptor, executableURL: nil)
         XCTAssertEqual(missing.state, .unavailable)
     }
