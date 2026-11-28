@@ -262,7 +262,54 @@ final class NotificationRoutingTests: XCTestCase {
         let question = try await waitForPost(in: center, count: 2)
         XCTAssertEqual(question.target.requestID, "question-1", "Neither the finished turn nor the approval notified")
         XCTAssertEqual(question.title, L10n.string("Task has a question"))
-        XCTAssertFalse(question.showsWhileActive)
+        XCTAssertTrue(question.showsWhileActive, "No window draws the task: it shows while Yardlet is in front")
+
+        // A task in a pane beside the chosen one is not on screen, so it notifies, but what it asks is in sight: its
+        // notification does not show while Yardlet is in front.
+        await model.respond(
+            to: "question-1",
+            answer: .questions([.init(question: "Which layout?", selectedLabels: ["Grid"])]),
+            in: session
+        )
+        let createdBeside = await model.createSession(
+            harness: .codex, workspaceURL: URL(filePath: "/tmp/notification-beside"),
+            runtimeExecutableURL: URL(filePath: "/tmp/codex"), title: "Beside"
+        )
+        let beside = try XCTUnwrap(createdBeside)
+        model.setShowsTasks(true, inWindow: window)
+        model.splits.activate(.session(session.id))
+        model.splits.split(.right, placing: beside.id)
+        XCTAssertFalse(model.isSessionVisible(session.id))
+        XCTAssertTrue(model.isSessionDrawn(session.id))
+        await transport.emit(canUseTool("question-2", tool: "AskUserQuestion", input: .object([
+            "questions": .array([.object([
+                "question": .string("Which color?"), "header": .string("Color"), "multiSelect": .bool(false),
+                "options": .array([.object(["label": .string("Blue")]), .object(["label": .string("Green")])])
+            ])])
+        ])))
+        let drawn = try await waitForPost(in: center, count: 3)
+        XCTAssertEqual(drawn.target.requestID, "question-2")
+        XCTAssertFalse(drawn.showsWhileActive)
+
+        // A split view that shows the chosen pane alone draws only that pane: what the task beside it asks is out of
+        // sight again, so its notification shows while Yardlet is in front.
+        await model.respond(
+            to: "question-2",
+            answer: .questions([.init(question: "Which color?", selectedLabels: ["Blue"])]),
+            in: session
+        )
+        model.splits.toggleMaximizedPane()
+        XCTAssertEqual(model.splits.maximizedPane?.sessionID, beside.id)
+        XCTAssertFalse(model.isSessionDrawn(session.id))
+        await transport.emit(canUseTool("question-3", tool: "AskUserQuestion", input: .object([
+            "questions": .array([.object([
+                "question": .string("Which size?"), "header": .string("Size"), "multiSelect": .bool(false),
+                "options": .array([.object(["label": .string("Small")]), .object(["label": .string("Large")])])
+            ])])
+        ])))
+        let maximized = try await waitForPost(in: center, count: 4)
+        XCTAssertEqual(maximized.target.requestID, "question-3")
+        XCTAssertTrue(maximized.showsWhileActive, "The pane shown alone hides the task's pane")
         await model.shutdown()
     }
 
@@ -407,6 +454,8 @@ final class NotificationRoutingTests: XCTestCase {
         XCTAssertTrue(approval.offersAllowOnce)
         XCTAssertEqual(approval.identifier, "yardlet-session-\(session.id.uuidString)-waitingForApproval-bash-1")
         XCTAssertEqual(approval.title, L10n.string("Task needs your attention"))
+        XCTAssertEqual(approval.body, "Claude approvals: Use Bash: swift test", "It says what \"Allow once\" allows")
+        XCTAssertTrue(approval.showsWhileActive, "\"Allow once\" answers it while Yardlet is in front")
 
         await model.respond(to: "bash-1", decision: .deny, in: session)
         await transport.emit(canUseTool("question-1", tool: "AskUserQuestion", input: .object([
@@ -419,6 +468,7 @@ final class NotificationRoutingTests: XCTestCase {
         ])))
         let question = try await waitForPost(in: center, count: 2)
         XCTAssertEqual(question.target.requestID, "question-1")
+        XCTAssertEqual(question.body, "Claude approvals: Which layout?")
         XCTAssertFalse(question.offersAllowOnce)
 
         await model.respond(
@@ -808,6 +858,7 @@ final class NotificationRoutingTests: XCTestCase {
         let posted = try await waitForPost(in: center)
         XCTAssertEqual(posted.title, "Mac Studio · Approve the index migration")
         XCTAssertTrue(posted.offersAllowOnce)
+        XCTAssertTrue(posted.showsWhileActive)
         XCTAssertEqual(attention.attentionRequests, 1)
 
         // The same request does not bounce a second time.

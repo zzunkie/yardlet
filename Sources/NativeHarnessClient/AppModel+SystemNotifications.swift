@@ -11,6 +11,10 @@ import Observation
 ///   as the request card's narrowest allow, and only while that request still waits in that task
 ///   and the card itself would offer it (`NotificationApprovalProjection`). Otherwise the action
 ///   opens the task. The notification is withdrawn once its request is answered, wherever.
+/// - A request or a question shows while Yardlet is in front too, unless a window draws its task,
+///   so the person answers it without leaving the task they work in
+///   (`TaskNotificationKind.showsWhileActive`). It says what it asks, in the words a phone's
+///   notification has for it (`RemoteTaskProjection.requestSummary`).
 /// - A finished turn is announced only when the person asked for it and the task does not go on
 ///   by itself (`TurnCompletionAnnouncement`).
 /// - The Dock badge counts the tasks that need the person (`TaskAttentionProjection`).

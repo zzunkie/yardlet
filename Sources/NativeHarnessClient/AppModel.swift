@@ -1195,6 +1195,15 @@ final class AppModel {
         return workspace.panels.trailingSurfaceID == "sideChat" && workspace.sideChatSessionID == id
     }
 
+    /// Whether a window draws the task: the one it shows, the side chat beside it, or another pane of the split it
+    /// shows. A pane beside the chosen one is not visible (`isSessionVisible`), so a request it waits on notifies, but
+    /// the request is in sight. While the split shows the chosen pane alone (`SplitStore.maximizedPane`), the window
+    /// draws none of the others.
+    func isSessionDrawn(_ id: UUID) -> Bool {
+        isSessionVisible(id) || (!taskWindowIDs.isEmpty && splits.maximizedPane == nil
+            && splits.activeSplit?.sessionIDs.contains(id) == true)
+    }
+
     private func contextualDraft(_ draft: CodexComposerDraft, for sessionID: UUID) throws -> CodexComposerDraft {
         guard let context = store.sessions.first(where: { $0.id == sessionID })?.inheritedContext,
               context.nativeForkSource == nil, context.nativeConversationOrigin == nil,
@@ -7271,7 +7280,8 @@ final class AppModel {
     }
 
     /// Notifies how a task's turn ended or what it waits on, as Settings › Notifications lets each kind
-    /// (`TaskNotificationKind`): out of the box only for a task that is not on screen.
+    /// (`TaskNotificationKind`): out of the box only for a task that is not on screen. What it waits on shows while
+    /// Yardlet is in front too, unless a window draws the task (`TaskNotificationKind.showsWhileActive`).
     private func postBackgroundNotification(
         for sessionID: UUID,
         status: SessionStatus,
@@ -7287,15 +7297,18 @@ final class AppModel {
         let key = "\(sessionID.uuidString):\(status.rawValue)" + (requestID.map { ":\($0)" } ?? "")
         guard notifiedBackgroundStates.insert(key).inserted else { return }
 
+        // What the request asks, in the words a phone's notification has for it, so "Allow once" says what it allows.
+        let asking = request == nil ? nil : AppModelRemoteBridge.requestSummary(of: session, in: self)
+            .flatMap(\.summary).map { "\(session.title): \($0)" }
         let title: String
         let body: String
         switch status {
         case .waitingForApproval where kind == .question:
             title = L10n.string("Task has a question")
-            body = L10n.format("%@ is waiting for your answer.", session.title)
+            body = asking ?? L10n.format("%@ is waiting for your answer.", session.title)
         case .waitingForApproval:
             title = L10n.string("Task needs your attention")
-            body = L10n.format("%@ is waiting for approval.", session.title)
+            body = asking ?? L10n.format("%@ is waiting for approval.", session.title)
         case .completed:
             title = L10n.string("Task completed")
             body = L10n.format("%@ finished.", session.title)
@@ -7328,7 +7341,7 @@ final class AppModel {
             identifier: identifier,
             target: SystemNotificationTarget(sessionID: sessionID, requestID: requestID),
             offersAllowOnce: offersAllowOnce,
-            showsWhileActive: kind.showsWhileActive(in: preferences)
+            showsWhileActive: kind.showsWhileActive(drawn: isSessionDrawn(sessionID), in: preferences)
         ))
     }
 
