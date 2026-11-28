@@ -492,7 +492,8 @@ struct AccountRow: View {
     }
 
     private var identityButton: some View {
-        Button(action: onSelect) {
+        let warning = choice.snapshot?.expiryWarning()
+        return Button(action: onSelect) {
             HStack(spacing: 10) {
                 Image(systemName: selected ? "checkmark.circle.fill" : "circle")
                     .foregroundStyle(selected ? ParityTheme.accent : Color.secondary.opacity(canChoose ? 0.5 : 0.25))
@@ -504,6 +505,10 @@ struct AccountRow: View {
                     AccountTitleLine(title: title, organization: organization, weight: .medium)
                     Text(subtitle).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(isManaged ? 2 : 1)
                         .accountDetailLine()
+                    if let warning {
+                        Text(warning).font(.system(size: 10.5)).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true).accountDetailLine()
+                    }
                     if let freshness { AccountFreshnessLine(freshness: freshness).accountDetailLine() }
                     if isExcludedFromAutomaticAssignment {
                         Text(L10n.string("Excluded from automatic assignment"))
@@ -524,6 +529,7 @@ struct AccountRow: View {
         .disabled(!canChoose && !selected)
         .allowsHitTesting(canChoose)
         .accessibilityLabel(title + (organization.map { ", " + $0 } ?? "") + ", " + subtitle
+            + (warning.map { ", " + $0 } ?? "")
             + (isExcludedFromAutomaticAssignment ? ", " + L10n.string("Excluded from automatic assignment") : "")
             + (taskMoveLine.map { ", " + $0 } ?? ""))
         .accessibilityValue(selected ? selectedValue : choice.status)

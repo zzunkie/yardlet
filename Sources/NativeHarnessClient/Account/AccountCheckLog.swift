@@ -7,7 +7,7 @@ import Foundation
 /// and no CLI output, and leaves the machine only if the person sends it. Tests never write it: it
 /// is on only when the live app sets `fileURL`.
 enum AccountCheckLog {
-    struct Entry: Encodable, Sendable {
+    struct Entry: Encodable, Equatable, Sendable {
         var event = "status"
         var harness: String
         /// "default", or the saved connection's id.
@@ -25,6 +25,8 @@ enum AccountCheckLog {
         var credentialItemMilliseconds: Int?
         /// Names only: the variables a login shell sets that decide how Claude Code signs in.
         var shellVariables: [String]?
+        var loginExpiresAt: Date?
+        var usageProbeFailed = false
         var failure: String?
     }
 
@@ -42,6 +44,7 @@ enum AccountCheckLog {
     private final class State: @unchecked Sendable {
         let lock = NSLock()
         var fileURL: URL?
+        var healthy: [String: (entry: Entry, time: Date)] = [:]
     }
 
     private static let state = State()
@@ -49,13 +52,29 @@ enum AccountCheckLog {
 
     static var fileURL: URL? {
         get { state.lock.withLock { state.fileURL } }
-        set { state.lock.withLock { state.fileURL = newValue } }
+        set {
+            state.lock.withLock {
+                if state.fileURL != newValue { state.healthy.removeAll() }
+                state.fileURL = newValue
+            }
+        }
     }
 
     static func record(_ entry: Entry, at date: Date = Date()) {
         state.lock.withLock {
             guard let file = state.fileURL else { return }
+            let healthy = entry.event == "status" && entry.state == AccountAuthState.signedIn.rawValue
+                && entry.exitCode == 0 && entry.failure == nil && !entry.usageProbeFailed
+            var signature = entry
+            signature.milliseconds = nil
+            signature.credentialItemMilliseconds = nil
+            if healthy, let last = state.healthy[entry.account], last.entry == signature,
+               (0..<3600).contains(date.timeIntervalSince(last.time)) { return }
             let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .custom { date, encoder in
+                var value = encoder.singleValueContainer()
+                try value.encode(date.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true)))
+            }
             encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
             let time = ISO8601DateFormatter().string(from: date)
             guard var data = try? encoder.encode(Line(time: time, entry: entry)) else { return }
@@ -69,7 +88,12 @@ enum AccountCheckLog {
                 if let line = kept.firstIndex(of: 0x0A) { kept = Data(kept[kept.index(after: line)...]) }
             }
             kept.append(data)
-            try? StateFile.write(kept, to: file, isPrivate: true)
+            do {
+                try StateFile.write(kept, to: file, isPrivate: true)
+                state.healthy[entry.account] = healthy ? (signature, date) : nil
+            } catch {
+                state.healthy.removeValue(forKey: entry.account)
+            }
         }
     }
 

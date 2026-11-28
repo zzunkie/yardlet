@@ -236,9 +236,11 @@ schedule lists, the scratch folders' path, and the bundled CLI it can run.
 - **Renewals are not cut off.** A renewal gets a new refresh token and retires the old one, and Claude Code, told that a
   stored refresh token is dead, clears the login from the store every program on that login shares. So a CLI read for its
   limits is never stopped first: the end of its input ends it, also at the time limit, and only one still running 20
-  seconds later is stopped (`ClaudeUsageProbe`). `auth status` contacts no server, so its time limit cuts nothing off.
+  seconds later is stopped (`ClaudeUsageProbe`). Title requests also allow 20 seconds to exit after timeout or cancellation. `auth status` contacts no server, so its time limit cuts nothing off.
 - **What is recorded.** `~/.yardlet/logs/account-checks.log` (one JSON object a line, 0600, the newest half kept past
-  512 KiB) holds each Claude status check and each refused turn: the program, the config folder, state, exit code, how
+  512 KiB) records changes, failed checks and refused turns immediately. Each account gets at most one unchanged
+  healthy status entry per hour while Yardlet runs. A status entry includes the login expiry when known, whether the
+  usage probe failed, and the following diagnostics: the program, the config folder, state, exit code, how
   long it took, the CLI's `authMethod` and `apiProvider`, and for a login that was not found, whether its Keychain item
   exists (identity only, never its value) and the shell variables above by name. It holds no credential, address or CLI
   output, and nothing sends it.
@@ -253,7 +255,9 @@ Switch 0.5.0 uses. Because the CLI treats the usage endpoint as nonessential tra
 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is removed for this lookup only. It runs in an empty temporary folder, which
 is deleted at the end. The response's `limits` rows (`session` for 5 hours, `weekly` for the week, per-model weekly when
 `scope.model` is present) come first; without them, `five_hour`, `seven_day` and `model_scoped` are read. An unknown
-group is not shown as a limit. `rate_limits_available: false` (API keys and the like) or a failed lookup shows "Claude
+group is not shown as a limit. After a failed lookup, Yardlet checks the login once more. A cleared login shows as
+signed out immediately. A still-signed-in account keeps its last known quotas. Its account row shows a warning from
+ten days before the expiry reported by `auth status`. `rate_limits_available: false` (API keys and the like) or a failed lookup with no prior quotas shows "Claude
 Code did not report plan limits for this login." and is not turned into 0.
 
 ## Antigravity account and plan limit lookup

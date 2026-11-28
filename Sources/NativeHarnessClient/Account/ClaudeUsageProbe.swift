@@ -185,9 +185,8 @@ enum ClaudeUsageProbe {
         }
     }
 
-    /// The CLI writes microsecond timestamps, which the ISO 8601 formatter does not accept.
     static func date(_ value: String) -> Date? {
-        let trimmed = value.replacingOccurrences(of: #"\.\d+"#, with: "", options: .regularExpression)
-        return ISO8601DateFormatter().date(from: trimmed)
+        (try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(value))
+            ?? (try? Date.ISO8601FormatStyle().parse(value))
     }
 }

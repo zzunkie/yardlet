@@ -4335,3 +4335,7 @@
 "Cursor Agent can run code and access files in %@. It runs there only once you trust the folder's contents, and remembers your answer for the folder." = "Cursor Agent は %@ でコードを実行し、ファイルにアクセスできます。フォルダの内容を信頼した場合にのみそこで実行され、このフォルダへの回答は記憶されます。";
 "Trust this folder" = "このフォルダを信頼";
 "Don't trust" = "信頼しない";
+"Sign-in expires in %lld days" = "ログインは%lld日後に期限切れになります";
+"Sign-in expires tomorrow" = "ログインは明日期限切れになります";
+"Sign-in expires today" = "ログインは今日期限切れになります";
+"Sign-in expired" = "ログインの有効期限が切れました";

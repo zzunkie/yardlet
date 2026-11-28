@@ -19,8 +19,9 @@ enum ClaudeTitleRequest {
     }
 
     static func run(executableURL: URL, environment: [String: String], model: String, prompt: String,
-                    timeout: Duration = RecentConversationTitle.timeout) async throws -> String {
-        try await Task.detached(priority: .userInitiated) {
+                    timeout: Duration = RecentConversationTitle.timeout, exitGrace: Duration = .seconds(20)) async throws -> String {
+        let worker = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
             let folder = try RecentConversationTitle.makeFolder()
             defer { try? FileManager.default.removeItem(at: folder) }
 
@@ -40,27 +41,35 @@ enum ClaudeTitleRequest {
             let exit = try ProcessExit(running: process, asAgent: true)
 
             let timeoutTask = Task {
-                do { try await Task.sleep(for: timeout) } catch { return false }
+                // Cancellation also starts the grace period. EOF lets Claude finish saving its login.
+                try? await Task.sleep(for: timeout)
                 guard process.isRunning else { return false }
-                NativeProcessTree.terminate(process: process)
+                try? input.fileHandleForWriting.close()
+                if !(await exit.wait(timeout: exitGrace)), process.isRunning {
+                    NativeProcessTree.terminate(process: process)
+                }
                 return true
             }
-            defer {
-                if process.isRunning { NativeProcessTree.terminate(process: process) }
+            return try await withTaskCancellationHandler {
+                try? input.fileHandleForWriting.write(contentsOf: Data(prompt.utf8))
+                try? input.fileHandleForWriting.close()
+                let stderr = Task.detached { errors.fileHandleForReading.readDataToEndOfFile() }
+                let stdout = output.fileHandleForReading.readDataToEndOfFile()
+                let ended = await exit.wait(timeout: timeout)
+                timeoutTask.cancel()
+                let timedOut = await timeoutTask.value
+                try Task.checkCancellation()
+                guard ended, !timedOut else {
+                    throw HarnessAdapterError.capabilityUnavailable(
+                        L10n.format("%@ did not answer in time.", HarnessKind.claudeCode.displayName))
+                }
+                return try title(fromOutput: stdout, exitCode: process.terminationStatus,
+                                 errorOutput: await stderr.value)
+            } onCancel: {
+                timeoutTask.cancel()
             }
-            try? input.fileHandleForWriting.write(contentsOf: Data(prompt.utf8))
-            try? input.fileHandleForWriting.close()
-            let stderr = Task.detached { errors.fileHandleForReading.readDataToEndOfFile() }
-            let stdout = output.fileHandleForReading.readDataToEndOfFile()
-            let ended = await exit.wait(timeout: timeout)
-            timeoutTask.cancel()
-            if await timeoutTask.value || !ended {
-                throw HarnessAdapterError.capabilityUnavailable(
-                    L10n.format("%@ did not answer in time.", HarnessKind.claudeCode.displayName))
-            }
-            return try title(fromOutput: stdout, exitCode: process.terminationStatus,
-                             errorOutput: await stderr.value)
-        }.value
+        }
+        return try await withTaskCancellationHandler { try await worker.value } onCancel: { worker.cancel() }
     }
 
     /// The name in the CLI's `--output-format json` result, or the error it reported.

@@ -56,6 +56,38 @@ final class AccountCommandRunnerTests: XCTestCase {
         }
     }
 
+    func testTitleTimeoutAndCancellationLetTheCLIFinishSaving() async throws {
+        for cancel in [true, false] {
+            let fixture = try makeExecutable("""
+            #!/bin/sh
+            cat >/dev/null
+            touch "$0.ready"
+            sleep 2
+            touch "$0.saved"
+            """)
+            defer { try? FileManager.default.removeItem(at: fixture.root) }
+            let task = Task {
+                try await ClaudeTitleRequest.run(executableURL: fixture.executable, environment: [:],
+                    model: "fixture", prompt: "Title", timeout: cancel ? .seconds(30) : .seconds(1),
+                    exitGrace: .seconds(10))
+            }
+            if cancel {
+                let ready = fixture.executable.appendingPathExtension("ready")
+                try await waitUntil { FileManager.default.fileExists(atPath: ready.path) }
+                task.cancel()
+            }
+            do {
+                _ = try await task.value
+                XCTFail("An interrupted title request cannot return a title")
+            } catch {
+                if cancel { XCTAssertTrue(error is CancellationError) }
+                else { XCTAssertTrue(error.localizedDescription.contains(
+                    L10n.format("%@ did not answer in time.", HarnessKind.claudeCode.displayName))) }
+            }
+            XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.executable.appendingPathExtension("saved").path))
+        }
+    }
+
     /// A stalled probe is stopped with its children and reaped by Foundation. Neither a
     /// wrapper that exits zero once its child is stopped nor a stolen exit status may read
     /// as the command's answer.

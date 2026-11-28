@@ -16,6 +16,7 @@ struct AccountSnapshotCache {
         let accountLabel: String?
         let accountOrganization: String?
         let accountPlan: String?
+        let loginExpiresAt: Date?
         let checkedAt: Date
         let usage: [AccountUsageMetric]
         let usageResets: AccountUsageResets?
@@ -30,6 +31,7 @@ struct AccountSnapshotCache {
             accountLabel = snapshot.state == .signedIn ? snapshot.accountLabel : nil
             accountOrganization = snapshot.state == .signedIn ? snapshot.accountOrganization : nil
             accountPlan = snapshot.state == .signedIn ? snapshot.accountPlan : nil
+            loginExpiresAt = snapshot.state == .signedIn ? snapshot.loginExpiresAt : nil
             checkedAt = snapshot.checkedAt
             usage = snapshot.state == .signedIn ? snapshot.usage.filter { $0.evidence != .localSession } : []
             // A use reads the account again first, so the reset it takes needs no remembered ID.
@@ -46,7 +48,7 @@ struct AccountSnapshotCache {
             HarnessAccountSnapshot(
                 id: id, harness: harness, providerID: providerID, state: state,
                 accountLabel: accountLabel, accountOrganization: accountOrganization,
-                accountPlan: accountPlan,
+                accountPlan: accountPlan, loginExpiresAt: loginExpiresAt,
                 detail: state == .signedIn ? L10n.string("The selected runtime reports usable authentication.")
                     : ProviderSignIn.neededHere(harness),
                 credentialOwner: HarnessCatalog.descriptor(for: harness)

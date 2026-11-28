@@ -28,7 +28,7 @@ import XCTest
             "Fable · " + HarnessAccountBroker.usageWindowLabel(minutes: 10_080, fallback: "")
         ], "The newer rows win and an unknown window is not shown as a plan limit")
         XCTAssertEqual(usage.map(\.usedFraction), [0.02, 0.95, 0.03])
-        XCTAssertEqual(usage[0].resetsAt, Date(timeIntervalSince1970: 1_791_309_600))
+        XCTAssertEqual(try XCTUnwrap(usage[0].resetsAt).timeIntervalSince1970, 1_791_309_600.123456, accuracy: 0.001)
         XCTAssertEqual(usage[1].resetsAt, Date(timeIntervalSince1970: 1_791_781_200))
         XCTAssertNil(usage[2].resetsAt)
         XCTAssertTrue(usage.allSatisfy { $0.evidence == .exactQuota })

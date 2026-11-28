@@ -377,10 +377,8 @@ actor HarnessAccountBroker {
             )
         }
 
-        let started = ContinuousClock.now
-        let result: AccountCommandResult
-        do {
-            result = try await AccountCommandRunner.run(
+        func readStatus() async throws -> AccountCommandResult {
+            try await AccountCommandRunner.run(
                 executableURL: executableURL,
                 arguments: arguments,
                 environment: connection?.environment ?? [:],
@@ -388,17 +386,47 @@ actor HarnessAccountBroker {
                 // cut off here reads as "not verified", which says less than the answer it waits for.
                 timeout: descriptor.id == .claudeCode ? Self.claudeStatusTimeout : .seconds(12)
             )
+        }
+        var started = ContinuousClock.now
+        var result: AccountCommandResult
+        do {
+            result = try await readStatus()
         } catch {
             if descriptor.id == .claudeCode {
-                logClaudeCheck(runtime: executableURL, state: nil, result: nil, started: started,
+                logClaudeCheck(runtime: executableURL, state: nil, result: nil, milliseconds: AccountCheckLog.milliseconds(since: started),
                                failure: error.localizedDescription)
             }
             throw error
         }
-        let state = Self.commandAccountState(
-            for: descriptor.id,
-            result: result
-        )
+        var milliseconds = AccountCheckLog.milliseconds(since: started)
+        var loggedResult: AccountCommandResult? = result
+        var recheckFailure: String?
+        var state = Self.commandAccountState(for: descriptor.id, result: result)
+        var metrics: [AccountUsageMetric]?
+        var usageProbeFailed = false
+        if descriptor.id == .claudeCode, state == .signedIn {
+            metrics = try? await ClaudeUsageProbe.read(executableURL: executableURL,
+                environment: connection?.environment ?? [:])
+            if metrics == nil {
+                usageProbeFailed = true
+                // A failed renewal can clear the login while the usage command runs.
+                started = .now
+                do {
+                    let latest = try await readStatus()
+                    loggedResult = latest
+                    if let loggedIn = Self.structuredAccountPayload(from: latest.output)?["loggedIn"]?.boolValue {
+                        result = latest
+                        state = loggedIn ? .signedIn : .signedOut
+                    } else {
+                        recheckFailure = "Unconfirmed login on recheck"
+                    }
+                } catch {
+                    loggedResult = nil
+                    recheckFailure = "Login recheck failed"
+                }
+                milliseconds = AccountCheckLog.milliseconds(since: started)
+            }
+        }
         let canLogout: Bool
         if descriptor.id == .openCode {
             let normalized = AccountLoginController.stripANSI(result.output).lowercased()
@@ -447,12 +475,11 @@ actor HarnessAccountBroker {
                                                    subscription: claudeIdentity?.subscription)
         }
         if descriptor.id == .claudeCode {
-            logClaudeCheck(runtime: executableURL, state: state, result: result, started: started, failure: nil)
+            logClaudeCheck(runtime: executableURL, state: state, result: loggedResult, milliseconds: milliseconds,
+                           failure: recheckFailure, usageProbeFailed: usageProbeFailed)
         }
         var usage = [notExposedUsage()]
         if descriptor.id == .claudeCode, state == .signedIn {
-            let metrics = try? await ClaudeUsageProbe.read(executableURL: executableURL,
-                environment: connection?.environment ?? [:])
             usage = metrics.flatMap { $0.isEmpty ? nil : $0 } ?? [AccountUsageMetric(id: "not-reported",
                 label: L10n.string("Usage"), usedFraction: nil,
                 detail: L10n.string("Claude Code did not report plan limits for this login."),
@@ -467,6 +494,9 @@ actor HarnessAccountBroker {
                 ? Self.kiroAccountEmail(from: result.output) : claudeIdentity?.displayLabel,
             accountOrganization: claudeIdentity?.groupingOrganization,
             accountPlan: claudeIdentity?.planLabel,
+            loginExpiresAt: descriptor.id == .claudeCode && state == .signedIn
+                ? Self.claudeStatusFields(from: result.output).loginExpiresAt : nil,
+            usageProbeFailed: usageProbeFailed ? true : nil,
             detail: detail,
             credentialOwner: descriptor.id == .openCode
                 ? L10n.string("OpenCode provider credentials and environment")
@@ -509,26 +539,28 @@ actor HarnessAccountBroker {
         return ClaudeAccountIdentity(email: email, organization: text("organizationName"), subscription: nil)
     }
 
-    /// The two facts of `claude auth status` that say how the CLI signs in.
-    static func claudeStatusFields(from output: String) -> (authMethod: String?, apiProvider: String?) {
+    /// Non-secret metadata the CLI reports about its login.
+    static func claudeStatusFields(from output: String) -> (authMethod: String?, apiProvider: String?, loginExpiresAt: Date?) {
         let payload = structuredAccountPayload(from: output)
-        return (payload?["authMethod"]?.stringValue, payload?["apiProvider"]?.stringValue)
+        return (payload?["authMethod"]?.stringValue, payload?["apiProvider"]?.stringValue,
+                payload?["loginExpiresAt"]?.stringValue.flatMap(ClaudeUsageProbe.date))
     }
 
     /// One Claude status check, for `AccountCheckLog`. The Keychain item is looked at only when the
     /// CLI found no login, which is when it tells "no login here" from "a login it could not read".
     private func logClaudeCheck(runtime: URL, state: AccountAuthState?, result: AccountCommandResult?,
-                                started: ContinuousClock.Instant, failure: String?) {
+                                milliseconds: Int, failure: String?, usageProbeFailed: Bool = false) {
         guard AccountCheckLog.fileURL != nil else { return }
-        let milliseconds = AccountCheckLog.milliseconds(since: started)
         var entry = AccountCheckLog.Entry(harness: HarnessKind.claudeCode.rawValue, account: connection?.id ?? "default",
             runtime: runtime.path(percentEncoded: false), configHome: claudeConfigFolder ?? "default",
             state: state?.rawValue, exitCode: result?.exitCode, milliseconds: milliseconds, failure: failure)
         if let result {
             let fields = Self.claudeStatusFields(from: result.output)
+            entry.loginExpiresAt = fields.loginExpiresAt
             entry.authMethod = fields.authMethod
             entry.apiProvider = fields.apiProvider
         }
+        entry.usageProbeFailed = usageProbeFailed
         if state != .signedIn {
             let looked = ContinuousClock.now
             entry.credentialItem = Self.claudeCredentialItem(configDirectory: claudeConfigFolder)
