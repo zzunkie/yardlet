@@ -68,8 +68,7 @@ final class AppModelRemoteBridge: RemoteBridge {
     var watchesHostSettings = false
     var trackingHostSettings = false
     var hostSettingsObservers: [any NSObjectProtocol] = []
-    /// "Send now in Antigravity tasks" changes whether an Antigravity task steers (`RemoteTask.steers`).
-    nonisolated(unsafe) private var antigravitySteerObserver: (any NSObjectProtocol)?
+    private let snapshotPreferences: RemoteSnapshotPreferences
     var answeredHostSettings: RemoteHostSettings?
     var builtHostUsageRows: (inputs: TokenUsageRowsInputs, rows: HostUsageRows)?
     /// How many times the usage rows were read anew, for the main thread's budget checks.
@@ -94,21 +93,14 @@ final class AppModelRemoteBridge: RemoteBridge {
     init(model: AppModel, makePreview: RemoteImagePreviews.Make? = nil,
          browser: RemoteTabBridge.Environment = .init(client: { nil })) {
         self.model = model
+        snapshotPreferences = RemoteSnapshotPreferences(defaults: model.preferences)
         previews = makePreview.map(RemoteImagePreviews.init(make:))
         subtaskPreviewMaker = makePreview
         self.browser = RemoteTabBridge(model: model, environment: browser)
         previews?.onReady = { [weak self] askers in self?.previewsReady(askers) }
         // A tab's `file:` page is shown only when `readFile` would serve it (§15.22, §15.25).
         self.browser.fileScope = { [weak self] taskID in try? await self?.fileScope(taskID: taskID).get() }
-        antigravitySteerObserver = NotificationCenter.default.addObserver(
-            forName: AntigravityLiveSteer.didChangeNotification, object: nil, queue: nil
-        ) { [weak self] _ in
-            Task { @MainActor in self?.tasksChanged() }
-        }
-    }
-
-    deinit {
-        if let antigravitySteerObserver { NotificationCenter.default.removeObserver(antigravitySteerObserver) }
+        snapshotPreferences.onChange = { [weak self] in self?.tasksChanged() }
     }
 
     func setChangeHandler(_ handler: @escaping @Sendable (RemoteBridgeChange) -> Void) {
@@ -121,7 +113,7 @@ final class AppModelRemoteBridge: RemoteBridge {
     func snapshot() -> RemoteSnapshot {
         guard let model else { return .empty }
         var snapshot = cachedSnapshot ?? withObservationTracking {
-            Self.snapshot(of: model)
+            Self.snapshot(of: model, antigravitySteers: snapshotPreferences.antigravitySteers)
         } onChange: { [weak self] in
             Task { @MainActor in self?.tasksChanged() }
         }
@@ -147,7 +139,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         return snapshot
     }
 
-    static func snapshot(of model: AppModel) -> RemoteSnapshot {
+    private static func snapshot(of model: AppModel, antigravitySteers: Bool) -> RemoteSnapshot {
         let sessions = model.store.listedSessions
         let sidebar = model.sidebarLists
         var snapshot = RemoteTaskProjection.snapshot(
@@ -188,7 +180,7 @@ final class AppModelRemoteBridge: RemoteBridge {
             Self.decorateTaskActions(&snapshot.tasks[index], session: session, model: model)
             if acceptsImages(session, in: model) { snapshot.tasks[index].acceptsImages = true }
             if inputPolicy(session, in: model).showsMentionControl { snapshot.tasks[index].acceptsFiles = true }
-            if FollowUpPolicy(harness: session.harness)?.steers == true { snapshot.tasks[index].steers = true }
+            if FollowUpPolicy(harness: session.harness, antigravitySteers: antigravitySteers)?.steers == true { snapshot.tasks[index].steers = true }
             // What the task's browser waits on from the person, when the task waits on no request of its own: the tab's
             // wait already marks it waiting, so without this the phone would announce a wait that names nothing.
             let waitsOnARequest = snapshot.tasks[index].pendingRequest != nil

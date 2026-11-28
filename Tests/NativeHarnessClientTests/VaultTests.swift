@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import CoreImage.CIFilterBuiltins
 import Foundation
 import XCTest
@@ -12,6 +13,88 @@ import YardletAgentTools
 /// vault unless the page certainly took nothing.
 @MainActor
 final class VaultTests: XCTestCase {
+    func testPreparingPublishesAvailabilityWhileCredentialsAreBeingHidden() async throws {
+        let secrets = InMemoryVaultSecretStore()
+        try secrets.saveShowsCredentials(true)
+        var signing: CheckedContinuation<Bool, Never>?
+        let checkBuild: @MainActor @Sendable () async -> Bool = {
+            await withCheckedContinuation { signing = $0 }
+        }
+        let center = VaultCenter(environment: .init(
+            secrets: secrets, repository: InMemoryVaultRepository(), hmac: MacVault.hmac,
+            isAllowedBuild: false, checkBuild: checkBuild, defaults: .vaultTests()))
+        var observedAvailability: [Bool] = []
+        let subscription = center.objectWillChange.sink { observedAvailability.append(center.isAllowedBuild) }
+        defer { subscription.cancel() }
+
+        let preparing = Task { await center.prepare() }
+        try await waitUntil { signing != nil }
+        // The hide request runs on this actor before preparation can publish the signing result.
+        signing?.resume(returning: true)
+        await center.setHidesCredentials(true)
+        await preparing.value
+
+        XCTAssertEqual(observedAvailability, [false], "Publish availability before changing it")
+        XCTAssertTrue(center.isAllowedBuild)
+        XCTAssertTrue(center.hidesCredentials)
+        XCTAssertFalse(try secrets.loadShowsCredentials())
+    }
+
+    func testSecretStoreRunsOffMainAndOverlappingSavesKeepPasswordHistory() async throws {
+        final class Store: VaultSecretStoring, @unchecked Sendable {
+            let memory = InMemoryVaultSecretStore()
+            private let lock = NSLock()
+            var started: Bool { lock.withLock { !firstRead } }
+            let resume = DispatchSemaphore(value: 0)
+            private var firstRead = true
+
+            func load(_ id: UUID) throws -> VaultSecret? {
+                XCTAssertFalse(Thread.isMainThread)
+                let isFirst = lock.withLock {
+                    defer { firstRead = false }
+                    return firstRead
+                }
+                if isFirst {
+                    if !Thread.isMainThread { XCTAssertEqual(resume.wait(timeout: .now() + testWaitLimitSeconds), .success) }
+                }
+                return try memory.load(id)
+            }
+
+            func save(_ secret: VaultSecret, for id: UUID) throws {
+                XCTAssertFalse(Thread.isMainThread)
+                try memory.save(secret, for: id)
+            }
+
+            func delete(_ id: UUID) throws { XCTAssertFalse(Thread.isMainThread); try memory.delete(id) }
+            func deleteAll() throws { XCTAssertFalse(Thread.isMainThread); try memory.deleteAll() }
+            func loadWallet() throws -> VaultWallet? { XCTAssertFalse(Thread.isMainThread); return nil }
+            func saveWallet(_ wallet: VaultWallet?) throws { XCTAssertFalse(Thread.isMainThread) }
+            func loadShowsCredentials() throws -> Bool { XCTAssertFalse(Thread.isMainThread); return false }
+            func saveShowsCredentials(_ shows: Bool) throws { XCTAssertFalse(Thread.isMainThread) }
+        }
+
+        let store = Store()
+        let center = VaultCenter(environment: .init(
+            secrets: store, repository: InMemoryVaultRepository(), hmac: MacVault.hmac,
+            isAllowedBuild: true, confirm: { _ in true }, defaults: .vaultTests()))
+        await center.prepare()
+        await center.setHidesCredentials(false)
+        let item = VaultItem(name: "Example", sites: ["example.test"], username: "")
+        let first = Task { try await center.save(item, secret: VaultSecret(password: "first")) }
+        try await waitUntil { store.started }
+        let second = Task {
+            store.resume.signal()
+            try await center.save(item, secret: VaultSecret(password: "second"))
+        }
+        try await first.value
+        try await second.value
+        let saved = await center.secret(of: item.id)
+        XCTAssertEqual(saved?.password, "second")
+        XCTAssertEqual(saved?.previousPasswords?.map(\.password), ["first"])
+        try await center.delete(item.id)
+        try await center.clear()
+    }
+
     func testSitesCoverTheirSubdomainsOverHTTPSAndNothingThatOnlyLooksAlike() {
         let suffixes = PublicSuffixList.bundled
         XCTAssertEqual(VaultSite.suggestion(for: "https://www.github.com/login", suffixes: suffixes), "github.com")
@@ -55,7 +138,7 @@ final class VaultTests: XCTestCase {
     /// picture with Vision: each time-based account becomes an item of its own with no site or password,
     /// a counter-based one is counted and left out, and importing again adds nothing. A site's setup
     /// address gives the same code as the export's account for it.
-    func testAuthenticatorExportsBecomeItemsOfTheirOwn() throws {
+    func testAuthenticatorExportsBecomeItemsOfTheirOwn() async throws {
         func varint(_ value: Int) -> [UInt8] {
             var value = value, bytes: [UInt8] = []
             repeat {
@@ -93,8 +176,10 @@ final class VaultTests: XCTestCase {
         let center = VaultCenter(environment: VaultCenter.Environment(
             secrets: InMemoryVaultSecretStore(), repository: InMemoryVaultRepository(), hmac: MacVault.hmac,
             isAllowedBuild: true, defaults: .vaultTests()))
-        XCTAssertEqual(center.importOneTimeCodes(found.setups), 2)
-        XCTAssertEqual(center.importOneTimeCodes(found.setups), 0)
+        let imported = await center.importOneTimeCodes(found.setups)
+        XCTAssertEqual(imported, 2)
+        let reimported = await center.importOneTimeCodes(found.setups)
+        XCTAssertEqual(reimported, 0)
         XCTAssertEqual(center.items.map(\.name), ["Example", "Second"])
         XCTAssertTrue(center.items.allSatisfy { $0.sites.isEmpty && $0.hasOneTimeCode && !$0.hasPassword })
     }
@@ -117,8 +202,8 @@ final class VaultTests: XCTestCase {
         let center = VaultCenter(environment: VaultCenter.Environment(
             secrets: InMemoryVaultSecretStore(), repository: InMemoryVaultRepository(), hmac: MacVault.hmac,
             isAllowedBuild: true, defaults: .vaultTests()))
-        for item in [vercel, aws, gitHubCode] { try center.save(item, secret: VaultSecret(oneTimeCode: key)) }
-        try center.save(gitHub, secret: VaultSecret(password: "correct horse"))
+        for item in [vercel, aws, gitHubCode] { try await center.save(item, secret: VaultSecret(oneTimeCode: key)) }
+        try await center.save(gitHub, secret: VaultSecret(password: "correct horse"))
         var notices: [String] = []
         center.notify = { title, _, _ in notices.append(title) }
         let task = UUID()
@@ -143,7 +228,7 @@ final class VaultTests: XCTestCase {
         }
         XCTAssertEqual(notices, [])
 
-        center.link(vercel.id, to: "vercel.com")
+        await center.link(vercel.id, to: "vercel.com")
         let linked = try XCTUnwrap(center.items.first { $0.id == vercel.id })
         XCTAssertEqual(linked.sites, ["vercel.com"])
         XCTAssertEqual(center.unlinkedCodeItems(for: "https://vercel.com"), [])
@@ -153,7 +238,7 @@ final class VaultTests: XCTestCase {
                                                             origin: "https://vercel.com"))
         guard case .success = agent else { return XCTFail("the linked code did not fill on its site") }
 
-        center.link(gitHubCode.id, to: "github.com")
+        await center.link(gitHubCode.id, to: "github.com")
         for (kind, item) in [(VaultFillKind.login, gitHub), (.oneTimeCode, gitHubCode)] {
             for name in [nil, "GitHub", "ada"] {
                 let filled = await center.authorize(VaultFillRequest(sessionID: task, itemName: name, kind: kind,
@@ -166,7 +251,7 @@ final class VaultTests: XCTestCase {
         // In a frame, the other item of the account stands in only where its sites hold the pages around the frame
         // too: an item saved for both pages that has no code is refused for that, and the person hears nothing.
         let partner = VaultItem(name: "Partner", sites: ["github.com", "partner.test"], username: "ada")
-        try center.save(partner, secret: VaultSecret(password: "correct horse"))
+        try await center.save(partner, secret: VaultSecret(password: "correct horse"))
         var framed = VaultFillRequest(sessionID: task, itemName: "Partner", kind: .oneTimeCode, origin: "https://github.com")
         framed.framedBy = ["https://www.partner.test"]
         guard case let .failure(noCode) = await center.authorize(framed) else { return XCTFail("a code filled from another site's item") }
@@ -200,12 +285,12 @@ final class VaultTests: XCTestCase {
             secrets: InMemoryVaultSecretStore(), repository: repository, hmac: MacVault.hmac,
             isAllowedBuild: true, defaults: .vaultTests()))
         for item in [instagram, noUsername, google, stripe, gitHub, vercel, personal, binance] + awsCodes {
-            try center.save(item, secret: VaultSecret(oneTimeCode: key))
+            try await center.save(item, secret: VaultSecret(oneTimeCode: key))
         }
         for item in [instagramLogin, otherInstagram, parsec, aws, gitHubLogin, personalLogin] + googleLogins {
-            try center.save(item, secret: VaultSecret(password: "correct horse"))
+            try await center.save(item, secret: VaultSecret(password: "correct horse"))
         }
-        try center.save(stripeLogin, secret: VaultSecret(password: "correct horse", oneTimeCode: key))
+        try await center.save(stripeLogin, secret: VaultSecret(password: "correct horse", oneTimeCode: key))
         let task = UUID()
         func fill(_ kind: VaultFillKind, _ name: String?, on origin: String = "https://www.instagram.com")
             async -> Result<VaultFillGrant, VaultRefusal> {
@@ -230,7 +315,8 @@ final class VaultTests: XCTestCase {
                                       origin: "https://accounts.binance.com", kinds: ["one_time_code"], outcome: .refused))
         XCTAssertEqual(center.suggestedSites(for: [binance])[binance.id], "binance.com")
 
-        XCTAssertEqual(center.linkCodesToTheirSignIns().map(\.id), [instagram.id])
+        let linked = await center.linkCodesToTheirSignIns()
+        XCTAssertEqual(linked.map(\.id), [instagram.id])
         XCTAssertEqual(center.items.first { $0.id == instagram.id }?.sites, ["instagram.com"])
         XCTAssertEqual(Set(center.unlinkedCodes.map(\.id)), Set([noUsername, google, stripe, gitHub, vercel, personal, binance]
             .map(\.id) + awsCodes.map(\.id)))
@@ -243,7 +329,8 @@ final class VaultTests: XCTestCase {
         // A code brought in later finds the sign-in already saved.
         let setup = OneTimeCodeSetup(secret: OneTimeCodeSecret(key: Data("another-test-key-000".utf8)), issuer: "Instagram",
                                      account: "grace")
-        XCTAssertEqual(center.importOneTimeCodes([setup]), 1)
+        let imported = await center.importOneTimeCodes([setup])
+        XCTAssertEqual(imported, 1)
         XCTAssertEqual(center.items.first { $0.name == "Instagram (grace)" }?.sites, ["instagram.com"])
     }
 
@@ -263,8 +350,8 @@ final class VaultTests: XCTestCase {
         let center = VaultCenter(environment: VaultCenter.Environment(
             secrets: InMemoryVaultSecretStore(), repository: InMemoryVaultRepository(), hmac: MacVault.hmac,
             isAllowedBuild: true, confirm: { reason in reasons.append(reason); return answer }, defaults: .vaultTests()))
-        for item in [northwind, stripe] { try center.save(item, secret: VaultSecret(password: "correct horse")) }
-        for item in [northwindCode, fabrikam] { try center.save(item, secret: VaultSecret(oneTimeCode: key)) }
+        for item in [northwind, stripe] { try await center.save(item, secret: VaultSecret(password: "correct horse")) }
+        for item in [northwindCode, fabrikam] { try await center.save(item, secret: VaultSecret(oneTimeCode: key)) }
 
         XCTAssertTrue(northwind.matches("NORTH"))
         XCTAssertTrue(stripe.matches("ada stripe"))
@@ -309,7 +396,7 @@ final class VaultTests: XCTestCase {
         // A list drawn before the person saved a site in the item holds it as it was; the fill takes it as saved now.
         var notices = 0
         center.notify = { _, _, _ in notices += 1 }
-        center.link(fabrikam.id, to: "fabrikam.test")
+        await center.link(fabrikam.id, to: "fabrikam.test")
         let linked = await center.valuesForPerson(fabrikam, origin: "https://www.fabrikam.test", codeOnly: true)
         XCTAssertEqual(linked?.code, now)
         XCTAssertEqual(linked?.item.sites, ["fabrikam.test"])
@@ -317,7 +404,7 @@ final class VaultTests: XCTestCase {
 
         // A second code of the account leaves which one to the person; the list puts the one used last first.
         let second = VaultItem(name: "Northwind (2)", sites: ["northwind.test"], username: "ada@example.test")
-        try center.save(second, secret: VaultSecret(oneTimeCode: key))
+        try await center.save(second, secret: VaultSecret(oneTimeCode: key))
         let two = await center.valuesForPerson(northwind, origin: page)
         XCTAssertNil(two?.code)
         center.noteUsed(second.id)
@@ -486,18 +573,22 @@ final class VaultTests: XCTestCase {
             repository: InMemoryVaultRepository(items: [older, used]), hmac: MacVault.hmac, isAllowedBuild: true,
             defaults: .vaultTests()))
         let page = "https://ap-southeast-2.signin.aws"
-        let reset = unnamed.update(forUnnamed: "new", origin: page)
+        let reset = await unnamed.update(forUnnamed: "new", origin: page)
         XCTAssertEqual(reset.item?.id, used.id)
         XCTAssertFalse(reset.holdsIt)
         XCTAssertEqual(reset.choices.map(\.id), [used.id, older.id])
-        let known = unnamed.update(forUnnamed: "older", origin: page)
+        let known = await unnamed.update(forUnnamed: "older", origin: page)
         XCTAssertTrue(known.holdsIt && known.item?.id == older.id)
-        XCTAssertEqual(unnamed.update(forUnnamed: "new", origin: page, fields: [account("444455556666")]).choices.map(\.id), [older.id])
-        XCTAssertNil(unnamed.update(forUnnamed: "new", origin: "https://example.test").item)
+        let matching = await unnamed.update(forUnnamed: "new", origin: page, fields: [account("444455556666")])
+        XCTAssertEqual(matching.choices.map(\.id), [older.id])
+        let unrelated = await unnamed.update(forUnnamed: "new", origin: "https://example.test")
+        XCTAssertNil(unrelated.item)
         let blank = VaultItem(name: "AWS", sites: ["signin.aws"], username: "", createdAt: Date(timeIntervalSinceNow: -86400))
-        try unnamed.save(blank, secret: VaultSecret(password: "blank"))
-        XCTAssertEqual(unnamed.update(forUnnamed: "new", origin: page).item?.id, blank.id)
-        XCTAssertEqual(unnamed.update(forUnnamed: "new", origin: page, excluding: blank.id).item?.id, used.id)
+        try await unnamed.save(blank, secret: VaultSecret(password: "blank"))
+        let withBlank = await unnamed.update(forUnnamed: "new", origin: page)
+        XCTAssertEqual(withBlank.item?.id, blank.id)
+        let withoutBlank = await unnamed.update(forUnnamed: "new", origin: page, excluding: blank.id)
+        XCTAssertEqual(withoutBlank.item?.id, used.id)
 
         // An organization's ID and password in masked fields before the person's own: secrets beside the password.
         let organization = [VaultFormField(id: "orgId", name: "orgId", label: "Organization ID", value: "org-id-4821"),
@@ -510,8 +601,9 @@ final class VaultTests: XCTestCase {
         let several = VaultCenter(environment: VaultCenter.Environment(
             secrets: secrets, repository: repository, hmac: MacVault.hmac, isAllowedBuild: true,
             confirm: { reasons.append($0); return true }, defaults: .vaultTests()))
-        try several.save(business, secret: VaultSecret(password: "user-pw-7712", fields: organization))
-        XCTAssertEqual(several.secret(of: business.id)?.fields?.map(\.id), ["orgId", "orgPw"], "an empty field was kept")
+        try await several.save(business, secret: VaultSecret(password: "user-pw-7712", fields: organization))
+        let stored = await several.secret(of: business.id)
+        XCTAssertEqual(stored?.fields?.map(\.id), ["orgId", "orgPw"], "an empty field was kept")
         let file = String(decoding: try JSONEncoder().encode(repository.loadItems()), as: UTF8.self)
         XCTAssertFalse(file.contains("org-") || file.contains("Organization"), file)
         XCTAssertNil(try JSONDecoder().decode(VaultSecret.self, from: Data(#"{"password":"before"}"#.utf8)).fields)
@@ -536,7 +628,7 @@ final class VaultTests: XCTestCase {
     /// digits, read on a page or in a result in its usual spellings, and keeps no security code; an address comes from
     /// a form's fields and goes back into them; both live in one keychain item beside the vault's, which emptying the
     /// passwords leaves and their own Delete All removes.
-    func testAddressesAndCardsAreKeptWithoutASecurityCode() throws {
+    func testAddressesAndCardsAreKeptWithoutASecurityCode() async throws {
         XCTAssertTrue(VaultCard.isCardNumber("4242 4242 4242 4242") && VaultCard.isCardNumber("3782-822463-10005"))
         XCTAssertFalse(VaultCard.isCardNumber("4242 4242 4242 4241") || VaultCard.isCardNumber("1234"))
         let card = VaultCard(name: "Ada Lovelace", number: "4242 4242 4242 4242", expiryMonth: 7, expiryYear: 34)
@@ -562,12 +654,12 @@ final class VaultTests: XCTestCase {
             secrets: secrets, repository: InMemoryVaultRepository(), hmac: MacVault.hmac, isAllowedBuild: true,
             defaults: .vaultTests()))
         XCTAssertTrue(center.offersWallet)
-        try center.saveCard(card)
-        try center.saveAddress(address)
+        try await center.saveCard(card)
+        try await center.saveAddress(address)
         XCTAssertEqual(try secrets.loadWallet()?.cards, [card])
-        try center.clear()
+        try await center.clear()
         XCTAssertEqual(try secrets.loadWallet()?.addresses, [address], "emptying the passwords took the addresses")
-        try center.deleteWallet()
+        try await center.deleteWallet()
         XCTAssertTrue(center.wallet.isEmpty)
         XCTAssertNil(try secrets.loadWallet().flatMap { $0.isEmpty ? nil : $0 })
         center.isWalletEnabled = false
@@ -608,18 +700,22 @@ final class VaultTests: XCTestCase {
         let center = VaultCenter(environment: VaultCenter.Environment(
             secrets: InMemoryVaultSecretStore([saved.id: VaultSecret(password: "correct horse")]),
             repository: repository, hmac: MacVault.hmac, isAllowedBuild: true, defaults: .vaultTests()))
-        let beside = try center.presaveMadePassword("made-1", origin: "https://github.com", username: "ada")
+        let beside = try await center.presaveMadePassword("made-1", origin: "https://github.com", username: "ada")
         XCTAssertEqual(beside.username, "")
-        XCTAssertEqual(center.secret(of: saved.id)?.password, "correct horse")
-        let again = try center.presaveMadePassword("made-2", origin: "https://github.com", username: "ada", into: beside.id)
+        let original = await center.secret(of: saved.id)
+        XCTAssertEqual(original?.password, "correct horse")
+        let again = try await center.presaveMadePassword("made-2", origin: "https://github.com", username: "ada", into: beside.id)
         XCTAssertEqual(again.id, beside.id)
         XCTAssertEqual(center.items.count, 2)
-        XCTAssertEqual(center.secret(of: beside.id)?.previousPasswords?.map(\.password), ["made-1"])
+        let generated = await center.secret(of: beside.id)
+        XCTAssertEqual(generated?.previousPasswords?.map(\.password), ["made-1"])
 
-        var updated = try XCTUnwrap(center.secret(of: saved.id))
+        let stored = await center.secret(of: saved.id)
+        var updated = try XCTUnwrap(stored)
         updated.password = "made-2"
-        try center.save(saved, secret: updated)
-        XCTAssertEqual(center.secret(of: saved.id)?.previousPasswords?.map(\.password), ["correct horse"])
+        try await center.save(saved, secret: updated)
+        let replaced = await center.secret(of: saved.id)
+        XCTAssertEqual(replaced?.previousPasswords?.map(\.password), ["correct horse"])
 
         let request = { (name: String?, framedBy: [String]) in
             var request = VaultFillRequest(sessionID: UUID(), itemName: name, kind: .newPassword, origin: "https://github.com")
@@ -641,7 +737,9 @@ final class VaultTests: XCTestCase {
 
         // An item made for a password the page certainly did not take is deleted with a reason; the log says what
         // became of a made password without the value, and the item sheet's recent use keeps to fills and refusals.
-        try center.deleteMadePassword(beside.id, origin: "https://github.com", "The page took nothing.")
+        async let firstDelete: Void = center.deleteMadePassword(beside.id, origin: "https://github.com", "The page took nothing.")
+        async let secondDelete: Void = center.deleteMadePassword(beside.id, origin: "https://github.com", "The page took nothing.")
+        _ = try await (firstDelete, secondDelete)
         XCTAssertEqual(repository.uses.filter { $0.itemID == beside.id }.map(\.outcome), [.saved, .saved, .deleted])
         XCTAssertFalse(repository.uses.contains { use in ["made-1", "made-2"].contains { (use.reason ?? "").contains($0) } })
         XCTAssertTrue(center.uses(of: beside.id).isEmpty)

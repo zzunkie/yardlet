@@ -62,9 +62,14 @@ struct VaultWalletSection: View {
                 .disabled(!vault.isAllowedBuild)
             }
         }
+        .task(id: vault.isAllowedBuild) {
+            if vault.isAllowedBuild { await vault.loadWallet() }
+        }
         .alert(L10n.string("Delete all saved addresses and cards?"), isPresented: $confirmsDeleting) {
             Button(L10n.string("Delete All"), role: .destructive) {
-                do { try vault.deleteWallet() } catch { failure = error.localizedDescription }
+                Task {
+                    do { try await vault.deleteWallet() } catch { failure = error.localizedDescription }
+                }
             }
             Button(L10n.string("Cancel"), role: .cancel) {}
         } message: {
@@ -121,9 +126,10 @@ private struct VaultWalletSheetFrame<Fields: View>: View {
     let canDelete: Bool
     let canSave: Bool
     let failure: String?
-    let onDelete: () -> Void
+    let onDelete: () async -> Void
     let onCancel: () -> Void
-    let onSave: () -> Void
+    let onSave: () async -> Void
+    @State private var submitting = false
     @ViewBuilder let fields: () -> Fields
 
     var body: some View {
@@ -142,19 +148,29 @@ private struct VaultWalletSheetFrame<Fields: View>: View {
             .padding(20)
             Divider()
             HStack(spacing: 8) {
-                if canDelete { Button(L10n.string("Delete"), role: .destructive, action: onDelete) }
+                if canDelete { Button(L10n.string("Delete"), role: .destructive) { submit(onDelete) } }
                 if let failure {
                     Text(failure).font(SettingsMetrics.detailFont).foregroundStyle(.red).lineLimit(2)
                 }
                 Spacer(minLength: 8)
                 Button(L10n.string("Cancel"), action: onCancel).keyboardShortcut(MacShortcut.dismiss.binding)
-                Button(L10n.string("Save"), action: onSave).keyboardShortcut(MacShortcut.confirmDialog.binding).disabled(!canSave)
+                Button(L10n.string("Save")) { submit(onSave) }.keyboardShortcut(MacShortcut.confirmDialog.binding).disabled(!canSave)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
         }
+        .disabled(submitting)
         .frame(width: 480)
         .background(ParityTheme.canvas)
+    }
+
+    private func submit(_ operation: @escaping () async -> Void) {
+        guard !submitting else { return }
+        submitting = true
+        Task {
+            await operation()
+            submitting = false
+        }
     }
 }
 
@@ -205,18 +221,18 @@ struct VaultAddressSheet: View {
         }
     }
 
-    private func save() {
+    private func save() async {
         do {
-            try vault.saveAddress(address)
+            try await vault.saveAddress(address)
             onDone()
         } catch {
             failure = error.localizedDescription
         }
     }
 
-    private func delete() {
+    private func delete() async {
         do {
-            try vault.deleteWalletEntry(address.id)
+            try await vault.deleteWalletEntry(address.id)
             onDone()
         } catch {
             failure = error.localizedDescription
@@ -286,20 +302,20 @@ struct VaultCardSheet: View {
         }
     }
 
-    private func save() {
+    private func save() async {
         guard let card else { return }
         do {
-            try vault.saveCard(card)
+            try await vault.saveCard(card)
             onDone()
         } catch {
             failure = error.localizedDescription
         }
     }
 
-    private func delete() {
+    private func delete() async {
         guard let original else { return }
         do {
-            try vault.deleteWalletEntry(original.id)
+            try await vault.deleteWalletEntry(original.id)
             onDone()
         } catch {
             failure = error.localizedDescription

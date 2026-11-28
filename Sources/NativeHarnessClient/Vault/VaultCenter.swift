@@ -3,7 +3,7 @@ import YardletAgentTools
 
 /// Where items' secrets are kept: the login keychain on macOS (`KeychainVaultSecretStore`), memory
 /// in tests and QA runs.
-protocol VaultSecretStoring {
+protocol VaultSecretStoring: Sendable {
     func load(_ id: UUID) throws -> VaultSecret?
     func save(_ secret: VaultSecret, for id: UUID) throws
     func delete(_ id: UUID) throws
@@ -18,8 +18,9 @@ protocol VaultSecretStoring {
     func saveShowsCredentials(_ shows: Bool) throws
 }
 
-final class InMemoryVaultSecretStore: VaultSecretStoring {
-    private var secrets: [UUID: VaultSecret] = [:]
+final class InMemoryVaultSecretStore: VaultSecretStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private var secrets: [UUID: VaultSecret]
     private var wallet: VaultWallet?
     private var showsCredentials = false
 
@@ -28,17 +29,19 @@ final class InMemoryVaultSecretStore: VaultSecretStoring {
         self.wallet = wallet
     }
 
-    func load(_ id: UUID) throws -> VaultSecret? { secrets[id] }
-    func save(_ secret: VaultSecret, for id: UUID) throws { secrets[id] = secret }
-    func delete(_ id: UUID) throws { secrets[id] = nil }
+    func load(_ id: UUID) throws -> VaultSecret? { lock.withLock { secrets[id] } }
+    func save(_ secret: VaultSecret, for id: UUID) throws { lock.withLock { secrets[id] = secret } }
+    func delete(_ id: UUID) throws { lock.withLock { secrets[id] = nil } }
     func deleteAll() throws {
-        secrets = [:]
-        wallet = nil
+        lock.withLock {
+            secrets = [:]
+            wallet = nil
+        }
     }
-    func loadWallet() throws -> VaultWallet? { wallet }
-    func saveWallet(_ wallet: VaultWallet?) throws { self.wallet = wallet }
-    func loadShowsCredentials() throws -> Bool { showsCredentials }
-    func saveShowsCredentials(_ shows: Bool) throws { showsCredentials = shows }
+    func loadWallet() throws -> VaultWallet? { lock.withLock { wallet } }
+    func saveWallet(_ wallet: VaultWallet?) throws { lock.withLock { self.wallet = wallet } }
+    func loadShowsCredentials() throws -> Bool { lock.withLock { showsCredentials } }
+    func saveShowsCredentials(_ shows: Bool) throws { lock.withLock { showsCredentials = shows } }
 }
 
 /// One use of an item, as the usage log keeps it (design §6.3). No value is ever written here.
@@ -286,6 +289,7 @@ final class VaultCenter: ObservableObject {
         var hmac: OneTimeCode.HMAC
         /// Only a team-signed build keeps its items behind the keychain's code requirement (design §4.3).
         var isAllowedBuild: Bool
+        var checkBuild: (@Sendable () async -> Bool)?
         /// Asks the person at this Mac (Touch ID, or the login password) and says whether they confirmed.
         var confirm: @MainActor (_ reason: String) async -> Bool = { _ in false }
         /// Secure random bytes for new passwords (`SecRandomCopyBytes` on macOS).
@@ -298,13 +302,43 @@ final class VaultCenter: ObservableObject {
     static let walletEnabledKey = "Yardlet.vault.wallet.enabled"
     static let didChangeNotification = Notification.Name("Yardlet.VaultCenter.didChange")
 
+    private var visibilityRequest: UUID?
+    private var lockGeneration = UUID()
+    private var preparation: Task<Void, Never>?
+    private let secretQueue = DispatchQueue(label: "Yardlet.vault.secrets", qos: .userInitiated)
+    private var changingSecrets = false
+    private var waitingChanges: [CheckedContinuation<Void, Never>] = []
+
+    // Keep each read-modify-write together through its publication on the main actor.
+    func beginChange() async {
+        if changingSecrets {
+            await withCheckedContinuation { waitingChanges.append($0) }
+        } else {
+            changingSecrets = true
+        }
+    }
+
+    func endChange() {
+        if waitingChanges.isEmpty { changingSecrets = false }
+        else { waitingChanges.removeFirst().resume() }
+    }
+
+    private func store<T: Sendable>(_ operation: @escaping @Sendable (any VaultSecretStoring) throws -> T) async throws -> T {
+        let secrets = environment.secrets
+        return try await withCheckedThrowingContinuation { continuation in
+            secretQueue.async {
+                continuation.resume(with: Result { try operation(secrets) })
+            }
+        }
+    }
+
     private var environment: Environment
     @Published private(set) var items: [VaultItem]
     @Published var isEnabled: Bool {
         didSet {
             guard isEnabled != oldValue else { return }
             environment.defaults.set(isEnabled, forKey: Self.enabledKey)
-            if !isEnabled { onTurnedOff?() }
+            if !isEnabled { lock(); onTurnedOff?() }
             onToolsChanged?()
         }
     }
@@ -338,22 +372,54 @@ final class VaultCenter: ObservableObject {
         items = environment.repository.loadItems()
         isEnabled = environment.defaults.object(forKey: Self.enabledKey) as? Bool ?? true
         isWalletEnabled = environment.defaults.object(forKey: Self.walletEnabledKey) as? Bool ?? true
-        hidesCredentials = !(environment.isAllowedBuild && (try? environment.secrets.loadShowsCredentials()) == true)
+        hidesCredentials = true
+    }
+
+    /// Until the build and its saved preference are known, the vault keeps credentials hidden.
+    func prepare() async {
+        if let preparation { await preparation.value; return }
+        let task = Task { @MainActor in
+            let allowed = await environment.checkBuild?() ?? environment.isAllowedBuild
+            let shows = allowed ? (try? await store { try $0.loadShowsCredentials() }) == true : false
+            let availabilityChanged = environment.isAllowedBuild != allowed
+            if availabilityChanged { objectWillChange.send() }
+            environment.isAllowedBuild = allowed
+            if visibilityRequest == nil || !shows { hidesCredentials = !shows }
+            if availabilityChanged { onToolsChanged?() }
+            NotificationCenter.default.post(name: Self.didChangeNotification, object: self)
+        }
+        preparation = task
+        await task.value
     }
 
     /// Hides keys and tokens again, or stops hiding them once the person at this Mac confirmed it.
     func setHidesCredentials(_ hides: Bool) async {
-        guard hides != hidesCredentials, environment.isAllowedBuild else { return }
+        let request = UUID()
+        visibilityRequest = request
         if hides {
-            try? environment.secrets.saveShowsCredentials(false)
-        } else {
-            guard await environment.confirm(L10n.string("turn off hiding keys and tokens from agents")),
-                  (try? environment.secrets.saveShowsCredentials(true)) != nil else {
-                // The switch the person moved goes back.
+            // Scrub tool results immediately, including while a previous confirmation is outstanding.
+            publishHiding(true)
+        }
+        await prepare()
+        guard request == visibilityRequest, environment.isAllowedBuild else { return }
+        if !hides {
+            guard hidesCredentials else { return }
+            guard await environment.confirm(L10n.string("turn off hiding keys and tokens from agents")) else {
                 objectWillChange.send()
                 return
             }
         }
+        guard request == visibilityRequest else { return }
+        do {
+            try await store { try $0.saveShowsCredentials(!hides) }
+            if request == visibilityRequest { publishHiding(hides) }
+        } catch {
+            objectWillChange.send()
+        }
+    }
+
+    private func publishHiding(_ hides: Bool) {
+        guard hides != hidesCredentials else { return }
         hidesCredentials = hides
         NotificationCenter.default.post(name: Self.didChangeNotification, object: self)
     }
@@ -366,6 +432,7 @@ final class VaultCenter: ObservableObject {
     var suffixes: PublicSuffixList { environment.suffixes() }
 
     func lock() {
+        lockGeneration = UUID()
         isUnlocked = false
     }
 
@@ -491,6 +558,7 @@ final class VaultCenter: ObservableObject {
         default:
             break
         }
+        let lockAtStart = lockGeneration
         let confirmation: VaultUse.Confirmation
         switch item.policy {
         case .always where !request.afterAgentScript:
@@ -514,17 +582,21 @@ final class VaultCenter: ObservableObject {
                     + "linked to it), so Yardlet asked the person before filling “\(item.name)”, and they did not confirm. "
                     + Self.afterScriptAgain)
             }
-            if item.policy == .whileUnlocked { isUnlocked = true }
+            if item.policy == .whileUnlocked && lockAtStart == lockGeneration { isUnlocked = true }
             confirmation = .touchID
         }
         let secret: VaultSecret?
         do {
-            secret = try trustedSecret(of: item)
+            secret = try await checkedSecret(of: item)
         } catch is VaultChangedOutside {
             return refuse(request, item: item, "“\(item.name)”'s sites or agent use were changed outside Yardlet, so it fills "
                 + "nothing until the person opens it in Yardlet's settings and saves it again.")
         } catch {
             return refuse(request, item: item, "Yardlet could not read “\(item.name)” from the keychain.")
+        }
+        guard isEnabled, stillMatches(item),
+              lockAtStart == lockGeneration else {
+            return refuse(request, item: item, "The vault changed before the fill completed.")
         }
         var grant = VaultFillGrant(item: item, confirmedBy: confirmation, chosen: chosen)
         switch request.kind {
@@ -618,7 +690,9 @@ final class VaultCenter: ObservableObject {
     /// as Chrome's does, so the saved password stays the one filled until the person updates it.
     @discardableResult
     func presaveMadePassword(_ password: String, origin: String, username: String, name: String? = nil,
-                             into presaved: UUID? = nil, taskID: UUID? = nil) throws -> VaultItem {
+                             into presaved: UUID? = nil, taskID: UUID? = nil) async throws -> VaultItem {
+        await beginChange()
+        defer { endChange() }
         guard let site = VaultSite.suggestion(for: origin, suffixes: suffixes) else {
             throw VaultRefusal(message: "Yardlet saves new passwords only for https sites.")
         }
@@ -626,9 +700,9 @@ final class VaultCenter: ObservableObject {
         let taken = !username.isEmpty && here.contains { $0.id != presaved && $0.username == username }
         if let presaved, var item = here.first(where: { $0.id == presaved }) {
             if item.username.isEmpty, !taken { item.username = username }
-            var secret = (try trustedSecret(of: item)) ?? VaultSecret()
+            var secret = (try await trustedSecret(of: item)) ?? VaultSecret()
             secret.password = password
-            try save(item, secret: secret)
+            try await saveItem(item, secret: secret)
             logMadePassword(item, .saved, origin: origin, taskID: taskID,
                             "Saved a new made password before the page took it, in the item made on this page before.")
             return item
@@ -636,16 +710,18 @@ final class VaultCenter: ObservableObject {
         let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let item = VaultItem(name: trimmed.isEmpty ? VaultSite.host(of: origin) : trimmed, sites: [site],
                              username: taken ? "" : username)
-        try save(item, secret: VaultSecret(password: password))
+        try await saveItem(item, secret: VaultSecret(password: password))
         logMadePassword(item, .saved, origin: origin, taskID: taskID, "Saved a made password before the page took it.")
         return item
     }
 
     /// Deletes the item a made password was presaved in, which the page certainly did not take (it moved on first,
     /// or had no field for it), or which went into another item.
-    func deleteMadePassword(_ itemID: UUID, origin: String, taskID: UUID? = nil, _ reason: String) throws {
+    func deleteMadePassword(_ itemID: UUID, origin: String, taskID: UUID? = nil, _ reason: String) async throws {
+        await beginChange()
+        defer { endChange() }
         let item = items.first { $0.id == itemID }
-        try delete(itemID)
+        try await deleteItem(itemID)
         if let item { logMadePassword(item, .deleted, origin: origin, taskID: taskID, reason) }
     }
 
@@ -676,10 +752,14 @@ final class VaultCenter: ObservableObject {
     }
 
     /// A passkey's signature count after the site accepted it.
-    func updatePasskeyCount(of itemID: UUID, to count: Int) {
-        guard var secret = try? environment.secrets.load(itemID), secret.passkey != nil else { return }
-        secret.passkey?.signCount = count
-        try? environment.secrets.save(secret, for: itemID)
+    func updatePasskeyCount(of itemID: UUID, to count: Int) async {
+        await beginChange()
+        defer { endChange() }
+        try? await store { store in
+            guard var secret = try store.load(itemID), secret.passkey != nil else { return }
+            secret.passkey?.signCount = count
+            try store.save(secret, for: itemID)
+        }
     }
 
     /// The page's one other item of `item`'s account that has what a fill of `kind` needs: a site's password and its
@@ -821,10 +901,17 @@ final class VaultCenter: ObservableObject {
     /// else its item with no username, else its item with a password, the one used last first. The page's other items
     /// are the choices the person may update instead, as Chrome's update bubble lists the site's saved usernames.
     func update(forUnnamed password: String, origin: String, fields: [VaultFormField] = [],
-                excluding: UUID? = nil) -> VaultUnnamedUpdate {
+                excluding: UUID? = nil) async -> VaultUnnamedUpdate {
+        await beginChange()
+        defer { endChange() }
+        return await unnamedUpdate(password, origin: origin, fields: fields, excluding: excluding)
+    }
+
+    /// The caller holds the change gate while comparing passwords.
+    func unnamedUpdate(_ password: String, origin: String, fields: [VaultFormField], excluding: UUID?) async -> VaultUnnamedUpdate {
         let here = items(for: origin).filter { $0.id != excluding && $0.admits(fields) }
             .sorted { ($0.lastUsedAt ?? $0.createdAt) > ($1.lastUsedAt ?? $1.createdAt) }
-        if let holding = here.first(where: { secret(of: $0.id)?.password == password }) {
+        for holding in here where await secret(of: holding.id)?.password == password {
             return VaultUnnamedUpdate(item: holding, holdsIt: true, choices: here)
         }
         return VaultUnnamedUpdate(item: here.first { $0.username.isEmpty } ?? here.first(where: \.hasPassword) ?? here.first,
@@ -849,7 +936,14 @@ final class VaultCenter: ObservableObject {
     /// sites the sign-in has saved, never one made up from its name. Runs as the vault opens and after an import.
     /// Returns the items it linked.
     @discardableResult
-    func linkCodesToTheirSignIns() -> [VaultItem] {
+    func linkCodesToTheirSignIns() async -> [VaultItem] {
+        await beginChange()
+        defer { endChange() }
+        return await linkSavedCodes()
+    }
+
+    @discardableResult
+    func linkSavedCodes() async -> [VaultItem] {
         guard environment.isAllowedBuild, isEnabled else { return [] }
         let codes = unlinkedCodes.filter { !$0.username.isEmpty }
         guard !codes.isEmpty else { return [] }
@@ -868,7 +962,7 @@ final class VaultCenter: ObservableObject {
             guard !items.contains(where: { $0.hasOneTimeCode && $0.isSameAccount(as: pair.code)
                 && $0.sites.contains(where: pair.sites.contains) }) else { continue }
             var item: VaultItem?
-            for site in pair.sites { item = link(pair.code.id, to: site) }
+            for site in pair.sites { item = await linkItem(pair.code.id, to: site) }
             if let item { linked.append(item) }
         }
         return linked
@@ -899,14 +993,20 @@ final class VaultCenter: ObservableObject {
     /// Saves a site for an item the person chose on one of its pages, as "Autofill and save" does in other
     /// password managers. Returns the item as saved.
     @discardableResult
-    func link(_ itemID: UUID, to site: String) -> VaultItem? {
+    func link(_ itemID: UUID, to site: String) async -> VaultItem? {
+        await beginChange()
+        defer { endChange() }
+        return await linkItem(itemID, to: site)
+    }
+
+    private func linkItem(_ itemID: UUID, to site: String) async -> VaultItem? {
         guard let index = items.firstIndex(where: { $0.id == itemID }) else { return nil }
         if !items[index].sites.contains(site) {
             // The secret keeps the sites it may go to; one whose item changed outside Yardlet takes none.
-            guard var secret = try? trustedSecret(of: items[index]) else { return nil }
+            guard var secret = try? await trustedSecret(of: items[index]) else { return nil }
+            secret.savedSites = items[index].sites + [site]
+            guard (try? await store { [secret] in try $0.save(secret, for: itemID) }) != nil else { return nil }
             items[index].sites.append(site)
-            secret.savedSites = items[index].sites
-            try? environment.secrets.save(secret, for: itemID)
             environment.repository.saveItems(items)
         }
         return items[index]
@@ -921,13 +1021,14 @@ final class VaultCenter: ObservableObject {
     func valuesForPerson(_ item: VaultItem, origin: String, codeOnly: Bool = false) async -> VaultFillGrant? {
         // The item as saved now: a list or bar drawn before a site was saved in it holds it as it was.
         guard environment.isAllowedBuild, isEnabled, let item = items.first(where: { $0.id == item.id }),
-              let secret = try? trustedSecret(of: item) else { return nil }
+              let secret = try? await checkedSecret(of: item) else { return nil }
         var grant = VaultFillGrant(item: item, confirmedBy: .person)
         grant.username = item.username.isEmpty ? nil : item.username
         grant.password = codeOnly ? nil : secret.password
         grant.secretFields = codeOnly ? nil : secret.fields
         let account = secret.oneTimeCode == nil ? accountItem(of: item, having: .oneTimeCode, on: [origin]) : nil
-        let codeSecret = secret.oneTimeCode ?? account.flatMap { try? trustedSecret(of: $0) }?.oneTimeCode
+        var codeSecret = secret.oneTimeCode
+        if let account { codeSecret = try? await checkedSecret(of: account)?.oneTimeCode }
         grant.code = codeSecret.map { code(for: $0) }
         grant.codeSites = account?.sites
         if grant.password != nil || grant.secretFields != nil, !item.sites.contains(where: { VaultSite.matches($0, origin: origin) }) {
@@ -935,6 +1036,8 @@ final class VaultCenter: ObservableObject {
                                                         item.name, VaultSite.host(of: origin))) else { return nil }
             grant.confirmedBy = .touchID
         }
+        guard isEnabled, stillMatches(item),
+              account.map(stillMatches) ?? true else { return nil }
         return grant
     }
 
@@ -943,7 +1046,8 @@ final class VaultCenter: ObservableObject {
         guard isAllowedBuild, isEnabled,
               await confirmPerson(L10n.string("copy the saved password")) else { return nil }
         guard isEnabled, let item = items.first(where: { $0.id == itemID }), item.hasPassword else { return nil }
-        return try? trustedSecret(of: item)?.password
+        let password = try? await checkedSecret(of: item)?.password
+        return isEnabled ? password : nil
     }
 
     /// The key button's list for a page (design §16): the page's own items and, for a search, every other item it
@@ -974,8 +1078,8 @@ final class VaultCenter: ObservableObject {
     }
 
     /// The saved secret, for the item sheet once the person confirmed (showing the password).
-    func secret(of itemID: UUID) -> VaultSecret? {
-        try? environment.secrets.load(itemID)
+    func secret(of itemID: UUID) async -> VaultSecret? {
+        try? await store { try $0.load(itemID) }
     }
 
     func confirmPerson(_ reason: String) async -> Bool {
@@ -989,45 +1093,66 @@ final class VaultCenter: ObservableObject {
     var offersWallet: Bool { environment.isAllowedBuild && isWalletEnabled }
 
     /// The addresses and cards, read from the keychain the first time they are needed.
-    var wallet: VaultWallet {
-        if storedWallet == nil { storedWallet = (try? environment.secrets.loadWallet()) ?? VaultWallet() }
-        return storedWallet ?? VaultWallet()
+    var wallet: VaultWallet { storedWallet ?? VaultWallet() }
+
+    @discardableResult
+    func loadWallet() async -> VaultWallet {
+        if let storedWallet { return storedWallet }
+        await beginChange()
+        defer { endChange() }
+        return (try? await readWallet()) ?? VaultWallet()
     }
 
-    func saveAddress(_ address: VaultAddress) throws {
-        var wallet = wallet
+    func readWallet() async throws -> VaultWallet {
+        if let storedWallet { return storedWallet }
+        let wallet = try await store { try $0.loadWallet() } ?? VaultWallet()
+        objectWillChange.send()
+        storedWallet = wallet
+        return wallet
+    }
+
+    func saveAddress(_ address: VaultAddress) async throws {
+        await beginChange()
+        defer { endChange() }
+        var wallet = try await readWallet()
         if let index = wallet.addresses.firstIndex(where: { $0.id == address.id }) {
             wallet.addresses[index] = address
         } else {
             wallet.addresses.append(address)
         }
-        try storeWallet(wallet)
+        try await storeWallet(wallet)
     }
 
-    func saveCard(_ card: VaultCard) throws {
-        var wallet = wallet
+    func saveCard(_ card: VaultCard) async throws {
+        await beginChange()
+        defer { endChange() }
+        var wallet = try await readWallet()
         if let index = wallet.cards.firstIndex(where: { $0.id == card.id }) {
             wallet.cards[index] = card
         } else {
             wallet.cards.append(card)
         }
-        try storeWallet(wallet)
+        try await storeWallet(wallet)
     }
 
-    func deleteWalletEntry(_ id: UUID) throws {
-        var wallet = wallet
+    func deleteWalletEntry(_ id: UUID) async throws {
+        await beginChange()
+        defer { endChange() }
+        var wallet = try await readWallet()
         wallet.addresses.removeAll { $0.id == id }
         wallet.cards.removeAll { $0.id == id }
-        try storeWallet(wallet)
+        try await storeWallet(wallet)
     }
 
     /// Deletes every address and card, and their keychain item.
-    func deleteWallet() throws {
-        try storeWallet(VaultWallet())
+    func deleteWallet() async throws {
+        await beginChange()
+        defer { endChange() }
+        try await storeWallet(VaultWallet())
     }
 
-    private func storeWallet(_ wallet: VaultWallet) throws {
-        try environment.secrets.saveWallet(wallet.isEmpty ? nil : wallet)
+    func storeWallet(_ wallet: VaultWallet) async throws {
+        try await store { try $0.saveWallet(wallet.isEmpty ? nil : wallet) }
         objectWillChange.send()
         storedWallet = wallet
     }
@@ -1042,22 +1167,27 @@ final class VaultCenter: ObservableObject {
             .filter { $0.outcome == .filled || $0.outcome == .refused }.prefix(limit))
     }
 
-    /// A saved item's secret to change and save again: nil when the keychain does not give it, or when the item's sites
-    /// or agent use changed outside Yardlet (the person is told, as `trustedSecret` tells them), so an import or a new
-    /// code never makes a change to `items.json` its own (design §5.3).
-    func secretToUpdate(_ item: VaultItem) -> VaultSecret? {
-        try? trustedSecret(of: item)
+    private func stillMatches(_ item: VaultItem) -> Bool {
+        items.contains { $0.id == item.id && $0.username == item.username && $0.fields == item.fields
+            && $0.sites == item.sites && $0.policy == item.policy }
+    }
+
+    private func checkedSecret(of item: VaultItem) async throws -> VaultSecret? {
+        await beginChange()
+        defer { endChange() }
+        guard stillMatches(item) else { throw VaultChangedOutside() }
+        return try await trustedSecret(of: item)
     }
 
     /// The item's secret, if the sites and agent policy `items.json` gives the item are the ones Yardlet saved with the
     /// secret; a secret saved before they were kept with it takes the item's now. Otherwise the person hears of it
     /// and it throws `VaultChangedOutside`.
-    private func trustedSecret(of item: VaultItem) throws -> VaultSecret? {
-        guard var secret = try environment.secrets.load(item.id) else { return nil }
+    func trustedSecret(of item: VaultItem) async throws -> VaultSecret? {
+        guard var secret = try await store({ try $0.load(item.id) }) else { return nil }
         guard let sites = secret.savedSites, let policy = secret.savedPolicy else {
             secret.savedSites = item.sites
             secret.savedPolicy = item.policy
-            try? environment.secrets.save(secret, for: item.id)
+            try? await store { [secret] in try $0.save(secret, for: item.id) }
             return secret
         }
         guard sites == item.sites, policy == item.policy else {
@@ -1070,12 +1200,18 @@ final class VaultCenter: ObservableObject {
     }
 
     /// Adds or replaces an item and its secret, which keeps the item's sites and agent policy with it.
-    func save(_ item: VaultItem, secret: VaultSecret) throws {
+    func save(_ item: VaultItem, secret: VaultSecret) async throws {
+        await beginChange()
+        defer { endChange() }
+        try await saveItem(item, secret: secret)
+    }
+
+    func saveItem(_ item: VaultItem, secret: VaultSecret) async throws {
         var item = item
         var secret = secret
         secret.savedSites = item.sites
         secret.savedPolicy = item.policy
-        if let stored = try? environment.secrets.load(item.id), let old = stored.password, !old.isEmpty,
+        if let stored = try await store({ [id = item.id] in try $0.load(id) }), let old = stored.password, !old.isEmpty,
            let new = secret.password, !new.isEmpty, new != old {
             // A password it replaces stays in the item's previous ones (design §15).
             let earlier = (secret.previousPasswords ?? stored.previousPasswords ?? []).filter { $0.password != old && $0.password != new }
@@ -1087,7 +1223,7 @@ final class VaultCenter: ObservableObject {
         item.hasPassword = !(secret.password ?? "").isEmpty
         item.hasOneTimeCode = secret.oneTimeCode != nil
         item.hasPasskey = secret.passkey != nil
-        try environment.secrets.save(secret, for: item.id)
+        try await store { [id = item.id, secret] in try $0.save(secret, for: id) }
         let hadItems = !items.isEmpty
         if let index = items.firstIndex(where: { $0.id == item.id }) {
             items[index] = item
@@ -1098,8 +1234,14 @@ final class VaultCenter: ObservableObject {
         if !hadItems { onToolsChanged?() }
     }
 
-    func delete(_ itemID: UUID) throws {
-        try environment.secrets.delete(itemID)
+    func delete(_ itemID: UUID) async throws {
+        await beginChange()
+        defer { endChange() }
+        try await deleteItem(itemID)
+    }
+
+    private func deleteItem(_ itemID: UUID) async throws {
+        try await store { try $0.delete(itemID) }
         items.removeAll { $0.id == itemID }
         environment.repository.saveItems(items)
         if items.isEmpty { onToolsChanged?() }
@@ -1108,15 +1250,19 @@ final class VaultCenter: ObservableObject {
     /// Empties the vault: every secret, item and use. Returns the sites that hold a Yardlet passkey,
     /// which only the person can remove there.
     @discardableResult
-    func clear() throws -> [String] {
+    func clear() async throws -> [String] {
+        await beginChange()
+        defer { endChange() }
         let passkeySites = items.filter(\.hasPasskey).flatMap(\.sites)
         // The addresses and cards have their own Delete All (design §18).
-        let kept = wallet
-        try environment.secrets.deleteAll()
-        try environment.secrets.saveWallet(kept)
+        let kept = try await readWallet()
+        try await store { store in
+            try store.deleteAll()
+            try store.saveWallet(kept.isEmpty ? nil : kept)
+        }
         environment.repository.removeAll()
         items = []
-        isUnlocked = false
+        lock()
         onTurnedOff?()
         onToolsChanged?()
         return passkeySites

@@ -83,6 +83,25 @@ struct MainThreadHang: Sendable {
         /// Frames of a deep stack left out between its innermost `MainThreadWatchdog.innerFrames`
         /// and its outermost.
         var omitted = 0
+
+        /// Only the animation loop's own event wait qualifies. Work it calls out to, including
+        /// another run loop in a callback, must still be reported.
+        var isWaitingForSheetAnimation: Bool {
+            let kernel = frames.prefix { $0.hasPrefix("libsystem_kernel.dylib ") && $0.contains(" mach_msg") }
+            guard !kernel.isEmpty else { return false }
+            let rest = frames.dropFirst(kernel.count)
+            guard let service = rest.first, service.hasPrefix("CoreFoundation "),
+                  service.contains(" __CFRunLoopServiceMachPort + ") else { return false }
+            let loop = rest.dropFirst().prefix {
+                $0.hasPrefix("CoreFoundation ") && ($0.contains(" __CFRunLoopRun + ") ||
+                    $0.contains(" _CFRunLoopRunSpecificWithOptions + ") || $0.contains(" CFRunLoopRunSpecific + "))
+            }
+            let callers = rest.dropFirst(1 + loop.count)
+            guard !loop.isEmpty, let animation = callers.first, animation.hasPrefix("AppKit "),
+                  animation.contains(" -[NSMoveHelper _doAnimation] + "),
+                  let sheet = callers.dropFirst().first, sheet.hasPrefix("AppKit ") else { return false }
+            return sheet.contains(" -[NSSheetMoveHelper openSheet] + ") || sheet.contains(" -[NSSheetMoveHelper closeSheet] + ")
+        }
     }
 
     let began: Date
@@ -91,6 +110,10 @@ struct MainThreadHang: Sendable {
     /// stays when it waits on itself.
     var isOngoing = false
     let samples: [Sample]
+
+    var shouldReport: Bool {
+        samples.isEmpty || isOngoing || !samples.allSatisfy(\.isWaitingForSheetAnimation)
+    }
 
     var description: String {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
@@ -281,8 +304,8 @@ final class MainThreadWatchdog: @unchecked Sendable {
         let elapsed = (hasEnded ? hangEnded.load(ordering: .sequentiallyConsistent) : Self.now()) &- since
         let began = Date(timeIntervalSinceNow: -Double(Self.now() &- since) / 1e9)
         if reports {
-            report(MainThreadHang(began: began, duration: .nanoseconds(Int64(elapsed)), isOngoing: !hasEnded,
-                                  samples: samples))
+            let hang = MainThreadHang(began: began, duration: .nanoseconds(Int64(elapsed)), isOngoing: !hasEnded, samples: samples)
+            if hang.shouldReport { report(hang) }
         }
         // The main thread signals once it runs again; that signal belongs to this hang.
         if !hasEnded { ended.wait() }

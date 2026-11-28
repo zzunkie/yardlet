@@ -156,20 +156,28 @@ extension VaultCenter {
         guard isAllowedBuild, await confirmPerson(L10n.string("back up all saved passwords to an encrypted file")) else {
             return nil
         }
-        let wallet = self.wallet
+        let wallet = await loadWallet()
         guard let choice = chooseFile(!wallet.isEmpty) else { return nil }
-        var contents = VaultBackup.Contents(items: [], wallet: choice.includesWallet && !wallet.isEmpty ? wallet : nil)
+        var contents = VaultBackup.Contents(items: [], wallet: nil)
         var unreadable = 0
-        for item in items {
-            guard let secret = secret(of: item.id) else {
-                if item.hasPassword || item.hasOneTimeCode || item.hasPasskey { unreadable += 1 }
-                continue
+        await beginChange()
+        do {
+            defer { endChange() }
+            if choice.includesWallet {
+                let current = try await readWallet()
+                if !current.isEmpty { contents.wallet = current }
             }
-            contents.items.append(VaultBackup.Contents.Item(
-                name: item.name, sites: secret.savedSites ?? item.sites, username: item.username,
-                policy: secret.savedPolicy ?? item.policy, createdAt: item.createdAt, fields: item.fields,
-                password: secret.password, secretFields: secret.fields, oneTimeCode: secret.oneTimeCode,
-                previousPasswords: secret.previousPasswords, hadPasskey: secret.passkey != nil))
+            for item in items {
+                guard let secret = await secret(of: item.id) else {
+                    if item.hasPassword || item.hasOneTimeCode || item.hasPasskey { unreadable += 1 }
+                    continue
+                }
+                contents.items.append(VaultBackup.Contents.Item(
+                    name: item.name, sites: secret.savedSites ?? item.sites, username: item.username,
+                    policy: secret.savedPolicy ?? item.policy, createdAt: item.createdAt, fields: item.fields,
+                    password: secret.password, secretFields: secret.fields, oneTimeCode: secret.oneTimeCode,
+                    previousPasswords: secret.previousPasswords, hadPasskey: secret.passkey != nil))
+            }
         }
         guard let key = VaultBackup.makeRecoveryKey(randomBytes: randomBytes),
               let salt = randomBytes(32) else { throw VaultBackup.Failure.noRandomKey }
@@ -185,7 +193,9 @@ extension VaultCenter {
     /// use. A code with no site already kept, and an address or card already saved, are left out. Passkeys did not
     /// come along: each item that had one is named, to be made again on its site.
     @discardableResult
-    func restoreBackup(_ contents: VaultBackup.Contents) -> BackupRestore {
+    func restoreBackup(_ contents: VaultBackup.Contents) async -> BackupRestore {
+        await beginChange()
+        defer { endChange() }
         var restore = BackupRestore(count: 0, walletCount: 0, passkeys: [])
         let suffixes = self.suffixes
         for entry in contents.items {
@@ -206,12 +216,12 @@ extension VaultCenter {
             }
             let password = entry.password ?? ""
             guard !password.isEmpty || entry.oneTimeCode != nil || !(entry.secretFields ?? []).isEmpty else { continue }
-            if entry.sites.isEmpty, let code = entry.oneTimeCode, holds(code) { continue }
+            if entry.sites.isEmpty, let code = entry.oneTimeCode, await hasStoredCode(code) { continue }
             if let existing = items.first(where: { item in
                 item.username == entry.username && item.sites.contains { entry.sites.contains($0) }
             }) {
                 // A secret the keychain would not give back, or one whose item changed outside Yardlet, is left as it is.
-                guard var secret = secretToUpdate(existing) else { continue }
+                guard var secret = try? await trustedSecret(of: existing) else { continue }
                 var changed = false
                 if (secret.password ?? "").isEmpty, !password.isEmpty {
                     secret.password = password
@@ -228,7 +238,7 @@ extension VaultCenter {
                     secret.oneTimeCode = code
                     changed = true
                 }
-                guard changed, (try? save(existing, secret: secret)) != nil else { continue }
+                guard changed, (try? await saveItem(existing, secret: secret)) != nil else { continue }
             } else {
                 var name = entry.name
                 if !entry.username.isEmpty,
@@ -239,27 +249,28 @@ extension VaultCenter {
                                      createdAt: entry.createdAt, fields: entry.fields)
                 let secret = VaultSecret(password: password.isEmpty ? nil : password, fields: entry.secretFields,
                                          oneTimeCode: entry.oneTimeCode, previousPasswords: entry.previousPasswords)
-                guard (try? save(item, secret: secret)) != nil else { continue }
+                guard (try? await saveItem(item, secret: secret)) != nil else { continue }
             }
             restore.count += 1
         }
-        if let wallet = contents.wallet {
-            for var address in wallet.addresses {
+        if let incoming = contents.wallet, var merged = try? await readWallet() {
+            let previousCount = merged.addresses.count + merged.cards.count
+            for var address in incoming.addresses {
                 address.id = UUID()
-                guard !self.wallet.addresses.contains(where: { var saved = $0; saved.id = address.id; return saved == address })
+                guard !merged.addresses.contains(where: { var saved = $0; saved.id = address.id; return saved == address })
                 else { continue }
-                guard (try? saveAddress(address)) != nil else { continue }
-                restore.walletCount += 1
+                merged.addresses.append(address)
             }
-            for var card in wallet.cards {
+            for var card in incoming.cards {
                 card.id = UUID()
-                guard !self.wallet.cards.contains(where: { var saved = $0; saved.id = card.id; return saved == card })
+                guard !merged.cards.contains(where: { var saved = $0; saved.id = card.id; return saved == card })
                 else { continue }
-                guard (try? saveCard(card)) != nil else { continue }
-                restore.walletCount += 1
+                merged.cards.append(card)
             }
+            let added = merged.addresses.count + merged.cards.count - previousCount
+            if added > 0, (try? await storeWallet(merged)) != nil { restore.walletCount = added }
         }
-        if restore.count > 0 { linkCodesToTheirSignIns() }
+        if restore.count > 0 { _ = await linkSavedCodes() }
         return restore
     }
 }

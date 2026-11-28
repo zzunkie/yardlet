@@ -123,8 +123,9 @@ extension BrowserAgentTools {
             }
             guard page.armedPasskey?.generation == generation else { return }
             if let count = asserted?["credential"]?["signCount"]?.integerValue {
-                self?.vault?.updatePasskeyCount(of: grant.item.id, to: Int(count))
+                await self?.vault?.updatePasskeyCount(of: grant.item.id, to: Int(count))
             }
+            guard page.armedPasskey?.generation == generation else { return }
             await self?.disarmPasskey(on: page)
         }
         return .text("“\(grant.item.name)”'s passkey answers this tab's next passkey request on \(host) within 60 seconds, "

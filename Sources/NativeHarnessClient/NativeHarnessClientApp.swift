@@ -575,6 +575,8 @@ struct NativeHarnessClientApp: App {
                     // cut off.
                     guard !appDelegate.hasStartedLaunch else { return }
                     appDelegate.hasStartedLaunch = true
+                    // Clean saved addresses before restoring the first task or opening its browser.
+                    if !model.usesVisualFixture { await BrowserFilledValueCleanup.runAtLaunch() }
                     // The agent tools' connector settings, read off the main thread, come first, so the
                     // wiring below still runs without a pause.
                     await MacAgentToolService.prepare()

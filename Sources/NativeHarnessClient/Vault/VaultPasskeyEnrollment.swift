@@ -42,19 +42,26 @@ enum VaultPasskeyEnrollment {
         }
         let passkey = VaultPasskey(credentialID: id, relyingPartyID: rp, userHandle: credential["userHandle"]?.stringValue ?? "",
                                    privateKey: key, signCount: Int(credential["signCount"]?.integerValue ?? 0))
+        await vault.beginChange()
+        defer { vault.endChange() }
+        guard !cancelled() else { return .timedOut }
         let matching = vault.items(for: origin)
         var item: VaultItem
         var secret = VaultSecret()
         if matching.count == 1, let only = matching.first {
             item = only
-            secret = vault.secret(of: only.id) ?? VaultSecret()
+            guard let saved = try? await vault.trustedSecret(of: only) else {
+                return .failed(L10n.string("Yardlet could not read this sign-in from the keychain."))
+            }
+            secret = saved
         } else {
             item = VaultItem(name: VaultSite.host(of: origin), sites: [site],
                              username: credential["userName"]?.stringValue ?? "", policy: .always)
         }
         secret.passkey = passkey
         do {
-            try vault.save(item, secret: secret)
+            guard !cancelled() else { return .timedOut }
+            try await vault.saveItem(item, secret: secret)
         } catch {
             return .failed(error.localizedDescription)
         }

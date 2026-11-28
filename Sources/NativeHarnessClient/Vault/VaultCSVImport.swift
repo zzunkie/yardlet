@@ -142,18 +142,20 @@ extension VaultCenter {
     /// already keeps it, as an authenticator app's import is. Codes with no site whose account's
     /// sign-in came in take its site (`linkCodesToTheirSignIns`).
     @discardableResult
-    func importSignIns(_ entries: [VaultCSVImport.Entry]) -> Int {
+    func importSignIns(_ entries: [VaultCSVImport.Entry]) async -> Int {
+        await beginChange()
+        defer { endChange() }
         var saved = 0
         for entry in entries {
-            if entry.sites.isEmpty, let code = entry.oneTimeCode, holds(code) { continue }
+            if entry.sites.isEmpty, let code = entry.oneTimeCode, await hasStoredCode(code) { continue }
             if let existing = items.first(where: { item in
                 item.username == entry.username && item.sites.contains { entry.sites.contains($0) }
             }) {
                 // A secret the keychain would not give back, or one whose item changed outside Yardlet, is left as it is.
-                guard var secret = secretToUpdate(existing) else { continue }
+                guard var secret = try? await trustedSecret(of: existing) else { continue }
                 if !entry.password.isEmpty { secret.password = entry.password }
                 if let code = entry.oneTimeCode { secret.oneTimeCode = code }
-                guard (try? save(existing, secret: secret)) != nil else { continue }
+                guard (try? await saveItem(existing, secret: secret)) != nil else { continue }
             } else {
                 var name = entry.name.isEmpty ? L10n.string("Two-factor code") : entry.name
                 if !entry.username.isEmpty,
@@ -162,11 +164,11 @@ extension VaultCenter {
                 }
                 let item = VaultItem(name: name, sites: entry.sites, username: entry.username, policy: .always)
                 let secret = VaultSecret(password: entry.password.isEmpty ? nil : entry.password, oneTimeCode: entry.oneTimeCode)
-                guard (try? save(item, secret: secret)) != nil else { continue }
+                guard (try? await saveItem(item, secret: secret)) != nil else { continue }
             }
             saved += 1
         }
-        if saved > 0 { linkCodesToTheirSignIns() }
+        if saved > 0 { _ = await linkSavedCodes() }
         return saved
     }
 }

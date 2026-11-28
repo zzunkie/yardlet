@@ -27,10 +27,13 @@ enum MacVault {
 #endif
         let center = VaultCenter(environment: VaultCenter.Environment(
             secrets: KeychainVaultSecretStore.live(), repository: FileVaultRepository.live(), hmac: hmac,
-            isAllowedBuild: isTeamSigned, confirm: confirm, randomBytes: randomBytes))
+            isAllowedBuild: false, checkBuild: { await signingCheck.value }, confirm: confirm, randomBytes: randomBytes))
         observeLocks(of: center)
         // Codes brought over before their account's sign-in was saved find it as the vault opens (design §14.3).
-        Task { @MainActor in center.linkCodesToTheirSignIns() }
+        Task {
+            await center.prepare()
+            await center.linkCodesToTheirSignIns()
+        }
         return center
     }
 
@@ -51,7 +54,7 @@ enum MacVault {
 
     /// Whether the running app is signed by a team (Developer ID or Apple Development): its keychain
     /// items then trust only builds of that team.
-    static var isTeamSigned: Bool {
+    nonisolated static let signingCheck = Task.detached(priority: .userInitiated) { () -> Bool in
         var code: SecCode?
         var staticCode: SecStaticCode?
         var information: CFDictionary?
