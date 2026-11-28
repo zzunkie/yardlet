@@ -76,7 +76,7 @@ final class ComposerModelVisibilityTests: XCTestCase {
         }
     }
 
-    func testModelListsSurviveRelaunchAndStandInForAnAccountThatHasNone() throws {
+    func testModelListsSurviveRelaunchAndStandInForAnAccountThatHasNone() async throws {
         let root = try temporaryFolder()
         let file = root.appending(path: "model-catalogs.json")
         let account = ProviderConnection(id: "work", name: "work@example.test", harness: .claudeCode,
@@ -90,6 +90,7 @@ final class ComposerModelVisibilityTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path),
                        "A task's runtime reports its models without the main thread waiting for the disk")
         disk.signal()
+        await StateFileWriter.shared.flushed()
         let reopened = HarnessModelCatalogStore(fileURL: file, locations: locations(root))
         XCTAssertEqual(reopened.claudeModels(for: nil), ModelVisibilityFixtures.claudeModels)
         XCTAssertEqual(reopened.claudeModels(for: account), ModelVisibilityFixtures.claudeModels, "Another account's list stands in")
@@ -106,7 +107,7 @@ final class ComposerModelVisibilityTests: XCTestCase {
         XCTAssertTrue(reopened.isStale(for: .claudeCode, connection: account))
         reopened.recordClaude([.init(value: "sonnet", name: "Sonnet")], for: account)
         XCTAssertFalse(reopened.isStale(for: .claudeCode, connection: account))
-        StateFileWriter.shared.flush()
+        await StateFileWriter.shared.flushed()
         store.reloadIfChangedOnDisk()
         XCTAssertEqual(store.claudeModels(for: account).map(\.value), ["sonnet"])
         let team = ProviderConnection(id: "team", name: "team@example.test", harness: .claudeCode,
@@ -339,6 +340,7 @@ final class ComposerModelVisibilityTests: XCTestCase {
         let file = root.appending(path: "models.json")
         let writer = HarnessModelCatalogStore(fileURL: file)
         writer.recordCodex([ModelVisibilityFixtures.codexModel("old", efforts: ["low"])], for: nil)
+        await StateFileWriter.shared.flushed()
         let catalogs = HarnessModelCatalogStore(fileURL: file, locations: locations(root), environment: [:])
         let fixture = try CodexFixture(config: "", catalogs: catalogs, in: self)
         let model = fixture.model, session = fixture.session
@@ -360,6 +362,62 @@ final class ComposerModelVisibilityTests: XCTestCase {
         XCTAssertEqual(requests.filter { $0 == "model/list" }.count, 1)
         XCTAssertFalse(requests.contains("thread/resume"))
         XCTAssertFalse(requests.contains("turn/start"))
+    }
+
+    func testPartialDiskCatalogMergesScopesAndPreservesTheOpenTasksNewerList() async throws {
+        let root = try temporaryFolder()
+        let file = root.appending(path: "models.json")
+        let catalogs = HarnessModelCatalogStore(fileURL: file, locations: locations(root))
+        let fixture = try CodexFixture(config: "", catalogs: catalogs, in: self)
+        let live = [ModelVisibilityFixtures.codexModel("current", efforts: ["low"])]
+        let old = [ModelVisibilityFixtures.codexModel("previous", efforts: ["low"])]
+        catalogs.recordCodex(live, for: nil)
+        await StateFileWriter.shared.flushed()
+
+        func replace(_ scopes: [String: [CodexModelOption]], at date: Date) throws {
+            let rows = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scopes))
+            let data = try JSONSerialization.data(withJSONObject: ["version": 1, "claude": [:], "codex": rows])
+            try data.write(to: file, options: .atomic)
+            try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: file.path)
+            catalogs.reloadIfChangedOnDisk()
+        }
+        try replace(["default": old, "other": old], at: Date().addingTimeInterval(-60))
+        XCTAssertEqual(catalogs.codex["other"], old)
+        XCTAssertEqual(catalogs.codexModels(for: nil), live)
+        try replace(["other": live], at: Date())
+        XCTAssertEqual(catalogs.codex["other"], live)
+        try replace(["other": old], at: Date().addingTimeInterval(-30))
+        XCTAssertEqual(catalogs.codex["other"], live)
+        try replace(["default": []], at: Date().addingTimeInterval(1))
+        XCTAssertEqual(catalogs.codex["default"], live)
+        XCTAssertFalse(catalogs.isStale(for: .codex, connection: nil))
+        XCTAssertEqual(fixture.model.codexCapabilitiesBySessionID[fixture.session.id]?.modelCatalog.models, live)
+    }
+
+    func testAccountCatalogReadsSkipSignedOutAccountsAndReturnWhileEligibleReadsArePending() async throws {
+        func choice(_ id: String, state: AccountAuthState?) -> AccountChoice {
+            let connection = ProviderConnection(id: id, name: id, harness: .codex, providerID: nil, homePath: nil, credentialSelector: nil)
+            let snapshot = state.map { HarnessAccountSnapshot(id: id, harness: .codex, providerID: nil, state: $0,
+                accountLabel: id, detail: "", credentialOwner: "", checkedAt: Date(), usage: [], canLogin: true, canLogout: false) }
+            return AccountChoice(harness: .codex, connection: connection, snapshot: snapshot)
+        }
+        let choices = [choice("active", state: .signedIn), choice("unchecked", state: nil),
+                       choice("out", state: .signedOut), choice("unknown", state: .unknown)]
+        var started: Set<String> = []
+        var gates: [CheckedContinuation<Void, Never>] = []
+        var release = false
+        var returned = false
+        Task {
+            await AppModel.refreshAccountModels(choices, until: .now + .milliseconds(50)) { connection in
+                started.insert(connection?.id ?? "default")
+                if !release { await withCheckedContinuation { gates.append($0) } }
+            }
+            returned = true
+        }
+        defer { release = true; for gate in gates { gate.resume() } }
+        try await waitUntil { returned && started.count >= 2 }
+        XCTAssertEqual(started, ["active", "unchecked"])
+        XCTAssertEqual(gates.count, 2)
     }
 
     // MARK: New task

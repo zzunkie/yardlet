@@ -87,6 +87,39 @@ final class CodexModelSelectionTests: XCTestCase {
         await adapter.close(session)
     }
 
+    func testOverlappingReadsShareOneRequestAndAnExpiredSelectionMissReadsOnlyOnce() async throws {
+        let clock = TestClock()
+        let page = JSONValue.object(["data": .array([model("available")])])
+        let transport = FakeCodexTransport(responses: [
+            "initialize": [.object(["platformOs": .string("macos")])],
+            "thread/start": [thread("thread", model: "available", effort: "low")],
+            "model/list": [page, page]
+        ])
+        let adapter = CodexAdapter(executableURL: URL(filePath: "/tmp/codex"), transport: transport, now: { clock.now })
+        let session = try await adapter.createSession(.init(localSessionID: UUID(), workspaceURL: URL(filePath: "/tmp"), initialPrompt: nil))
+        await transport.suspendNextRequest("model/list")
+        async let forced = adapter.modelsIfRunning()
+        try await waitUntil { await transport.isRequestSuspended }
+        let release = Task {
+            await Task.yield()
+            await transport.releaseSuspendedRequest()
+        }
+        let initial = try await adapter.modelCatalog(for: session)
+        let refreshed = try await forced
+        await release.value
+        XCTAssertEqual(refreshed, initial.models)
+        clock.now.addTimeInterval(300)
+        do {
+            _ = try await adapter.selectModel(.init(model: "missing", reasoningEffort: nil), for: session)
+            XCTFail("The fresh list still excludes this model")
+        } catch HarnessAdapterError.invalidProviderEvent(let message) {
+            XCTAssertEqual(message, "Unsupported Codex model or reasoning effort")
+        }
+        let methods = await transport.requestMethods
+        XCTAssertEqual(methods.filter { $0 == "model/list" }.count, 2)
+        await adapter.close(session)
+    }
+
     func testSelectionRefreshesOnAMissAndAReplacementServerListsItsOwnModels() async throws {
         let transport = FakeCodexTransport(responses: [
             "initialize": Array(repeating: .object(["platformOs": .string("macos")]), count: 2),

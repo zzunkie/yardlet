@@ -23,6 +23,9 @@ extension RemoteHostModel {
 
     func railActions(_ taskID: String, openChanges: @escaping () -> Void, draftFix: @escaping (String) -> Void) -> SessionRailActions {
         var actions = SessionRailActions()
+        actions.prepareModels = { [weak self] hasChoices in
+            await self?.readTaskSettings(taskID, prepare: !hasChoices, modelsOnly: true)
+        }
         actions.openChanges = openChanges
         actions.compact = railCompact(taskID)
         actions.openURL = { [weak self] url in

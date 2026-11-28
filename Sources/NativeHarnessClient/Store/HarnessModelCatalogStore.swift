@@ -77,6 +77,8 @@ final class HarnessModelCatalogStore {
 
     @ObservationIgnored private var modelRefreshes: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var refreshedAt: [String: Date] = [:]
+    /// Import order and provider freshness are independent: a newer disk list still needs a provider read.
+    @ObservationIgnored private var importedAt: [String: Date] = [:]
     /// Shared with the serial writer so a local save is never mistaken for an external edit.
     private final class FileStamp: Sendable {
         let date = Mutex<Date?>(nil)
@@ -89,8 +91,6 @@ final class HarnessModelCatalogStore {
         self.fileURL = fileURL
         self.locations = locations
         self.environment = environment
-        guard fileURL != nil else { return }
-        StateFileWriter.shared.flush()
         reloadIfChangedOnDisk()
     }
 
@@ -99,35 +99,51 @@ final class HarnessModelCatalogStore {
     }
 
     func reloadIfChangedOnDisk() {
-        guard let fileURL, let date = Self.modificationDate(fileURL), !modificationStamp.date.withLock({ $0 == date }) else { return }
-        // A newer local snapshot may already be queued behind the write we just observed.
-        StateFileWriter.shared.flush()
-        guard let date = Self.modificationDate(fileURL), !modificationStamp.date.withLock({ $0 == date }),
-              let data = try? Data(contentsOf: fileURL),
-              let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data), snapshot.version == 1 else { return }
-        modificationStamp.date.withLock { $0 = date }
-        if claude != snapshot.claude {
-            for scope in Set(claude.keys).union(snapshot.claude.keys) where claude[scope] != snapshot.claude[scope] {
-                refreshedAt.removeValue(forKey: Self.catalogKey(.claudeCode, scope))
-            }
-            claude = snapshot.claude
+        guard let fileURL else { return }
+        // During our own atomic write the in-memory snapshot already includes its contents.
+        // A menu or provider event never has to wait for the writer.
+        let changed = modificationStamp.date.withLockIfAvailable { stamp -> (Snapshot, Date)? in
+            guard let date = Self.modificationDate(fileURL), date != stamp,
+                  let data = try? Data(contentsOf: fileURL),
+                  let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data), snapshot.version == 1,
+                  Self.modificationDate(fileURL) == date else { return nil }
+            stamp = date
+            return (snapshot, date)
         }
-        if codex != snapshot.codex {
-            let previous = codex
-            codex = snapshot.codex
-            for scope in Set(previous.keys).union(codex.keys) where previous[scope] != codex[scope] {
-                refreshedAt.removeValue(forKey: Self.catalogKey(.codex, scope))
-                codexModelsChanged?(scope, codex[scope] ?? [])
-            }
+        guard let (snapshot, date) = changed ?? nil else { return }
+        for (scope, models) in snapshot.claude where !models.isEmpty {
+            let key = Self.catalogKey(.claudeCode, scope)
+            guard acceptDiskDate(date, for: key), claude[scope] != models else { continue }
+            claude[scope] = models
+            refreshedAt[key] = nil
         }
-        if antigravity != (snapshot.antigravity ?? []) {
-            antigravity = snapshot.antigravity ?? []
-            let prefix = Self.catalogKey(.antigravityCLI, "")
+        for (scope, models) in snapshot.codex where !models.isEmpty {
+            let key = Self.catalogKey(.codex, scope)
+            guard acceptDiskDate(date, for: key), codex[scope] != models else { continue }
+            codex[scope] = models
+            refreshedAt[key] = nil
+            codexModelsChanged?(scope, models)
+        }
+        let prefix = Self.catalogKey(.antigravityCLI, "")
+        if let models = snapshot.antigravity, !models.isEmpty,
+           !refreshedAt.contains(where: { $0.key.hasPrefix(prefix) && $0.value > date }),
+           acceptDiskDate(date, for: Self.catalogKey(.antigravityCLI, "default")), antigravity != models {
+            antigravity = models
             refreshedAt = refreshedAt.filter { !$0.key.hasPrefix(prefix) }
         }
-        if codexThreads != snapshot.codexThreads ?? [:] { codexThreads = snapshot.codexThreads ?? [:] }
-        if antigravityModes != snapshot.antigravityModes ?? [] { antigravityModes = snapshot.antigravityModes ?? [] }
-        if claudeContextWindows != snapshot.claudeContextWindows ?? [:] { claudeContextWindows = snapshot.claudeContextWindows ?? [:] }
+        for (id, selection) in snapshot.codexThreads ?? [:] where codexThreads[id] != selection {
+            codexThreads[id] = selection
+        }
+        if let modes = snapshot.antigravityModes, !modes.isEmpty, modes != antigravityModes { antigravityModes = modes }
+        for (model, window) in snapshot.claudeContextWindows ?? [:] where claudeContextWindows[model] != window {
+            claudeContextWindows[model] = window
+        }
+    }
+
+    private func acceptDiskDate(_ date: Date, for key: String) -> Bool {
+        guard date >= max(refreshedAt[key] ?? .distantPast, importedAt[key] ?? .distantPast) else { return false }
+        importedAt[key] = date
+        return true
     }
 
     static func catalogKey(_ harness: HarnessKind, _ scope: String) -> String { harness.rawValue + "|" + scope }
@@ -241,8 +257,8 @@ final class HarnessModelCatalogStore {
 
     func recordCodex(_ models: [CodexModelOption], for connection: ProviderConnection?) {
         let scope = Self.scope(for: connection)
-        guard !models.isEmpty else { return }
         reloadIfChangedOnDisk()
+        guard !models.isEmpty else { return }
         refreshedAt[Self.catalogKey(.codex, scope)] = Date()
         guard codex[scope] != models else { return }
         codex[scope] = models
@@ -253,7 +269,6 @@ final class HarnessModelCatalogStore {
     /// Keeps what a Codex task's App Server reported, models and the thread's model alike.
     func recordCodex(_ catalog: CodexModelCatalog, for session: SessionRecord) {
         recordCodex(catalog.models, for: session.connection)
-        reloadIfChangedOnDisk()
         guard let selection = catalog.selection, codexThreads[session.id] != selection else { return }
         codexThreads[session.id] = selection
         save()
@@ -313,8 +328,11 @@ final class HarnessModelCatalogStore {
         StateFileWriter.shared.write(fileURL) { [modificationStamp] in
             try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            try JSONEncoder().encode(snapshot).write(to: fileURL, options: .atomic)
-            modificationStamp.date.withLock { $0 = Self.modificationDate(fileURL) }
+            let data = try JSONEncoder().encode(snapshot)
+            try modificationStamp.date.withLock { stamp in
+                try data.write(to: fileURL, options: .atomic)
+                stamp = Self.modificationDate(fileURL)
+            }
         }
     }
 }

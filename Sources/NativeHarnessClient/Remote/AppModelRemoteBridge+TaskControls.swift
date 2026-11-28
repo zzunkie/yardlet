@@ -82,7 +82,8 @@ extension AppModelRemoteBridge {
         await RemoteServer.waitAtMost(10) { @MainActor in
             await model.prepareModelPicker(for: session, hasChoices: hasChoices)
         }
-        return .success(watchSettings(of: session.id))
+        guard let current = self.session(taskID) else { return .failure(RemoteError(.notFound)) }
+        return .success(watchSettings(of: current.id))
     }
 
     func taskSettings(taskID: String, prepare: Bool) async -> Result<[RemoteSetting], RemoteError> {

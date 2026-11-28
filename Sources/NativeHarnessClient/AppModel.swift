@@ -600,7 +600,7 @@ final class AppModel {
         self.initialSettingsSection = initialSettingsSection
         self.bootstrapError = bootstrapError
         self.modelCatalogs.codexModelsChanged = { [weak self] scope, models in
-            guard let self else { return }
+            guard let self, !models.isEmpty else { return }
             for session in self.store.sessions where session.harness == .codex
                 && HarnessModelCatalogStore.scope(for: session.connection) == scope
                 && self.codexCapabilitiesBySessionID[session.id] != nil
@@ -5711,8 +5711,12 @@ final class AppModel {
             // Before Antigravity lists its models (the task has not attached in this run), the menu
             // names the task's own choice. Opening the menu reads the account catalog.
             var state = live ?? .empty
-            let catalog = modelCatalogs.antigravity
+            var catalog = modelCatalogs.antigravity
             let choice = TaskSuggestionStartOptions.modelChoice(from: session.providerOptions, harness: .antigravityCLI)
+            if !catalog.isEmpty, let saved = choice?.model, saved != "default", !catalog.contains(where: { $0.value == saved }) {
+                let effort = choice?.effort.flatMap { $0 == "default" ? nil : $0 }
+                catalog.append(HarnessModelOption(value: saved, name: saved, effortLevels: effort.map { [$0] } ?? []))
+            }
             let selectors = catalog.isEmpty ? AntigravityDetachedSelectors.model(options: session.providerOptions)
                 : NewTaskModelProjection.antigravitySelectors(choice: choice, catalog: catalog)
             state.selectors = selectors + state.selectors

@@ -224,16 +224,39 @@ extension AppModel {
 
     /// Checks the harness's accounts as the account list does (`.ifStale`), waiting at most
     /// `accountAssignmentReadLimit`; a check still running goes on and updates the list.
-    func refreshAccountReadings(of harness: HarnessKind) async {
-        let check = Task { @MainActor [connections, runtimeSelections] in
-            await connections.check(defaultsOf: [harness], savedOf: [harness], policy: .ifStale,
-                                    runtimeSelections: runtimeSelections)
+    func refreshAccountReadings(of harness: HarnessKind, until deadline: ContinuousClock.Instant? = nil) async {
+        await Self.waitForAccountRead(until: deadline ?? .now.advanced(by: Self.accountAssignmentReadLimit)) {
+            await self.connections.check(defaultsOf: [harness], savedOf: [harness], policy: .ifStale,
+                                         runtimeSelections: self.runtimeSelections)
         }
-        let limit = Self.accountAssignmentReadLimit
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+    }
+
+    private static func waitForAccountRead(until deadline: ContinuousClock.Instant,
+                                           _ read: @escaping @MainActor () async -> Void) async {
+        await withCheckedContinuation { continuation in
             let once = ResumeOnce(continuation)
-            Task { @MainActor in await check.value; once.resume() }
-            Task { @MainActor in try? await Task.sleep(for: limit); once.resume() }
+            let timeout = Task {
+                try? await Task.sleep(until: deadline, clock: .continuous)
+                once.resume()
+            }
+            Task {
+                await read()
+                once.resume()
+                timeout.cancel()
+            }
+        }
+    }
+
+    /// Slow listings can finish filling the cache after the account tool has answered.
+    static func refreshAccountModels(_ choices: [AccountChoice], until deadline: ContinuousClock.Instant,
+                                     read: @escaping @MainActor (ProviderConnection?) async -> Void) async {
+        await waitForAccountRead(until: deadline) {
+            await withTaskGroup(of: Void.self) { group in
+                for choice in choices where choice.snapshot == nil || choice.snapshot?.state == .signedIn {
+                    let connection = choice.connection
+                    group.addTask { await read(connection) }
+                }
+            }
         }
     }
 
@@ -262,16 +285,19 @@ extension AppModel {
         let model = Self.nonEmpty(arguments["model"]?.stringValue)
             ?? (harness == caller.harness ? store.sessions.first { $0.id == caller.hostTaskID }
                 .flatMap { Self.modelOption($0.providerOptions, harness: harness) } : nil)
-        await refreshAccountReadings(of: harness)
-        let now = Date()
-        let newTaskAccount = connections.selected(for: harness)?.id
+        let deadline = min(caller.deadline, .now.advanced(by: Self.accountAssignmentReadLimit))
+        await refreshAccountReadings(of: harness, until: deadline)
         let choices = connections.choices(for: [harness])
-        if let runtime = runtimeSelections.selectedURL(for: harness) {
-            for choice in choices {
-                await refreshModelsIfStale(harness: harness, runtimeURL: runtime,
-                                           connection: choice.connection, workspaceURL: nil)
+        modelCatalogs.reloadIfChangedOnDisk()
+        let stale = choices.filter { modelCatalogs.isStale(for: harness, connection: $0.connection) }
+        if !stale.isEmpty, let runtime = runtimeSelections.selectedURL(for: harness) {
+            await Self.refreshAccountModels(stale, until: deadline) { connection in
+                await self.refreshModelsIfStale(harness: harness, runtimeURL: runtime,
+                                                connection: connection, workspaceURL: nil)
             }
         }
+        let now = Date()
+        let newTaskAccount = connections.selected(for: harness)?.id
         let accounts = choices.map { choice in
             AccountListing.Account(
                 account: choice.id, name: choice.title, signedIn: choice.snapshot?.state == .signedIn,

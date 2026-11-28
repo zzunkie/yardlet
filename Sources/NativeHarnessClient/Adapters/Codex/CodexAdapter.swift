@@ -45,6 +45,7 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
     private var collaborationPresetByLocalSessionID: [UUID: CodexCollaborationPreset] = [:]
     private var modelOptions: [CodexModelOption]?
     private var modelOptionsFetchedAt: Date?
+    private var modelOptionsLoad: Task<[CodexModelOption], Error>?
     private let modelCatalogTTL: TimeInterval
     private let now: @Sendable () -> Date
     private var modelSelectionByLocalSessionID: [UUID: CodexModelSelection] = [:]
@@ -869,52 +870,66 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
         return try await loadModelOptions(forceRefresh: true)
     }
 
+    private var currentModelOptions: [CodexModelOption]? {
+        guard let fetched = modelOptionsFetchedAt, now().timeIntervalSince(fetched) < modelCatalogTTL else { return nil }
+        return modelOptions
+    }
+
     private func loadModelOptions(forceRefresh: Bool = false) async throws -> [CodexModelOption] {
-        let expired = modelOptionsFetchedAt.map { now().timeIntervalSince($0) >= modelCatalogTTL } ?? true
-        if forceRefresh || modelOptions == nil || expired {
-            let generation = initializationGeneration
-            var options: [CodexModelOption] = []
-            var cursor: String?
-            var seenCursors = Set<String>()
-            repeat {
-                var params: [String: JSONValue] = ["includeHidden": .bool(false), "limit": .integer(100)]
-                if let cursor { params["cursor"] = .string(cursor) }
-                let response = try await transport.request(CodexRPCRequest(
-                    id: takeRequestID(), method: "model/list", params: .object(params)
-                ))
-                CodexModelList.append(page: response.result, to: &options)
-                cursor = response.result?["nextCursor"]?.stringValue
-                if let cursor, !seenCursors.insert(cursor).inserted {
-                    throw HarnessAdapterError.invalidProviderEvent("Repeated Codex model catalog cursor")
-                }
-            } while cursor != nil
+        if let modelOptionsLoad { return try await modelOptionsLoad.value }
+        if !forceRefresh, let currentModelOptions { return currentModelOptions }
+        let generation = initializationGeneration
+        let load = Task { try await fetchModelOptions(generation: generation) }
+        modelOptionsLoad = load
+        return try await load.value
+    }
+
+    private func fetchModelOptions(generation: Int) async throws -> [CodexModelOption] {
+        defer { if generation == initializationGeneration { modelOptionsLoad = nil } }
+        var options: [CodexModelOption] = []
+        var cursor: String?
+        var seenCursors = Set<String>()
+        repeat {
             try requireCurrentInitialization(generation)
-            modelOptionsFetchedAt = now()
-            modelOptions = options
-        }
-        return modelOptions ?? []
+            var params: [String: JSONValue] = ["includeHidden": .bool(false), "limit": .integer(100)]
+            if let cursor { params["cursor"] = .string(cursor) }
+            let response = try await transport.request(CodexRPCRequest(
+                id: takeRequestID(), method: "model/list", params: .object(params)
+            ))
+            CodexModelList.append(page: response.result, to: &options)
+            cursor = response.result?["nextCursor"]?.stringValue
+            if let cursor, !seenCursors.insert(cursor).inserted {
+                throw HarnessAdapterError.invalidProviderEvent("Repeated Codex model catalog cursor")
+            }
+        } while cursor != nil
+        try requireCurrentInitialization(generation)
+        modelOptionsFetchedAt = now()
+        modelOptions = options
+        return options
     }
 
     func selectModel(_ selection: CodexModelSelection, for session: HarnessSessionHandle) async throws -> CodexModelCatalog {
-        var catalog = try await modelCatalog(for: session)
+        try requireRegistered(session)
         func supports(_ models: [CodexModelOption]) -> Bool {
             guard let model = models.first(where: { $0.model == selection.model }) else { return false }
             if let effort = selection.reasoningEffort, !model.supportedReasoningEfforts.contains(effort) { return false }
             guard let tier = selection.serviceTier, tier != "default" else { return true }
             return model.serviceTiers?.contains { $0.id == tier } == true
         }
-        if !supports(catalog.models) {
-            catalog.models = try await loadModelOptions(forceRefresh: true)
+        let models: [CodexModelOption]
+        if modelOptionsLoad == nil, let cached = currentModelOptions, supports(cached) {
+            models = cached
+        } else {
+            models = try await loadModelOptions(forceRefresh: true)
             try requireRegistered(session)
-        }
-        guard supports(catalog.models) else {
-            throw HarnessAdapterError.invalidProviderEvent("Unsupported Codex model or reasoning effort")
+            guard supports(models) else {
+                throw HarnessAdapterError.invalidProviderEvent("Unsupported Codex model or reasoning effort")
+            }
         }
         modelSelectionByLocalSessionID[session.localSessionID] = selection
         // A model, effort or Fast choice leaves the mode alone: the next turn carries the mode
         // with this model and effort in its settings, as the Codex app keeps the two apart.
-        catalog.selection = selection
-        return catalog
+        return CodexModelCatalog(models: models, selection: selection)
     }
 
     func collaborationModes() async throws -> [CodexCollaborationPreset] {
@@ -1871,6 +1886,8 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
     }
 
     private func endInitialization() {
+        modelOptionsLoad?.cancel()
+        modelOptionsLoad = nil
         initialization?.cancel()
         initialization = nil
         initializationGeneration += 1

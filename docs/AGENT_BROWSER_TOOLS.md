@@ -444,6 +444,10 @@ its runtime does not take starts no turn, each message failing with those words,
 in its model menu, as a Codex task's model selection does. An option with no counterpart in the harness, such as the
 agent, sandbox and review choices an Antigravity CLI task kept from print mode, is passed over.
 
+`list_accounts` reads stale catalogs concurrently for accounts reported as signed in and accounts with no sign-in
+reading yet. The account check and catalog reads share an eight-second wait, shortened by the caller's deadline.
+The tool answers with the latest available lists. Reads still in progress update the cache when they finish.
+
 Models one plan offers: Claude Code and Codex list to each account the models its plan offers (Claude
 Code lists Mythos only to the plans that have it), and Yardlet keeps each account's list
 (`HarnessModelCatalogStore.offers`). An account whose own list leaves out a model another account's list names does
