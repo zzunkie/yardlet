@@ -202,6 +202,8 @@ final class BrowserHostVisibilityTests: XCTestCase {
         let newest = try tab("https://same.test/new")
         let asked = connection.sent.compactMap { if case .prepareDemotion(let id, _, _) = $0 { id } else { nil } }
         XCTAssertEqual(asked, [oldest.id])
+        oldest.devTools.receive(#"{"method":"Page.frameNavigated","params":{"frame":{"id":"main"}}}"#)
+        connection.eventHandler?(.navigationRequest(tab: oldest.id))
         connection.eventHandler?(.demotionReady(tab: oldest.id))
         XCTAssertTrue(connection.sent.contains(.releaseBrowser(tab: oldest.id)))
         XCTAssertEqual(oldest.pendingAddress, url)
@@ -211,13 +213,59 @@ final class BrowserHostVisibilityTests: XCTestCase {
         XCTAssertTrue(client.tab(key: oldest.key, forSession: session) === oldest)
         XCTAssertTrue([visible, working, edited, newest].allSatisfy { $0.pendingAddress == nil })
 
-        // An immediate selection can precede CEF's close acknowledgement.
+        // Panel settings can change before a new browser exists. Reloading from the tab menu opens it once.
+        oldest.send(.focus(tab: oldest.id, isFocused: true))
+        oldest.send(.accessibility(tab: oldest.id, isEnabled: true))
+        connection.sent = []
+        oldest.send(.navigation(tab: oldest.id, action: .reload))
         client.select(oldest)
         XCTAssertNil(oldest.pendingAddress)
+        let open = try XCTUnwrap(connection.sent.firstIndex(of: .open(tab: oldest.id, url: url, viewport: .offscreenDefault)))
+        XCTAssertTrue(connection.sent.dropFirst(open + 1).contains(.focus(tab: oldest.id, isFocused: true)))
+        XCTAssertTrue(connection.sent.dropFirst(open + 1).contains(.accessibility(tab: oldest.id, isEnabled: true)))
+        XCTAssertFalse(connection.sent.contains(.navigation(tab: oldest.id, action: .reload)))
+
+        // The old page closed itself just before the host received releaseBrowser.
         connection.eventHandler?(.closed(tab: oldest.id))
+        connection.eventHandler?(.title(tab: oldest.id, title: "Old page"))
+        XCTAssertEqual(oldest.title, "Local preview")
+        connection.eventHandler?(.browserReleased(tab: oldest.id))
+        connection.eventHandler?(.title(tab: oldest.id, title: "Reopened"))
+        XCTAssertEqual(oldest.title, "Reopened")
+        oldest.devTools.mainFrameID = "main"
+        oldest.devTools.receive(#"{"method":"Page.frameStartedNavigating","params":{"frameId":"main","url":"https://preview.test/next"}}"#)
+        XCTAssertFalse(oldest.navigationHoldsCalls)
+        connection.eventHandler?(.navigationRequest(tab: oldest.id))
+        XCTAssertTrue(oldest.navigationHoldsCalls)
         XCTAssertFalse(oldest.isClosed)
         XCTAssertTrue(client.tab(forSession: session) === oldest)
-        XCTAssertEqual(connection.sent.filter { $0 == .open(tab: oldest.id, url: url, viewport: .offscreenDefault) }.count, 2)
+        connection.eventHandler?(.closed(tab: oldest.id))
+        XCTAssertTrue(oldest.isClosed, "the new browser can still close normally")
+    }
+
+    func testBudgetSkipsProtectedAddressesAndRechecksTheOldestEligibleLoadedTab() throws {
+        let client = BrowserHostClient(agentVisibleWindow: .zero, maxLiveHiddenTabs: 3) { self.connection }
+        let tabs = try (1...4).map { index in
+            let address = "https://preview.test/\(index)"
+            let tab = try client.openTab(forSession: UUID(), url: address, viewport: .offscreenDefault)
+            client.attachPanel(to: tab)
+            connection.eventHandler?(.address(tab: tab.id, url: address))
+            return tab
+        }
+        var protected = Set([try XCTUnwrap(tabs[0].currentURL)])
+        client.carriesFilledValue = { protected.contains($0) }
+        func probes() -> [BrowserTabID] {
+            connection.sent.compactMap { if case .prepareDemotion(let id, _, _) = $0 { id } else { nil } }
+        }
+        for tab in tabs { client.detachPanel(from: tab) }
+        XCTAssertEqual(probes(), [tabs[1].id])
+        // The scrub list changes while the oldest eligible tab's frames are answering.
+        protected.insert(try XCTUnwrap(tabs[1].currentURL))
+        connection.eventHandler?(.demotionReady(tab: tabs[1].id))
+        XCTAssertEqual(probes(), [tabs[1].id, tabs[2].id])
+        connection.eventHandler?(.demotionReady(tab: tabs[2].id))
+        XCTAssertEqual(tabs.compactMap { $0.pendingAddress == nil ? nil : $0.id }, [tabs[2].id])
+        XCTAssertEqual(probes().count, 2)
     }
 
     func testFinishedScheduledRunChecksOnlyIdleAgentTabsAndRechecksUseBeforeRelease() async throws {

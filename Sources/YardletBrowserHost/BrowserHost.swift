@@ -41,6 +41,8 @@ final class BrowserHost {
         var seed: String?
         var profile = ""
         var copyRequest: Int32?
+        var focused: Bool?
+        var accessibilityEnabled: Bool?
         let generation = UUID()
     }
     private var waitingTabs: [Int: WaitingTab] = [:]
@@ -267,10 +269,19 @@ final class BrowserHost {
             }
         case "accessibility":
             let enabled = fields["isEnabled"] as? Bool ?? false
+            if waitingTabs[tab] != nil {
+                waitingTabs[tab]?.accessibilityEnabled = enabled
+                return
+            }
             if !enabled { accessibility.forget(tab: tab) }
             yardlet_cef_set_accessibility(Int32(tab), enabled ? 1 : 0)
         case "focus":
-            yardlet_cef_set_focus(Int32(tab), (fields["isFocused"] as? Bool ?? false) ? 1 : 0)
+            let focused = fields["isFocused"] as? Bool ?? false
+            if waitingTabs[tab] != nil {
+                waitingTabs[tab]?.focused = focused
+                return
+            }
+            yardlet_cef_set_focus(Int32(tab), focused ? 1 : 0)
         case "visibility":
             let hidden = fields["isHidden"] as? Bool ?? false
             setHidden(tab, hidden)
@@ -314,7 +325,7 @@ final class BrowserHost {
             discarder.discard(tab: tab, urgent: fields["urgent"] as? Bool ?? false,
                               action: .releaseBrowser(allowAgentForm: fields["allowAgentForm"] as? Bool ?? false))
         case "releaseBrowser":
-            guard openTabs.contains(tab) else { return send(["closed": ["tab": tab]]) }
+            guard openTabs.contains(tab) else { return send(["browserReleased": ["tab": tab]]) }
             afterRelease[tab] = []
             yardlet_cef_close_browser(Int32(tab))
         case "discard":
@@ -467,6 +478,8 @@ final class BrowserHost {
             return
         }
         waitingTabs[tab] = nil
+        if let focused = waiting.focused { yardlet_cef_set_focus(Int32(tab), focused ? 1 : 0) }
+        if let enabled = waiting.accessibilityEnabled { yardlet_cef_set_accessibility(Int32(tab), enabled ? 1 : 0) }
         if waiting.url != waiting.start { yardlet_cef_load_url(Int32(tab), waiting.url) }
         for message in deferredDevTools.removeValue(forKey: tab) ?? [] {
             _ = message.withCString { yardlet_cef_send_devtools_message(Int32(tab), $0, strlen($0)) }
@@ -592,7 +605,7 @@ final class BrowserHost {
             deferredDevTools[tab] = nil
             surfaces?.forget(key: "\(tab).view")
             surfaces?.forget(key: "\(tab).popup")
-            send(["closed": ["tab": tab]])
+            send([afterRelease[tab] == nil ? "closed" : "browserReleased": ["tab": tab]])
             if afterRelease[tab] != nil {
                 // Leave CEF's BeforeClose callback before creating another browser for this tab.
                 DispatchQueue.main.async { [weak self] in

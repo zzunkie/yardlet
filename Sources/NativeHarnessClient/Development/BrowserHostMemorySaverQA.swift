@@ -38,6 +38,24 @@ final class BrowserHostMemorySaverQA {
               let pdf = await tab(session, "compat/doc.pdf", title: nil)
         else { return await finish() }
 
+        client.attachPanel(to: first)
+        let muted = await value(first, """
+            (async () => {
+              const video = document.createElement('video');
+              video.muted = video.autoplay = video.loop = true;
+              video.src = '/media/h264.mp4';
+              document.body.append(video);
+              await video.play();
+              return !video.paused;
+            })()
+            """, userGesture: true)
+        client.detachPanel(from: first)
+        check("a muted loop plays before its hidden browser is released", muted == .bool(true), Self.describe(muted))
+        let prefersDark = await value(second, "matchMedia('(prefers-color-scheme: dark)').matches")
+        let scheme = prefersDark == .bool(true) ? "light" : "dark"
+        try? await second.emulate(.init(BrowserViewportEmulation.mobile, owner: .person))
+        try? await second.emulateColorScheme(scheme)
+
         let playing = await value(media, "start()", userGesture: true)
         check("the media page plays sound", playing == .string("playing"), Self.describe(playing))
         _ = await value(form, "document.getElementById('name').focus(); 1")
@@ -108,6 +126,8 @@ final class BrowserHostMemorySaverQA {
         let shown = await waitUntil(.seconds(15)) { !second.isDiscarded && second.title == "Saver 3" && !second.isLoading }
         let held = await value(second, "String(window.held ? window.held.length : 0)")
         check("a panel shows a discarded tab's page again", shown && held == .string("40"), "\(second.title) \(Self.describe(held))")
+        let emulated = await value(second, "navigator.maxTouchPoints > 0 && matchMedia('(prefers-color-scheme: \(scheme))').matches")
+        check("the reopened browser restores touch and color scheme emulation", emulated == .bool(true), Self.describe(emulated))
         client.detachPanel(from: second)
 
         // Turned off, the tabs it discarded load again.

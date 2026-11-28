@@ -582,6 +582,8 @@ enum BrowserHostEvent: Codable, Equatable, Sendable {
     case responsiveness(tab: BrowserTabID, isResponsive: Bool)
     /// All frames answered the eligibility check. The browser is still live.
     case demotionReady(tab: BrowserTabID)
+    /// Acknowledges releaseBrowser even when the old page already closed itself.
+    case browserReleased(tab: BrowserTabID)
     /// The page is gone until the tab is used again.
     case discarded(tab: BrowserTabID)
     /// The host kept the tab `discard` named: its page is one Chrome would keep (`reason`: loading, capturing,
@@ -623,7 +625,7 @@ enum BrowserHostEvent: Codable, Equatable, Sendable {
              .javaScriptDialogReset(let tab), .fileDialog(let tab, _), .dialogClosed(let tab, _), .permissionPrompt(let tab, _),
              .permissionPromptDismissed(let tab, _), .download(let tab, _),
              .findResult(let tab, _), .dragOperation(let tab, _), .passwordField(let tab, _), .editableField(let tab, _, _), .pageCrashed(let tab, _, _, _), .responsiveness(let tab, _),
-             .demotionReady(let tab), .discarded(let tab), .discardRefused(let tab, _),
+             .demotionReady(let tab), .browserReleased(let tab), .discarded(let tab), .discardRefused(let tab, _),
              .accessibilityTree(let tab, _), .accessibilityLocations(let tab, _), .scrollOffset(let tab, _, _),
              .devTools(let tab, _), .hidden(let tab), .closed(let tab):
             tab

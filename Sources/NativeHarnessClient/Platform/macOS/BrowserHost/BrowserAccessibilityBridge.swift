@@ -127,6 +127,9 @@ final class BrowserAccessibilityBridge: BrowserAccessibilitySource {
         guard isEnabled else { return }
         let started = ContinuousClock.now
         switch event {
+        case .discarded:
+            tree.reset()
+            elements = [:]
         case .accessibilityTree(_, let change):
             let summary = tree.apply(change)
             statistics.treeChanges += 1

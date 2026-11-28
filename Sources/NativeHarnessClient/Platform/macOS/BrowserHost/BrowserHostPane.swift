@@ -448,16 +448,16 @@ final class BrowserHostPaneController {
             }
             tab.send(command)
         }
-        // A tab shown in a view that has the keyboard focus (another browser tab, one opened again or
-        // replaced) gets it, as when the view becomes first responder; before, only that sent it.
-        if view.hasKeyboardFocus { tab.send(.focus(tab: tab.id, isFocused: true)) }
         MacBrowserHost.shared.showFrames(of: tab.id, in: view.frameDisplay)
-        startAccessibility(tab: tab, view: view)
         // Attaching shows the tab to its engine and asks for a fresh frame, so a tab adopted from an
         // earlier panel (or opened by the agent) paints again now. A panel off screen attaches as one:
         // the tab neither paints nor counts as seen by the person (the memory saver).
         isPanelOccluded = view.isOccluded
         client.attachPanel(to: tab, occluded: isPanelOccluded)
+        // A tab shown in a view that has the keyboard focus (another browser tab, one opened again or
+        // replaced) gets it, as when the view becomes first responder; before, only that sent it.
+        if view.hasKeyboardFocus { tab.send(.focus(tab: tab.id, isFocused: true)) }
+        startAccessibility(tab: tab, view: view)
         // Chromium's window over this tab (a passkey dialog) shows over this panel.
         MacBrowserHost.shared.panelShows(tab.id, in: view)
         view.resendViewport()
@@ -1007,6 +1007,7 @@ final class BrowserHostPaneController {
             // The crash shows instead (`crash`); a load error before it was the ended page's.
             clearError()
         case .discarded:
+            accessibility?.handle(event)
             blockedPopupRequests = []
         case .javaScriptDialog, .javaScriptDialogReset, .fileDialog, .dialogClosed:
             if let tab {

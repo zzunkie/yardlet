@@ -25,13 +25,13 @@ enum {
     kPageStateUnknown = 32
 };
 
-// Media that is playing (including muted video), whether the frame has media at all, and fields whose
+// Audible media playback, whether the frame has media at all, and fields whose
 // value differs from the one the page loaded with (Chrome's "partially filled forms"): typed or picked text,
 // a changed choice or check box, a chosen file. Read only; the page is not changed.
 static const char kPageStateScript[] =
     "(function(){var r=0;"
     "var m=document.querySelectorAll('audio,video');if(m.length)r|=4;"
-    "for(var i=0;i<m.length;i++){var e=m[i];if(!e.paused&&!e.ended)r|=1;}"
+    "for(var i=0;i<m.length;i++){var e=m[i];if(!e.paused&&!e.ended&&!e.muted&&e.volume>0)r|=1;}"
     "var f=document.querySelectorAll('input,textarea,select');"
     "for(var j=0;j<f.length&&!(r&2);j++){var x=f[j];if(x.disabled)continue;var t=(x.type||'').toLowerCase();"
     "if(x.tagName==='SELECT'){for(var k=0;k<x.options.length;k++){if(x.options[k].selected!==x.options[k].defaultSelected){r|=2;break;}}}"
